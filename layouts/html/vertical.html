@@ -1,0 +1,13 @@
+<html>
+{% include "head.html" %}
+<body>
+    {% include "header.html" %}
+    <div class="layout">
+        <div id="pane0" class="content" data-for="introduction,methods"></div>
+        <div id="pane1" class="content" data-for="results" data-alters="pane0,pane2" data-horizontal-resize="pane0,pane2"></div>
+        <div id="pane2" class="content" data-for="conclusions"></div>
+        <div id="pane3" class="content" data-for="citations|acknowledgements|information" data-vertical-resize="pane0,pane1,pane2"></div>
+    </div>
+    {% include "footer.html" %}
+</body>
+</html>

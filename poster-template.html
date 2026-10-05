@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Research poster template</title>
+  <style>
+    /* Adjust these variables to change the poster's appearance. */
+    :root {
+      --poster-background: #ebebeb;
+      --panel-background: #fff;
+      --ink: #111;
+      --border: #555;
+      --gap: 2.5cqw;
+      --body-size: 1.23cqw;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 4.4vw; background: #fff; color: var(--ink); font-family: Arial, Helvetica, sans-serif; }
+    .poster {
+      container-type: inline-size;
+      max-width: 1800px;
+      margin: auto;
+      background: var(--poster-background);
+    }
+    .poster-grid {
+      display: grid;
+      grid-template-areas: "header" "main" "footer";
+      gap: 2.8cqw;
+      padding: 2.2cqw 3.9cqw 1.5cqw;
+      font-size: var(--body-size);
+      line-height: 1.18;
+    }
+    .poster-header { grid-area: header; text-align: center; padding: 0 0 .2cqw; }
+    h1 { margin: 0 0 1.5cqw; font-size: 2.8cqw; line-height: 1.07; font-weight: 700; }
+    .authors { margin: 0; font-size: 1.6cqw; }
+    /* Main grid: narrow side columns flank a wide results column. */
+    .main-grid {
+      grid-area: main;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 2.22fr) minmax(0, 1fr);
+      grid-template-areas: "left results conclusions";
+      gap: var(--gap);
+      align-items: stretch;
+    }
+    .left-column {
+      grid-area: left;
+      display: grid;
+      grid-template-rows: 1fr 1.04fr;
+      gap: 1.8cqw;
+    }
+    .results { grid-area: results; }
+    .conclusions { grid-area: conclusions; }
+    .panel { min-width: 0; padding: 1cqw 1.7cqw; background: var(--panel-background); border: 1px solid var(--border); }
+    h2 { margin: 0 0 1.8cqw; font-size: inherit; line-height: 1.2; }
+    p { margin: 0 0 1.8cqw; }
+    p:last-child { margin-bottom: 0; }
+    .main-grid > .panel, .left-column { min-height: 35.6cqw; }
+    .conclusions p { margin-bottom: 2.9cqw; }
+    .graphic {
+      display: grid;
+      place-items: center;
+      width: 73%;
+      min-height: 7.5cqw;
+      margin: 2.5cqw auto;
+      padding: 1cqw 1.7cqw;
+      border: 1px solid var(--border);
+      background: #ffff99;
+      color: #f04416;
+      font-weight: 700;
+    }
+    /* Replace the callout with <img src="..." alt="..."> when needed. */
+    .graphic img { display: block; max-width: 100%; height: auto; }
+    .graphic figcaption { width: 100%; }
+    .footer-grid {
+      grid-area: footer;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 2.2cqw;
+    }
+    .footer-grid .panel { min-height: 9cqw; font-size: .9cqw; }
+    .footer-grid h2 { margin-bottom: .3cqw; font-size: 1.16cqw; }
+    a { color: inherit; overflow-wrap: anywhere; }
+    /* Reading order stays logical when the poster becomes one column. */
+    @media screen and (max-width: 700px) {
+      body { padding: 16px; }
+      .poster-grid { gap: 20px; padding: 24px; font-size: 16px; line-height: 1.45; }
+      h1 { font-size: 30px; margin-bottom: 16px; }
+      .authors { font-size: 17px; }
+      .main-grid { grid-template-columns: 1fr; grid-template-areas: "left" "results" "conclusions"; gap: 20px; }
+      .left-column { grid-template-rows: auto auto; gap: 20px; }
+      .footer-grid { grid-template-columns: 1fr; gap: 20px; }
+      .panel { padding: 20px; }
+      .main-grid > .panel, .left-column, .footer-grid .panel { min-height: 0; }
+      h2, .footer-grid h2 { font-size: 19px; margin-bottom: 16px; }
+      p, .conclusions p { margin-bottom: 20px; }
+      .graphic { width: 100%; margin: 24px 0; padding: 20px; min-height: 140px; }
+      .footer-grid .panel { font-size: 14px; }
+    }
+    /* Landscape 16:10 page, matching the reference proportions. */
+    @page { size: 16in 10in; margin: .45in; }
+    @media print {
+      body { padding: 0; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .poster { max-width: none; width: 100%; }
+      .panel, .graphic { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Replace the sample text with your study's title, authors, and findings. -->
+  <article class="poster" aria-labelledby="poster-title">
+    <div class="poster-grid">
+      <header class="poster-header">
+        <h1 id="poster-title">Title pitched at general audience that provides conclusion<br>or at least hints at something interesting</h1>
+        <p class="authors"><strong>Author Name</strong>, Department Name, University or Organization</p>
+      </header>
+
+      <main class="main-grid">
+        <div class="left-column">
+          <section class="panel introduction" aria-labelledby="introduction-heading">
+            <h2 id="introduction-heading">Introduction</h2>
+            <p>Three sentences max.</p>
+            <p>Persuade reader you have novel, interesting question(s) and hypothesis. Resist urge to use all the white space.</p>
+          </section>
+          <section class="panel methods" aria-labelledby="methods-heading">
+            <h2 id="methods-heading">Materials and methods</h2>
+            <p>Three sentences max.</p>
+            <p>If viewer truly wants to know gruesome details, they’ll ask or email you. Sometimes adding a pic is good.</p>
+          </section>
+        </div>
+
+        <section class="panel results" aria-labelledby="results-heading">
+          <h2 id="results-heading">Results</h2>
+          <p>Highlight your LARGE photographs, charts, maps, or in this central arena.</p>
+          <p>Don’t include every graphic you’ve made that relates to project. Choose one. Or two. And separate graphics with plenty of white space.</p>
+          <figure class="graphic">
+            <figcaption>If you have just one or two simple graphics, viewers will be drawn to explore them. If you have too many or they are too complicated, they will be repelled.</figcaption>
+          </figure>
+          <p>Annotate graphics with arrows and callout boxes so that viewer is <strong>visually</strong> led through how hypothesis is addressed. The goal is to enable viewers to understand the logic behind your conclusions <em>without you needing to be there.</em></p>
+          <p>Keep font size of all text (even graph labels) as big or bigger than in rest of poster.</p>
+        </section>
+
+        <section class="panel conclusions" aria-labelledby="conclusions-heading">
+          <h2 id="conclusions-heading">Conclusions</h2>
+          <p>Explain why outcome is interesting. Don’t assume it’s obvious. Three sentences max.</p>
+          <p>Maybe include a sentence about what you plan to do next.</p>
+          <p>As for Introduction, don’t feel like you need to fill the entire box.</p>
+          <p>I.e., if you retain a lot of white space you will attract more viewers. Seriously.</p>
+        </section>
+      </main>
+
+      <footer class="footer-grid">
+        <section class="panel" aria-labelledby="references-heading">
+          <h2 id="references-heading">Literature cited</h2>
+          <p>Author, J. 2012. Article title. <em>Journal of Something</em> 1:1–2.</p>
+        </section>
+        <section class="panel" aria-labelledby="acknowledgments-heading">
+          <h2 id="acknowledgments-heading">Acknowledgments</h2>
+          <p>Be brief.</p>
+        </section>
+        <section class="panel" aria-labelledby="information-heading">
+          <h2 id="information-heading">Further information</h2>
+          <p>Add your project website, contact information, or a link to the full study here.</p>
+        </section>
+      </footer>
+    </div>
+  </article>
+</body>
+</html>

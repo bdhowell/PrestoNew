@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Three-Column Grid Template</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; }
+    .grid {
+      display: grid;
+      grid-template-columns: 25% 50% 25%;
+    }
+    .grid > div {
+      min-width: 0;
+      padding: 1rem;
+      overflow-wrap: anywhere;
+      border: 1px solid #ccc;
+    }
+    .full-width {
+      grid-column: 1 / -1;
+    }
+  </style>
+</head>
+<body>
+  <div class="grid">
+    <div>Left column — 25%</div>
+    <div>Center column — 50%</div>
+    <div>Right column — 25%</div>
+    <div class="full-width">Full-width content below all three columns</div>
+  </div>
+</body>
+</html>

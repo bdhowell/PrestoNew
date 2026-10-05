@@ -1,0 +1,12 @@
+    .layout {
+      display: grid;
+      grid-template-columns: 25% 50% 25%;
+      gap: var(--gutter);
+      padding-top: var(--gutter);
+      padding-bottom: var(--gutter);
+    }
+  
+    #pane3 {
+      grid-column: 1 / -1;
+    }
+    

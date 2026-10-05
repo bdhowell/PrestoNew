@@ -1,0 +1,11 @@
+.modern {
+    --body-font-face: "Arial", sans-serif;
+    --heading-font-face: "Arial", sans-serif;
+    --monospace-font-face: "Courier New", monospace;
+}
+
+.classic {
+    --body-font-face: "Times New Roman", serif;
+    --heading-font-face: "Times New Roman", serif;
+    --monospace-font-face: "Courier New", monospace;
+}
