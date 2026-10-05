@@ -1,8 +1,11 @@
 We are creating a new SaaS FastAPI application to create conference and fair presentation posters and allow their creators to print them and share them with the public.
 The application integrates a LangChain and LangGraph chatbot as specified in "Wikkit the Wizard.md"
+The application is configured as a Docker container and runs under Docker on the local machine and Google Cloud Run.
 
 The database is PostgreSQL equipped with PGVector. 
 Sessions are managed with Redis (installed).
+Sessions persist for {SESSION_MAX_AGE}.
+Users are notified of incipient session expiration at {SESSION_EXPIRATION_NOTIFICATION=480}.
 On-going chats are stored in Postgres to allow review and continuation between sessions..
 
 A preliminary schema is in schema/schema.sql.
@@ -31,11 +34,17 @@ The user is allowed to have only two unprinted posters at once.
 The list is sortable by poster name, conference date and supports the semantic search logic described in search.md
 The list can be displayed as a vertically scrolling list or an array of large thumbnails.
 
+/chatbot
+Provides a viewport-sized iframe and 
+Accepts a URL as a post parameter to load.
+
 /conferences/find
 
 
 /content/upload
+Uploaded content is stored relative to {SOURCES_DIR} for local development and GCS when
 Allows uploading of PDF, Microsoft's DOCX, PPTX and XLSX, and Apple's Pages, Numbers and Keynote
+Use docxtractor.py 
 
 
 
