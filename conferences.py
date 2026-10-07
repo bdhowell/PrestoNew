@@ -1,6 +1,131 @@
-from copy import deepcopy
-from common import add_the
+import copy
+import datetime
+import json
+from common import add_the, pluralize
+from openai import interact_with_openai, SYSTEM_PROMPT
+from num2words import num2words
+from dateutil.parser import parse as date_parse
 
+CONFERENCE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "conference_name",
+        "conference_location",
+        "conference_start_date",
+        "conference_end_date",
+        "conference_subject_or_summary",
+        "maximum_poster_dimensions",
+        "maximum_poster_width",
+        "maximum_poster_height",
+        "required_poster_dimensions",
+        "required_poster_width",
+        "required_poster_height",
+        "allowed_poster_dimensions",
+        "allowed_poster_width",
+        "allowed_poster_height",
+        "poster_units",
+        "poster_layouts",
+        "special_poster_attributes",
+    ],
+    "properties": {
+        "conference_name": {
+            "type": "string",
+            "description": "Name of the conference or fair",
+        },
+        "conference_location": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["country", "state_province", "city"],
+            "properties": {
+                "country": {
+                    "type": "string",
+                    "description": "Country of the conference or fair",
+                },
+                "state_province": {
+                    "type": "string",
+                    "description": "State or province of the conference or fair",
+                },
+                "city": {
+                    "type": "string",
+                    "description": "City of the conference or fair",
+                },
+            },
+        },
+        "conference_start_date": {
+            "type": "string",
+            "description": "Start date of the conference or fair",
+        },
+        "conference_end_date": {
+            "type": "string",
+            "description": "End date of the conference or fair",
+        },
+        "conference_subject_or_summary": {
+            "type": "string",
+            "description": "Conference subject area or short summary",
+        },
+        "maximum_poster_dimensions": {
+            "type": ["string", "null"],
+            "description": "Maximum poster dimensions, if specified",
+        },
+        "maximum_poster_width": {
+            "type": ["integer", "null"],
+            "description": "Maximum poster width, if specified",
+        },
+        "maximum_poster_height": {
+            "type": ["integer", "null"],
+            "description": "Maximum poster height, if specified",
+        },
+        "required_poster_dimensions": {
+            "type": ["array", "null"],
+            "items": {"type": "integer"},
+            "description": "Required poster dimensions, if specified",
+        },
+        "required_poster_width": {
+            "type": ["array", "null"],
+            "items": {"type": "integer"},
+            "description": "Required poster widths, if specified",
+        },
+        "required_poster_height": {
+            "type": ["array", "null"],
+            "items": {"type": "integer"},
+            "description": "Required poster heights, if specified",
+        },        
+        "allowed_poster_dimensions": {
+            "type": ["array", "null"],
+            "items": {"type": "integer"},
+            "description": "Allowed poster dimensions, if specified",
+        },
+        "allowed_poster_width": {
+            "type": ["array", "null"],
+            "items": {"type": "integer"},
+            "description": "Allowed poster widths, if specified",
+        },
+        "allowed_poster_height": {
+            "type": ["array", "null"],
+            "items": {"type": "integer"},
+            "description": "Allowed poster heights, if specified",
+        },
+        "poster_units": {
+            "type": ["string", "null"],
+            "enum": ["inches", "centimeters", "millimeters"],
+            "description": "Poster dimensions' units, if specified",
+        },
+        "poster_layouts": {
+            "type": ["array", "null"],
+            "items": {
+                "type": "string",
+                "enum": ["three-column", "four-column", "tri-fold", "results-arena", "flow-layout"]
+            },
+            "description": "All required or allowed poster layouts, if specified",
+        },
+        "special_poster_attributes": {
+            "type": ["array", "null"],
+            "items": {"type": "string"},
+            "description": "Any other specified poster requirements or attributes",
+        },
+    },
+}
 
 IMPORTANT_FEATURES = {
     'urls' : None,
@@ -15,39 +140,21 @@ IMPORTANT_FEATURES = {
 
 IMPORTANT_FEATURES_LIST = list(IMPORTANT_FEATURES)
 
+SINGULARITY = {
+    "dimensions" : ["allowed_poster_dimensions", "required_poster_dimensions", "maximum_poster_dimensions"],
+    "width" : ["allowed_poster_width", "required_poster_width", "maximum_poster_width"],
+    "height" : ["allowed_poster_height", "required_poster_height", "maximum_poster_height"],
+    "units" : ["poster_units"],
+}
 
-def show_conference(conf):
-    country = conf['conference_location']['country']
-    if country == "United States":
-        country = ""
-    else:
-        country = f"{country}, "
+poster_criteria = {
+    "height": None,
+    "width": None,
+    "layout": None,
+    "units": "in",
+}
 
-    print(f"{add_the(conf['conference_name'])}[bright_yellow], in [/bright_yellow]{conf['conference_location']['city']}[bright_yellow], [/bright_yellow]{conf['conference_location']['state_province']}[bright_yellow], [/bright_yellow]{country}[bright_yellow]from [/bright_yellow]{format_date(conf['conference_start_date'])}[bright_yellow] to [/bright_yellow]{format_date(conf['conference_end_date'])}")
-
-def get_conference_info(prompt = None, scope="") -> list|None:
-    if not scope:
-        scope = "conference or fair"
-
-    if prompt is None:
-        print(f"> [bright_yellow]Let me begin by asking what you know about the {scope} for which we're creating your poster.[/bright_yellow]")
-        prompt = "> [bright_yellow]Please tell me any information you have about your conference or fair, such as its name, subject area, location, or dates: [/bright_yellow]"
-
-    print(prompt, end="")
-
-    confinfo = clean_response(input())
-
-    if not confinfo:
-        return None
-    
-    if confinfo["type"] == "system" and confinfo["response"] in [ "no", "idk" ]:
-        return None
-
-    criteria = confinfo["response"]
-    
-    while True:
-        print(f"\n> [bright_yellow]Thanks! Please give me a few moments. I'll do my best to find the {scope} that matches your details.[/bright_yellow]\n")
-
+def get_conference_info(criteria) -> list|None:
         conferences_prompt = f"""
 ## INSTRUCTIONS
 Act as an agentic web researcher. Search the web, iteratively follow promising results, and cross-check details against authoritative conference or fair websites. 
@@ -127,91 +234,7 @@ Do not invent information. Use null when a poster requirement is not specified o
 
             print()
 
-        addmore = clean_response(input("> [bright_yellow]Can you add anything to your conference criteria?[/bright_yellow]"))
-        if addmore and addmore["type"] == "system" and addmore["response"] in ["no", "idk"]:
-            return None
-
-        additional_info = clean_string(input("> [bright_yellow]Okay, please provide the additional information:[/bright_yellow]"))
-
-        if not additional_info:
-            return None
-
-        criteria += ' ' + additional_info
         return None
-
-def get_conference(conferences)->int|None:
-    global selected_conference, important_features, confair
-    
-    selected_conference = None
-    important_features = copy.deepcopy(IMPORTANT_FEATURES)
-
-    contcount = 0
-    faircount = 0
-    
-    found = len(conferences)
-    confairs = []
-
-    for conf in conferences:
-        confname = conf["conference_name"].casefold()
-        if "fair" in confname and "conference" not in confname:
-            faircount += 1
-            confairs.append('fair')
-        else:
-            contcount += 1
-            confairs.append('conference')
-
-    # extent = "this"
-    if contcount > 0 and faircount > 0:
-        print(f"> [bright_yellow]I found {num2words(contcount)} conference{pluralize(contcount)} and {num2words(faircount)} fair{pluralize(faircount)} that match your information:[/bright_yellow]\n")
-        scope = "conference or fair"
-        # extent = "one of these"
-    elif contcount > 0:
-        print(f"> [bright_yellow]I found {num2words(contcount)} conference{pluralize(contcount)} that match{pluralize(contcount, es=True)} your information:[/bright_yellow]\n")
-        scope = "conference"        
-    elif faircount > 0:
-        print(f"> [bright_yellow]I found {num2words(faircount)} fair{pluralize(faircount)} that match{pluralize(faircount, es=True)} your information:[/bright_yellow]\n")  
-        scope = "fair"
-    else:
-        scope = "conference or fair"
-
-    if found == 1:
-        show_conference(conferences[0])
-        print(f"\n> [bright_yellow]Is this your {scope}?[/bright_yellow] ", end="")
-
-        yn = clean_response(input())
-        if yn and yn["response"] == "yes":
-            return 0
-
-        print("> [bright_yellow]Okay, can you provide any more details?[/bright_yellow]", end="")
-        return None
-    
-    for idx, conf in enumerate(conferences, start=1):
-        print(f"  {idx}. ", end="", fast=True)
-        show_conference(conf)
-            
-    while True:
-        print(f"\n> [bright_yellow]{username}, please select the {scope} that best matches your poster requirements by entering the corresponding number.[/bright_yellow]")
-        print("> [bright_yellow]If none of these are correct, you can enter '0' to continue without conference information.[/bright_yellow]")
-        print(f"\n> [bright_yellow]Enter the number of the {scope}: [/bright_yellow]", end="")
-        
-        selection = input().strip()
-
-        if selection.isdigit():
-            selection = int(selection)
-            if selection == 0:
-                print("> [bright_yellow]No worries! We can continue without conference information. Let's proceed.[/bright_yellow]\n")
-                return None
-            
-            if 1 <= selection <= found:
-                selected_conference = selection - 1
-                confair = confairs[selected_conference]
-                break
-
-            print(f"> [bright_yellow]I'm sorry, {username}. That is not a valid selection.[/bright_yellow]\n")
-        else:
-            print("> [bright_yellow]Invalid input. Please enter a valid number corresponding to the conference or fair, or '0' to continue without conference information.[/bright_yellow]\n")
-
-    return selected_conference
 
 def get_important_details(conference_info):
     if conference_info['special_poster_attributes']:

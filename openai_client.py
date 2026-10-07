@@ -2,16 +2,12 @@ import hashlib
 import json
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import openai
 
 import chatbot
-
-
-Result = TypeVar("Result")
 
 
 SYSTEM_PROMPT = f"""
@@ -62,13 +58,12 @@ def _init_cache() -> None:
 
 _init_cache()
 
-
 def interact_with_openai(
     prompt: str,
     schema: dict[str, object] | None = None,
     model: str = "gpt-5.6-terra",
     temperature: float = 0.7,
-    system_prompt: str = chatbot.SYSTEM_PROMPT,
+    system_prompt: str = SYSTEM_PROMPT,
 ) -> str:
     request: dict[str, Any] = {
         "model": model,
@@ -102,58 +97,3 @@ def interact_with_openai(
     cache_file.write_text(json.dumps({"output_text": output_text}), encoding="utf-8")
 
     return output_text
-
-
-def dispatch_intent(
-    intents: Mapping[str, Sequence[str]],
-    intent_map: Mapping[str, Callable[[str], Result]],
-    message: str,
-) -> Result:
-    if not intents:
-        raise ValueError("intents must contain at least one intent")
-    if not message.strip():
-        raise ValueError("message must not be empty")
-
-    unexpected_handlers = set(intent_map) - set(intents)
-    if unexpected_handlers:
-        raise ValueError(
-            f"handlers have no matching intent: {', '.join(sorted(unexpected_handlers))}"
-        )
-
-    intent_descriptions = "\n".join(
-        f"- {intent}: {', '.join(phrases)}" for intent, phrases in intents.items()
-    )
-    prompt = (
-        "Classify the user's message into exactly one of the supplied intents. "
-        "Use the example phrases as guidance, not as an exhaustive list.\n\n"
-        f"Intents:\n{intent_descriptions}\n\n"
-        f"Message:\n{message}"
-    )
-    schema: dict[str, object] = {
-        "type": "object",
-        "properties": {
-            "intent": {
-                "type": "string",
-                "enum": list(intents),
-            }
-        },
-        "required": ["intent"],
-        "additionalProperties": False,
-    }
-    result: dict[str, Any] = json.loads(
-        interact_with_openai(
-            prompt,
-            schema=schema,
-            system_prompt=(
-                "You classify user messages by intent. Return only the intent "
-                "that best matches the message, following the provided schema."
-            ),
-        )
-    )
-    intent = result.get("intent")
-    if not isinstance(intent, str) or intent not in intents:
-        raise ValueError(f"classifier returned an unknown intent: {intent!r}")
-    if intent not in intent_map:
-        raise LookupError(f"no handler registered for intent: {intent}")
-
-    return intent_map[intent](message)

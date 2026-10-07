@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS conference (
    hidden        TIMESTAMPTZ,      -- null = visible
    hideafter     INTEGER NOT NULL CHECK (hideafter IN (0, 1)),
    search_vector tsvector,
-    embedding     vector(1536)
+   embedding     vector(1536)
 );
 
 CREATE INDEX IF NOT EXISTS idx_conference_starts ON conference (starts);
@@ -85,15 +85,20 @@ CREATE INDEX IF NOT EXISTS idx_poster_embedding_ivfflat ON poster
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 
+-- permissions to view or edit poster and user-specific configuration options, such as display layout
+
 CREATE TABLE IF NOT EXISTS userposter (
     uid       INTEGER NOT NULL REFERENCES "user"(uid) ON DELETE CASCADE,
     pid       INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    editor     INTEGER NOT NULL CHECK (editor IN (0, 1)),
     settings  JSONB NOT NULL DEFAULT '{}'::jsonb,
     PRIMARY KEY (uid, pid)
 );
 
 CREATE INDEX IF NOT EXISTS idx_userposter_uid ON userposter (uid);
 CREATE INDEX IF NOT EXISTS idx_userposter_pid ON userposter (pid);
+
+-- records the purchase of a poster so that it can be downloaded
 
 CREATE TABLE IF NOT EXISTS purchase (
     pid       INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
@@ -106,7 +111,7 @@ CREATE TABLE IF NOT EXISTS purchase (
 
 CREATE TABLE IF NOT EXISTS download (
     did       SERIAL PRIMARY KEY,
-    pid       INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    pid       INTEGER REFERENCES poster(pid) ON DELETE CASCADE,
     uid       INTEGER NOT NULL REFERENCES "user"(uid) ON DELETE CASCADE, 
     format    TEXT NOT NULL CHECK (format IN ('pdf','zip')),
     hash      TEXT NOT NULL,
@@ -114,18 +119,6 @@ CREATE TABLE IF NOT EXISTS download (
 );
 
 CREATE INDEX IF NOT EXISTS idx_download_pid ON download (pid);
-
-CREATE TABLE IF NOT EXISTS content (
-    xid         SERIAL PRIMARY KEY,
-    pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
-    updated     TIMESTAMPTZ NOT NULL,
-    embedding  vector(1536),
-    UNIQUE (pid, cardinal)
-);
-
-CREATE INDEX IF NOT EXISTS idx_content_embedding_ivfflat ON content
-USING ivfflat (embedding vector_cosine_ops)
-WITH (lists = 100);
 
 CREATE TABLE IF NOT EXISTS show (
     cid         INTEGER NOT NULL REFERENCES conference(cid) ON DELETE CASCADE,
@@ -146,23 +139,34 @@ CREATE TABLE IF NOT EXISTS source (
     description TEXT,
     filename    TEXT NOT NULL,
     mimetype    TEXT NOT NULL,
-    added       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    added       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    embedding  vector(1536)
 );
 
 CREATE INDEX IF NOT EXISTS idx_source_pid ON source (pid);
 
-CREATE TABLE IF NOT EXISTS extract (
+CREATE INDEX IF NOT EXISTS idx_source_embedding_ivfflat ON source
+USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+CREATE TABLE IF NOT EXISTS item (
     eid         SERIAL PRIMARY KEY,
     sid         INTEGER NOT NULL REFERENCES source(sid) ON DELETE CASCADE,
-    description TEXT,
-    kind        TEXT NOT NULL CHECK (kind IN ('svg','mixed','image')),
+    description TEXT, 
+    kind        TEXT NOT NULL CHECK (kind IN ('svg','mixed','image', 'chart', 'table')),
     mimetype    TEXT NOT NULL,
-    added       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    added       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    embedding  vector(1536)
 );
 
-CREATE INDEX IF NOT EXISTS idx_extract_sid ON extract (sid);
+CREATE TABLE IF NOT EXISTS content (
+    xid         SERIAL PRIMARY KEY,
+    pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    updated     TIMESTAMPTZ NOT NULL,
+    embedding  vector(1536),
+    UNIQUE (pid, cardinal)
+);
 
-CREA
 
 -- DO $$
 -- BEGIN
