@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS "user" (
     password    TEXT NOT NULL,
     superuser   INTEGER NOT NULL DEFAULT 0 CHECK (superuser IN (0, 1)),
     pwd_updated TIMESTAMPTZ NOT NULL,    -- track quarterly change requirement
+    recovery    TIMESTAMPTZ,
     created     TIMESTAMPTZ NOT NULL,
     updated     TIMESTAMPTZ NOT NULL,
     verified    TIMESTAMPTZ              -- null = unverified
@@ -38,10 +39,11 @@ CREATE TABLE IF NOT EXISTS conference (
    longitude     REAL,
    administrator TEXT NOT NULL,
    password      TEXT NOT NULL,
---   notify        TEXT NOT NULL
---                 CHECK (notify IN ('never','immediately','hourly','daily',
---                        'sunday','monday','tuesday','wednesday',
---                        'thursday','friday','saturday')),
+   notify        TEXT NOT NULL -- when new poster aded to conference
+                 CHECK (notify IN ('never','immediately','hourly','daily',
+                       'sunday','monday','tuesday','wednesday',
+                       'thursday','friday','saturday')),
+   details       JSONB,
    verified      TIMESTAMPTZ,
    created       TIMESTAMPTZ NOT NULL,
    updated       TIMESTAMPTZ NOT NULL,
@@ -63,17 +65,12 @@ CREATE TABLE IF NOT EXISTS poster (
     logo       BYTEA,
     template   TEXT NOT NULL DEFAULT 'windsor',
     dimensions TEXT NOT NULL DEFAULT '36x48',
-    content    JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created    TIMESTAMPTZ NOT NULL,
-    updated    TIMESTAMPTZ,
-    unprinted  INTEGER DEFAULT 0,
-    print      TEXT,
-    printed    TIMESTAMPTZ,
     theme      TEXT NOT NULL DEFAULT 'forest',
     font       TEXT NOT NULL DEFAULT 'Modern Publishing',
     searchable INTEGER NOT NULL DEFAULT 0 CHECK (searchable IN (0, 1)),
-    uploaded   INTEGER NOT NULL DEFAULT 0 CHECK (uploaded IN (0, 1)),
     downloads  INTEGER NOT NULL DEFAULT 0,
+    created    TIMESTAMPTZ NOT NULL,
+    updated    TIMESTAMPTZ,
     search_vector tsvector,
     embedding  vector(1536)
 );
@@ -113,7 +110,6 @@ CREATE TABLE IF NOT EXISTS download (
     did       SERIAL PRIMARY KEY,
     pid       INTEGER REFERENCES poster(pid) ON DELETE CASCADE,
     uid       INTEGER NOT NULL REFERENCES "user"(uid) ON DELETE CASCADE, 
-    format    TEXT NOT NULL CHECK (format IN ('pdf','zip')),
     hash      TEXT NOT NULL,
     created   TIMESTAMPTZ NOT NULL
 );
@@ -137,13 +133,14 @@ CREATE TABLE IF NOT EXISTS source (
     text        TEXT,
     length      INTEGER NOT NULL,
     description TEXT,
-    filename    TEXT NOT NULL,
+    fileid      UUID,
     mimetype    TEXT NOT NULL,
     added       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     embedding  vector(1536)
 );
 
 CREATE INDEX IF NOT EXISTS idx_source_pid ON source (pid);
+CREATE INDEX IF NOT EXISTS idx_source_fileid ON source (fileid);
 
 CREATE INDEX IF NOT EXISTS idx_source_embedding_ivfflat ON source
 USING ivfflat (embedding vector_cosine_ops)
@@ -153,20 +150,38 @@ CREATE TABLE IF NOT EXISTS item (
     eid         SERIAL PRIMARY KEY,
     sid         INTEGER NOT NULL REFERENCES source(sid) ON DELETE CASCADE,
     description TEXT, 
-    kind        TEXT NOT NULL CHECK (kind IN ('svg','mixed','image', 'chart', 'table')),
+    kind        TEXT NOT NULL CHECK (kind IN ('svg','mixed','image','chart','table','logo')),
+    fileid      UUID,   
     mimetype    TEXT NOT NULL,
     added       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     embedding  vector(1536)
 );
 
-CREATE TABLE IF NOT EXISTS content (
-    xid         SERIAL PRIMARY KEY,
+CREATE INDEX IF NOT EXISTS idx_item_fileid ON item (fileid);
+CREATE INDEX IF NOT EXISTS idx_item_embedding_ivfflat ON item
+USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+CREATE TABLE IF NOT EXISTS authors (
+    aid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
-    updated     TIMESTAMPTZ NOT NULL,
-    embedding  vector(1536),
-    UNIQUE (pid, cardinal)
+    name        TEXT NOT NULL,
+    affiliation TEXT,
+    email       TEXT,
+    UNIQUE (pid, name)
 );
 
+CREATE TABLE IF NOT EXISTS section (
+    xid         SERIAL PRIMARY KEY,
+    pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    which       section_which NOT NULL,
+    content    TEXT NOT NULL,
+    updated     TIMESTAMPTZ NOT NULL,
+    embedding  vector(1536),
+    UNIQUE (pid, which)
+);
+
+CREATE TYPE section_which AS ENUM('title','abstract','introduction','materials and methods','results','conclusion', 'future plans', 'literature cited', 'additional information'); 
 
 -- DO $$
 -- BEGIN
