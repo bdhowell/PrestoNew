@@ -612,7 +612,6 @@ Every fifteen to thirty seconds, Wikkit says randomly:
 - "I&rsquo;m indisposed for a moment..."
 
 
-
 # Layout Router
 
 **`/layout/edit`**
@@ -623,10 +622,14 @@ For each pane in the template:
 - Get the list of sections the pane contents from the pane's data-section attribute.
 - Split the list of sections on commas (',')
 - For each section:
-	- Create a <div class="section"></div> and append it to the pane.
 	- Split the section on pipes ('|') into items
-	- For each item:
-		- Wrap each item in a <div class="item"></div> and append it to the section.
+	- If there is only one item:
+		- Create a <div id="{section}" class="section"></div> and append it to the pane.
+	- Else:
+		- Create a <div id="{section}-parent" class="section-parent"></div> and append it to the pane.
+		- classes = 'section vertical' if the pane has class '.vertical' else 'section'
+		- For each item:
+			- Wrap each item in a <div id="{section}" class="{classes}"></div> and append it to the section.
 
 Poster elements having .item are contentEditable.
 - Clicking into a .item activates a pop-up window of editing tools: (organized into tool groups)
@@ -649,6 +652,11 @@ Poster elements having .item are contentEditable.
 				- Wikkit says f"<div>I&rsquo;m sorry, {username}.</div><div>That image shouldn&rsquo;t be made any larger or it will print blurry.</div>
 		- If the element is a PNG or JPG and it is being shrunk, if the image was previously oversized and cannot print at 150 DPI or higher without distortion:
 			- Wikkit says "Okay. That image will now print clearly."
+
+On the first tap, show each section's name in large bold type centered over its section.
+On the second tap, hide the section names and, if over a section, set the section as contentEditable="true" otherwise set all sections as contentEditable="false"
+
+
 
 
 

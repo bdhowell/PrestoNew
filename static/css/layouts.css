@@ -4,32 +4,73 @@
     box-sizing: border-box;
 }
 
-.section {
-    border-color: var(--border-color);
-    border-width: var(--border-width);
-    border-style: solid;
-}
-
-.item {
-    padding: 1rem;
-    vertical-align: middle;
-    text-align: center;
-    display: inline-block;
-}
-
-.section .item:has(+ .item) {
-    border-right: 1px solid var(--border-color);
-    border-bottom: 1px solid var(--border-color);
+p {
+    margin-bottom: 1rem;
 }
 
 img {
     margin: 1rem;
 }
 
-p {
-    margin-bottom: 1rem;
-}
-
 p img:has(+ p) {
     margin-top: 0;
+}
+
+.logo {
+    display: inline-block;
+}
+
+.titles {
+    display: inline-block;
+}
+
+.section-parent {
+    border-color: var(--border-color);
+    border-width: var(--border-width);
+    border-style: solid;
+    display: flex;
+    flex-direction: row;
+}
+
+.section {
+    border-color: var(--border-color);
+    border-width: var(--border-width);
+    border-style: solid;
+    padding: 1rem;
+    vertical-align: middle;
+    text-align: center;
+    display: inline-block;
+}
+
+/* Sections inside a .section-parent delegate outer border to the parent */
+.section-parent > .section {
+    border: none;
+    flex: 1;
+}
+
+/* Horizontally adjacent sections in row layout */
+.section-parent:not(.vertical):not(.column):not([data-direction="vertical"]):not([data-orientation="vertical"]) > .section + .section {
+    border-left-color: var(--border-color);
+    border-left-width: var(--border-width);
+    border-left-style: solid;
+}
+
+/* Vertically adjacent sections in column layout */
+.section-parent.vertical,
+.section-parent.column,
+.section-parent[data-direction="vertical"],
+.section-parent[data-orientation="vertical"],
+.section-parent:where([style*="column"]) {
+    flex-direction: column;
+}
+
+.section-parent.vertical > .section + .section,
+.section-parent.column > .section + .section,
+.section-parent[data-direction="vertical"] > .section + .section,
+.section-parent[data-orientation="vertical"] > .section + .section,
+.section-parent:where([style*="column"]) > .section + .section {
+    border-left: none;
+    border-top-color: var(--border-color);
+    border-top-width: var(--border-width);
+    border-top-style: solid;
 }
