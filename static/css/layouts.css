@@ -1,0 +1,35 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+.section {
+    border-color: var(--border-color);
+    border-width: var(--border-width);
+    border-style: solid;
+}
+
+.item {
+    padding: 1rem;
+    vertical-align: middle;
+    text-align: center;
+    display: inline-block;
+}
+
+.section .item:has(+ .item) {
+    border-right: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
+img {
+    margin: 1rem;
+}
+
+p {
+    margin-bottom: 1rem;
+}
+
+p img:has(+ p) {
+    margin-top: 0;
+}

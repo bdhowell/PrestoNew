@@ -3,8 +3,9 @@ import json
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Generic, TypeVar
 
 import openai
 
@@ -12,6 +13,13 @@ import chatbot
 
 
 Result = TypeVar("Result")
+
+
+@dataclass(frozen=True)
+class IntentDispatchResult(Generic[Result]):
+    intent: str
+    entities: list[str]
+    handler_result: Result
 
 
 SYSTEM_PROMPT = f"""
@@ -108,7 +116,7 @@ def dispatch_intent(
     intents: Mapping[str, Sequence[str]],
     intent_map: Mapping[str, Callable[[str], Result]],
     message: str,
-) -> Result:
+) -> IntentDispatchResult[Result]:
     if not intents:
         raise ValueError("intents must contain at least one intent")
     if not message.strip():
@@ -124,8 +132,12 @@ def dispatch_intent(
         f"- {intent}: {', '.join(phrases)}" for intent, phrases in intents.items()
     )
     prompt = (
-        "Classify the user's message into exactly one of the supplied intents. "
-        "Use the example phrases as guidance, not as an exhaustive list.\n\n"
+        "Classify the user's message into exactly one of the supplied intents "
+        "and extract any named entities explicitly mentioned in it. Use the "
+        "example phrases as guidance, not as an exhaustive list. Return entity "
+        "strings exactly as written, in order, without duplicates. Do not "
+        "include generic concepts or inferred information; use an empty list "
+        "when there are no named entities.\n\n"
         f"Intents:\n{intent_descriptions}\n\n"
         f"Message:\n{message}"
     )
@@ -135,9 +147,13 @@ def dispatch_intent(
             "intent": {
                 "type": "string",
                 "enum": list(intents),
-            }
+            },
+            "entities": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
         },
-        "required": ["intent"],
+        "required": ["intent", "entities"],
         "additionalProperties": False,
     }
     result: dict[str, Any] = json.loads(
@@ -145,15 +161,24 @@ def dispatch_intent(
             prompt,
             schema=schema,
             system_prompt=(
-                "You classify user messages by intent. Return only the intent "
-                "that best matches the message, following the provided schema."
+                "You classify user messages by intent and extract named "
+                "entities. Follow the provided schema exactly."
             ),
         )
     )
     intent = result.get("intent")
     if not isinstance(intent, str) or intent not in intents:
         raise ValueError(f"classifier returned an unknown intent: {intent!r}")
+    entities = result.get("entities")
+    if not isinstance(entities, list) or not all(
+        isinstance(entity, str) for entity in entities
+    ):
+        raise ValueError(f"classifier returned invalid entities: {entities!r}")
     if intent not in intent_map:
         raise LookupError(f"no handler registered for intent: {intent}")
 
-    return intent_map[intent](message)
+    return IntentDispatchResult(
+        intent=intent,
+        entities=entities,
+        handler_result=intent_map[intent](message),
+    )

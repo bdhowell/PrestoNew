@@ -63,10 +63,10 @@ CREATE TABLE IF NOT EXISTS poster (
     pid        SERIAL PRIMARY KEY,
     uid        INTEGER REFERENCES "user"(uid) ON DELETE SET NULL,
     logo       BYTEA,
-    template   TEXT NOT NULL DEFAULT 'windsor',
     dimensions TEXT NOT NULL DEFAULT '36x48',
-    theme      TEXT NOT NULL DEFAULT 'forest',
-    font       TEXT NOT NULL DEFAULT 'Modern Publishing',
+    template   TEXT,
+    theme      TEXT,
+    font       TEXT,
     searchable INTEGER NOT NULL DEFAULT 0 CHECK (searchable IN (0, 1)),
     downloads  INTEGER NOT NULL DEFAULT 0,
     created    TIMESTAMPTZ NOT NULL,
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS show (
     cid         INTEGER NOT NULL REFERENCES conference(cid) ON DELETE CASCADE,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
     searchable  INTEGER NOT NULL CHECK (searchable IN (0, 1)),
-    approved   TIMESTAMPTZ,
+    approved    TIMESTAMPTZ,
     UNIQUE (cid, pid)
 );
 
@@ -130,37 +130,30 @@ CREATE INDEX IF NOT EXISTS idx_show_approved ON show (approved) WHERE approved I
 CREATE TABLE IF NOT EXISTS source (
     sid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    kind        TEXT NOT NULL CHECK (kind IN ('text', 'svg','mixed','image','chart','table','logo')),
+    parent      INTEGER NOT NULL REFERENCES source(sid) ON DELETE CASCADE,
     text        TEXT,
-    length      INTEGER NOT NULL,
     description TEXT,
+    size        INTEGER NOT NULL,
+    height      INTEGER,
+    width       INTEGER,
     fileid      UUID,
+    hash        TEXT, -- prevents repeatedly extracted the same item
+    filename    TEXT, -- original filename of the uploaded file without the path
     mimetype    TEXT NOT NULL,
     added       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    embedding  vector(1536)
+    usable      BOOLEAN NOT NULL DEFAULT TRUE,
+    embedding   vector(1536)
 );
 
 CREATE INDEX IF NOT EXISTS idx_source_pid ON source (pid);
 CREATE INDEX IF NOT EXISTS idx_source_fileid ON source (fileid);
+CREATE INDEX IF NOT EXISTS idx_source_parent ON source (parent);
 
 CREATE INDEX IF NOT EXISTS idx_source_embedding_ivfflat ON source
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 
-CREATE TABLE IF NOT EXISTS item (
-    eid         SERIAL PRIMARY KEY,
-    sid         INTEGER NOT NULL REFERENCES source(sid) ON DELETE CASCADE,
-    description TEXT, 
-    kind        TEXT NOT NULL CHECK (kind IN ('svg','mixed','image','chart','table','logo')),
-    fileid      UUID,   
-    mimetype    TEXT NOT NULL,
-    added       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    embedding  vector(1536)
-);
-
-CREATE INDEX IF NOT EXISTS idx_item_fileid ON item (fileid);
-CREATE INDEX IF NOT EXISTS idx_item_embedding_ivfflat ON item
-USING ivfflat (embedding vector_cosine_ops)
-WITH (lists = 100);
 
 CREATE TABLE IF NOT EXISTS authors (
     aid         SERIAL PRIMARY KEY,
@@ -175,9 +168,9 @@ CREATE TABLE IF NOT EXISTS section (
     xid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
     which       section_which NOT NULL,
-    content    TEXT NOT NULL,
+    content     TEXT NOT NULL,
     updated     TIMESTAMPTZ NOT NULL,
-    embedding  vector(1536),
+    embedding   vector(1536),
     UNIQUE (pid, which)
 );
 

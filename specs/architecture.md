@@ -2,6 +2,7 @@
 
 We are creating a new SaaS FastAPI application to create conference and fair presentation posters and allow their creators to print them and share them with the public.
 The application is configured as a Docker container and runs under Docker on the local machine and in Google Cloud Run.
+We are going to build it in stages, and by feature, section, and page.
 
 # Data Storage
 
@@ -74,8 +75,12 @@ Selected endpoints have a collection of page-specific intents and/or a map of in
 
 ## Intent Processing
 
-For any given input, use openai.dispatch_intent to identify any intent in the message.
-If there is an intent in the user's input and the current intent map has a handler function for the intent, then invoke the handler function for the intent, passing the user's message to the handler as a parameter. Otherwise, pass the message back to the client with intent information as a JSON data structure.
+For any given input, use openai.dispatch_intent to identify the user's intent and extract explicitly mentioned named entities.
+If there is an intent in the user's input and the current intent map has a handler function for the intent, then invoke the handler function for the intent, passing the user's message to the handler as a parameter. Return the intent, extracted entities, and handler result together. Otherwise, pass the message back to the client with intent information as a JSON data structure.
+
+# Routers
+
+Place each router in its own file with any local-to-it functions
 
 # Router: Wikkit the Wizard
 
@@ -318,18 +323,48 @@ f"""
 {username}, please provide your email address to reset your password.
 </p>
 # Posters Router
+Create a common function that checks whether the user has an existing unpurchased poster.
+- If it does: 
+	- Have Wikkit say f"I&rsquo;m sorry, {username}, you can work on only one poster at a time.
+- Else:
+	- Create a new unpurchased poster.
+	- Have Wikkit say f"I&rsquo'm creating your new poster, {username}!"
+	- Redirect to `/posters/create/`
+
 
 **`/posters/list`**
 ### Internal Logic
 Shows a list of the posters the user has created.
 The list is sortable by poster name, conference date and supports the semantic search logic described in search.md
 The list can be displayed as a vertically scrolling list or an array of large thumbnails.
-Posters can be optionally deleted with confirmation.
+The current unpurchased poster, if any, is highlighted.
+Clicking on an unpurchased poster redirects to `/layout/edit`.
+Clicking on purchased posters displays them completely filling the viewport, scrollable and zoomable from full-size to both height and width being smaller than the viewport's dimensions. A close affordance allows the user to return to the posters list.
+Posters can be optionally deleted with confirmation by clicking on a per-poster deletion affordance.
+Has a button, "New Poster" which when clicked checks whether the user has an existing unpurchased poster.
+- If it does: 
+	- Have Wikkit say f"I&rsquo;m sorry, {username}, you can work on only one poster at a time. Would you like me to open it for you?"
+
+- Else:
+	- Create a new unpurchased poster.
+	- Have Wikkit say f"I&rsquo'm creating your new poster, {username}!"
+	- Redirect to `/posters/create`
 
 **`/posters/create`**
+### Internal Logic
+If the user already has an unpurchased poster:
+- Have Wikkit say f"I&rsquo'm sorry, {username}! You already have an existing unpurchased poster. Would you "
+- Redirect to `/layout/edit`
 
-@@@@
+If the poster's template has not been set:
+	- If the poster's aspect ratio is vertical, then set the template as /templates/layout/vertical.html
+		- Else randomly set the template as /templates/layout/arena.html or /templates/layout/central.html
 
+	- If the poster's theme is unset, then randomly set its theme to one of the themes in themes.css
+
+	- If the 
+
+Randomly
 **`/poster/delete`**
 ### Internal Logic
 Deletes the user's designated poster
@@ -357,7 +392,10 @@ Please tell me any information you have about your conference or fair, such as i
 
 Wait for user input.
 
-use `/conferences/find` to find any matching conferences.
+If there is no user input or the user replied t then:
+- Wikkit says "That
+
+Use `/conferences/find` to find any matching conferences, passing the user input as the search criteria.
 Display any found conferences or fairs on the page in an enumerated, clickable scrollable list searchable by name.
 When a conference is clicked;
 - Add the conference to the conference table if it is unique.
@@ -388,23 +426,86 @@ If
 
 
 
-
 # Content Router
+
+Write a local function that takes a Python text or binary object and produces a hash from it.
 
 **`/content/upload`**
 ### Internal Logic
-Allows uploading of PDF, Microsoft's DOCX, PPTX and XLSX, PNG, TIFF, JPEG (JPG), and Apple's Pages, Numbers and Keynote
-Uploaded content is identified by its source and stored relative to {SOURCES_DIR}, sharded across 10 subdirectories for local development, and in GCS when in the cloud.
+Allows uploading of PDF, Microsoft's DOCX, PPTX and XLSX, XLSM, PNG, TIFF, JPEG (JPG), and Apple's Pages, Numbers and Keynote
+Non-textual uploaded content is identified by its source and stored relative to {SOURCES_DIR}, sharded across 10 subdirectories for local development, and in GCS when in the cloud.
 
-If the document is a PDF, DocX, Text, MD, RTF, Apple Pages:
-    Use Docling to extract texts, images, math (as latex) from source documents: (descriptions for images and charts turned on)
-        Store the consolidated text, if any, in the source's db source record's text field.
-        Store any extracted elements in the item table.
-        For images, charts and graphs, store their descriptions with them in the item table.
-Else
-    Use Docling to describe the image, chart or graph.
-    Store the item's description in the item table.
+If the document is a PDF, DocX, MD, RTF, Apple Pages:
+- Use Docling for IBM Watson X to extract texts, charts, formulae (math), tables images, math (as latex) from source documents: (descriptions for images and charts turned on)
+ - For text documents, store the text, if any, in the source's db source record's text field.
+	- Use the LLM to summarize the text and store the summary in the source reccord's summary field.
+	- Hash images, charts, formulae (math), and graphs and verify that they don't already exist in the database.
+- For extracted images, charts, formulae (math), and graphs:
+	- Hash images, charts, formulae (math), and graphs and verify that they don't already exist in the database.
+	- If unique: 
+		- Store their descriptions with them in the source table and store their data in the file system or cloud as described. 
+		- Set their parent field to the document from which they were extracted.
+Elif the document is a XLSX, XLSM Text, or Apple Numbers:
+- Store the data as HTML in the source's db source record's text field
+Else for images, charts, formulae (math), and graphs:
+- Hash images, charts, formulae (math), and graphs and verify that they don't already exist in the database.
+- If unique:
+	- For items with dimensions in pixels, store those dimensions in the source's height and width fields in the source table.
+	- Store items descriptions and thier hashes with them in the source table and store their data in the file system or cloud as described. 
 
+As each item is uploaded and added, display it as table row consisting a thumbnail or icon, its filename or its parent's filename, the document type, and an optional delete button, ordered chronologically, in #items-list.
+- If the item has height and width, and the image is less than three inches on either axis:
+	- Display the item's filename in yellow.
+	- Wikkit says f"{filename} is probably to small to use on your poster.
+- Underneath each item, put the first line of the item's description, if any. 
+- Indent extracted items under their parent items to indicate the parent/child relationship.
+
+When the Finished button is pressed:
+- If no content has been added:
+	Wikkit says f"{username}, you can&rsquo;t have a poster without any content!"
+- Elif there is no source text in aggregate or the aggregated source text is less than 2,048 characters:
+	Wikkit says f"""
+		<p>
+		I&rsquo;m sorry, {username}, I need more content to work with.
+		</p>
+		<p>
+		Please provide some.
+		</p>
+	"""
+- Else:
+	redirect to `/content/elucidate`
+
+### Template Content
+A drag-and-drop element across the entire page.
+
+"""
+<p class="large-font,centered-text">
+DROP CONTENT HERE
+</p>
+
+<table id="items-list"></table>
+
+<div class="centered-text">
+<button>Finished</button>
+</div>
+"""
+
+### Wikkit Says
+
+"""
+<p>
+Upload raw content for your poster. 
+</p>
+<p>
+This can include PDFs, Microsoft Word, PowerPoint, and Excel documents, Apple Pages, Keynote, and Numbers documents, and PNG, TIFF, JPG (JPEG) images.
+</p>
+<p>
+Click the <strong>Finish</strong> when you have finished uploading. 
+</p>
+"""
+
+### Intents
+@@@@@@@@@@@@@@ DELETE GRAPHIC
 
 **`/content/elucidate`**
 ### Internal Logic
@@ -412,7 +513,9 @@ Uses OpenAI to analyze merged source texts and identify and extract the sections
 (Rewrite the response schema into proper OpenAI structured response format.)
 
 Store the poster's authors into the author's table.
-Store the poster's sections into section table.
+Store the poster's sections into the section table.
+
+Upon completion of elucidation, redirect to `/layout/edit`.
 
 PROMPT
 You are a writer who specializes in writing content for conference posters.
@@ -478,25 +581,87 @@ Return the following information:
 }
 ```
 
-Upon completion of elucidation, redirect to `/content/manage`.
+### Wikkit Says
+
+f"""
+<p>
+Please give me a few moments,{username}.
+</p>
+<p>
+I&rsquo;m reviewing what you shared with me.
+</p>
+"""
+
+Every fifteen to thirty seconds, Wikkit says randomly:
+- "Still working."
+- f"A few more moments, please, {username}."
+- f"Thanks for being patient, {username}."
+- "I&rsquo;m making progress."
+- "Any day now."
+- "There&rsquo;s a lot to look over."
+- f"{username}, you&rsquo;ve given me a lot to think about."
+- "Getting a cup of tea."
+- "I&rsquo;m indisposed for a moment..."
 
 
-**`/content/manage`**
 
+# Layout Router
+
+**`/layout/edit`**
 ### Internal Logic
+Displays the current poster in a zoomable, pannable viewport. 
 
-Displays the poster's content in section order, in a scrollable list. 
-Each section is labeled followed by a content-editable dynamically sizable block that holds the section's text
-An "Update" button writes any changes to the server.
+For each pane in the template:
+- Get the list of sections the pane contents from the pane's data-section attribute.
+- Split the list of sections on commas (',')
+- For each section:
+	- Create a <div class="section"></div> and append it to the pane.
+	- Split the section on pipes ('|') into items
+	- For each item:
+		- Wrap each item in a <div class="item"></div> and append it to the section.
 
+Poster elements having .item are contentEditable.
+- Clicking into a .item activates a pop-up window of editing tools: (organized into tool groups)
+	- Cut, Copy, Paste
+	- Bold, Italic, Underline, Strikethrough
+	- Superscript, Subscript
+	- Fixed-width (toggle)
+	- Insert image (launches a pop-up dialog, see below)
+- Inserted images must be set contentEditable="False"
+- Inserted items: (charts, graphs, images, math)
+	- Double clicking inserted items toggles resize handles for them.
+	- The text must flow around inserted items while they are being resized.
+	- Inserted items cannot be resized beyond the limits of their pane.
+	- When not being resized, inserted items must be draggable through the text in their pane. 
+	- When resizing, snap inserted items dimensions to those of other inserted items in the section.
+		- Briefly indicated snapped elements with a border flash.
+		- If the element is a PNG or JPG and is being grown, check that the image as sized will print at 150 DPI or higher without distortion (the image is oversized).
+			- If the image won't print without distortion:
+				- Snap the image at its largest printable size. 
+				- Wikkit says f"<div>I&rsquo;m sorry, {username}.</div><div>That image shouldn&rsquo;t be made any larger or it will print blurry.</div>
+		- If the element is a PNG or JPG and it is being shrunk, if the image was previously oversized and cannot print at 150 DPI or higher without distortion:
+			- Wikkit says "Okay. That image will now print clearly."
 
+### Wikkit Says:
 
+f"""
+<p>
+Okay, {username}, here is your basic poster. I change the dimensions, layout, theme, or fonts as you like.
+</p>
+<p>
+You can click into any text area to edit it. You can also give me instructions on how you would like me to rewrite it.
+</p>
+<p>
+Now we need to add one or two expressive graphics that make your results stand out.
+We could also add one a graphic to your materials and methods.
+</p>
 
-
-# Layout, Size and Theme Router
-
-**`/layout/`**
-
+### Intents
+change-layout: change the layout, change layout, different layout, replace layout, replace the layout
+change-size: change the size, change size, change the dimensions, change dimensions, resize
+change-theme: change the theme, change theme, replace the theme, replace theme, different theme, new theme
+change-fonts: change the fonts, change fonts, replace the fonts, replace fonts, change typefaces, change the typefaces, replace the typefaces, replace typefaces
+rewrite-section: rewrite @@@@@@@@@@@@ HOW TO IDENTIFY SECTIONS: HOVER OVER SHOWS ALL?
 
 # Purchase Router
 
@@ -505,23 +670,9 @@ An "Update" button writes any changes to the server.
 ### Internal Logic
 
 Uses Stripe in cloud and simulates purchases on the local machine.
+Marks the poster as having been purchased.
+Redirects to **`/purchase/download`**
 
 **`/purchase/download`**
 
-
-
-
-
-Extra content
-    Recommendations
-    Tools to help
-
-
-/conferences
-    /search (post)
-       receives: criteria, string
-        useGetConferenceInfo() in wikkit.py
-        returns list of conferences 
-
-    /select
-
+Renders the poster full sized in HTML using playwright and generates a PDF which is then downloaded to the browser.
