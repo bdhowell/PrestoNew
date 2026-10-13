@@ -1,4 +1,5 @@
 import Levenshtein
+import num2words
 import re
 import string
 
@@ -20,27 +21,12 @@ SEEKING_OPTIONS = {
 
 PUNCTUATION_TRANSLATION_TABLE = str.maketrans('', '', string.punctuation)
 
+AGENT_NAME = "Wikkit"
+AGENT_THE_NAME = f"{AGENT_NAME}, the PrestoPresentations Wizard"
 
-def to_ordinal(n):
-    # Check for 11, 12, and 13 because they break the normal pattern
-    if 11 <= (n % 100) <= 13:
-        suffix = 'th'
-    else:
-        # Look at the very last digit
-        last_digit = n % 10
-        if last_digit == 1:
-            suffix = 'st'
-        elif last_digit == 2:
-            suffix = 'nd'
-        elif last_digit == 3:
-            suffix = 'rd'
-        else:
-            suffix = 'th'
-            
-    return f"{n}{suffix}"
 
 def format_date(datetime_obj):
-    day = to_ordinal(datetime_obj.day)
+    day = num2words.num2words(datetime_obj.day, to='ordinal')
     return datetime_obj.strftime(f"%A, %B {day}, %Y")
 
 def add_the(name: str, leading: bool = True) -> str:

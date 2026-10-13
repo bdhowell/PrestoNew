@@ -7,3 +7,14 @@
     display: block;
   }
 }
+
+.ill-sized {
+  color: #ff3f3f;
+  font-weight: bold;
+}
+
+.chat {
+  padding-bottom: 5px;
+  border-bottom: 1px dotted yellow;
+  color: #ddd;
+}

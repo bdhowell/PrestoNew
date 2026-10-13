@@ -1,11 +1,26 @@
-.modern {
-    --body-font-face: "Arial", sans-serif;
-    --heading-font-face: "Arial", sans-serif;
-    --monospace-font-face: "Courier New", monospace;
+.elegant {
+    --body-font-face: "Source Sans 3", serif;
+    --heading-font-face: "Playfair Display", serif;
+    --monospace-font-face: "Source Code Pro", monospace;
 }
 
-.classic {
-    --body-font-face: "Times New Roman", serif;
-    --heading-font-face: "Times New Roman", serif;
-    --monospace-font-face: "Courier New", monospace;
+/* 1. Modern & Clean (Sans-Serif Focus) */
+.modern {
+    --body-font-face: "Inter", "Roboto", sans-serif;
+    --heading-font-face: "Montserrat", "Space Grotesk", sans-serif;
+    --monospace-font-face: "JetBrains Mono", "Space Mono", monospace;
+}
+
+/* 2. Editorial & Sophisticated (Serif + Sans-Serif) */
+.editorial {
+    --body-font-face: "Open Sans", "Nunito", sans-serif;
+    --heading-font-face: "Playfair Display", "DM Serif Display", serif;
+    --monospace-font-face: "IBM Plex Mono", monospace;
+}
+
+/* 3. Technical & Developer (Monospace-Forward) */
+.technical {
+    --body-font-face: "IBM Plex Sans", "Source Sans Pro", sans-serif;
+    --heading-font-face: "Oswald", "Bebas Neue", sans-serif;
+    --monospace-font-face: "Google Sans Code", "Space Mono", monospace;
 }

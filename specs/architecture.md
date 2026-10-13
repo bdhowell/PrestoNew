@@ -102,7 +102,7 @@ The listen parameter is a callback that delivers chatbot messages to the client 
 `connect(listen)` returns a JavaScript object, `apiobj`, which should probably be a singleton, that exposes two methods to the client:
 
 1 **`apiobj.say(html)`**
-Pass a text or an HTML fragement to `say()` to have it added as a chatbot message to the end of the #chatbot div message stream (above the contentEditable region)
+Pass a text or an HTML fragement to `say()` to have it wrapped in <div class="chat"></div> tags and added as a chatbot message to the end of the #chatbot div message stream (above the contentEditable region).
 
 2 **`apiobj.command(html, echo=false)`**
 Pass text directly to the server via the websocket.
@@ -420,7 +420,7 @@ If none of these are correct, just let me to continue without conference informa
 Enter the number or the name of the {scope}
 """
 
-If 
+If @@@@@
 
 ### Intents
 
@@ -454,22 +454,32 @@ Else for images, charts, formulae (math), and graphs:
 	- Store items descriptions and thier hashes with them in the source table and store their data in the file system or cloud as described. 
 
 As each item is uploaded and added, display it as table row consisting a thumbnail or icon, its filename or its parent's filename, the document type, and an optional delete button, ordered chronologically, in #items-list.
-- If the item has height and width, and the image is less than three inches on either axis:
-	- Display the item's filename in yellow.
-	- Wikkit says f"{filename} is probably to small to use on your poster.
+- If the item has height and width, and it is less than two inches on either axis:
+	- Display the item's filename with the class '.ill-sized'.
+	- Keep a count of such sized items
 - Underneath each item, put the first line of the item's description, if any. 
 - Indent extracted items under their parent items to indicate the parent/child relationship.
+
+If the count of odd-sized items:
+- morethan = count > 1
+- Wikkit says: f"""
+	<div>
+	{use num2words} file{'s are' if morethan else 'is'} will likely not be easily visible from typical poster viewing distances and I have no spell that could change that.
+	</div>
+	<div>
+	I&rsquo;ve identified {'them' if morethan else 'it'} by coloring {'their' if morethan else 'its'} <span class="ill-sized">filename{'s' if morethan else ''}</span>.
+	</div>
 
 When the Finished button is pressed:
 - If no content has been added:
 	Wikkit says f"{username}, you can&rsquo;t have a poster without any content!"
-- Elif there is no source text in aggregate or the aggregated source text is less than 2,048 characters:
+- Elif there is no source text in aggregate or the aggregated source text is less than os.env.get('SOURCE_TEXT_MIN_LENGTH') characters:
 	Wikkit says f"""
 		<p>
-		I&rsquo;m sorry, {username}, I need more content to work with.
+		I&rsquo;m sorry, {username}, but I need more content to work with.
 		</p>
 		<p>
-		Please provide some.
+		Even I can&rsquo;t conjure research out of thin air.
 		</p>
 	"""
 - Else:
@@ -504,8 +514,6 @@ Click the <strong>Finish</strong> when you have finished uploading.
 </p>
 """
 
-### Intents
-@@@@@@@@@@@@@@ DELETE GRAPHIC
 
 **`/content/elucidate`**
 ### Internal Logic
@@ -642,6 +650,8 @@ Poster elements having .item are contentEditable.
 		- If the element is a PNG or JPG and it is being shrunk, if the image was previously oversized and cannot print at 150 DPI or higher without distortion:
 			- Wikkit says "Okay. That image will now print clearly."
 
+
+
 ### Wikkit Says:
 
 f"""
@@ -661,7 +671,14 @@ change-layout: change the layout, change layout, different layout, replace layou
 change-size: change the size, change size, change the dimensions, change dimensions, resize
 change-theme: change the theme, change theme, replace the theme, replace theme, different theme, new theme
 change-fonts: change the fonts, change fonts, replace the fonts, replace fonts, change typefaces, change the typefaces, replace the typefaces, replace typefaces
-rewrite-section: rewrite @@@@@@@@@@@@ HOW TO IDENTIFY SECTIONS: HOVER OVER SHOWS ALL?
+rewrite-section: rewrite
+show-sections: show sections, identify sections
+which-is: which is
+
+### Intents Map
+change-layout: display 
+
+send-command: show-sections
 
 # Purchase Router
 

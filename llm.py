@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generic, TypeVar
 
+import common
+import llm
 import openai
-
-import chatbot
 
 
 Result = TypeVar("Result")
@@ -19,12 +19,12 @@ Result = TypeVar("Result")
 class IntentDispatchResult(Generic[Result]):
     intent: str
     entities: list[str]
-    handler_result: Result
+    handler_result: Result|None
 
 
 SYSTEM_PROMPT = f"""
 ## Instructions
-You are {chatbot.AGENT_THE_NAME}.
+You are {common.AGENT_THE_NAME}.
 You are an expert in preparing conference posters, including layout and sizing, and preparing graphics and text elements.
 You guide each customer through preparing their conference poster using helpful and detailed conversations.
 """
@@ -76,7 +76,7 @@ def interact_with_openai(
     schema: dict[str, object] | None = None,
     model: str = "gpt-5.6-terra",
     temperature: float = 0.7,
-    system_prompt: str = chatbot.SYSTEM_PROMPT,
+    system_prompt: str = SYSTEM_PROMPT,
 ) -> str:
     request: dict[str, Any] = {
         "model": model,
@@ -102,7 +102,7 @@ def interact_with_openai(
     if not NO_CACHE and cache_file.exists():
         return json.loads(cache_file.read_text(encoding="utf-8"))["output_text"]
 
-    client = openai.OpenAI()
+    client = llm.OpenAI()
     response = client.responses.create(**request)
     output_text = response.output_text.strip()
 
@@ -174,11 +174,15 @@ def dispatch_intent(
         isinstance(entity, str) for entity in entities
     ):
         raise ValueError(f"classifier returned invalid entities: {entities!r}")
-    if intent not in intent_map:
-        raise LookupError(f"no handler registered for intent: {intent}")
-
+    if intent in intent_map:
+        return IntentDispatchResult(
+            intent=intent,
+            entities=entities,
+            handler_result=intent_map[intent](message),
+        )
+    
     return IntentDispatchResult(
         intent=intent,
         entities=entities,
-        handler_result=intent_map[intent](message),
+        handler_result=None,
     )
