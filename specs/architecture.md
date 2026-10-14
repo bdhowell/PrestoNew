@@ -624,11 +624,8 @@ Every fifteen to thirty seconds, Wikkit says randomly:
 - "Getting a cup of tea."
 - "I&rsquo;m indisposed for a moment..."
 
-@@@@ EMBEDDED IMAGES AND URLS
 @@@@ RESIZABLE COLUMNS
-@@@@ LOGO UPLOAD
-@@@@ MORE INFO URL
-
+\
 # Layout Router
 
 Create a function, layout(template, pid)) for laying out a template, which takes a template name and a poster ID.
@@ -726,7 +723,7 @@ Clicking a .item activates a draggable pop-up window of editing tools:
 	- Rewrite
 
 If Insert is clicked:
-- Display the container for a content management pop-up whose contents will be designed later, but which allows the insertion of non-text sources (items).
+- Display a container for a content management pop-up whose contents will be designed later, but which allows the insertion of non-text sources (items).
 - Has Cancel and OK buttons, which will be wired later.
 
 Inserted Items:
