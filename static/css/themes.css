@@ -1,13 +1,13 @@
 :root {
     --background-color: #7f7f7f;
-    --headings-background-color: #333333;
-    --headings-text-color: #ffffff;
+    --heading-background-color: #333333;
+    --heading-text-color: #ffffff;
 }
 
 .basic {
     --background-color: #efefff;
-    --headings-background-color: #3f3fff;
-    --headings-text-color: ##ffffff;
+    --heading-background-color: #333333;
+    --heading-text-color: #ffffff;
     --text-color: #000000;
     --border-color: #000000;
     --border-width: 3px;
