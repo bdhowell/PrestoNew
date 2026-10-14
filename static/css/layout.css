@@ -27,6 +27,11 @@ body {
     font-size: 1.5rem;
     display: flex;
     align-items: center;
+    width: 100%;
+}
+
+.header:empty {
+    width: 0;
 }
 
 .title {

@@ -20,6 +20,10 @@ When a session is terminated, the session's associated chat websocket must also 
 
 A cookie is used to keep track of the last user and welcome them back by name when they return.
 
+# Server Startup
+
+Determine the installed themes in /static/l
+
 # Payment Processing 
 
 Uses Stripe in cloud and simulates purchases on the local machine.
@@ -51,8 +55,8 @@ There is a collection of standard intents and a map of intents to handler functi
 - reset-password: reset password, change password, lost password
 - purchase: buy
 - delete: remove, delete, discard
-- create poster: create poster
-- delete poster: delete poster
+- create-poster: create poster
+- delete-poster: delete poster
 - download: downloads
 - help: help
 - undo: undo
@@ -66,7 +70,7 @@ There is a collection of standard intents and a map of intents to handler functi
 - product-pricing: lambda redirect to `/wikkit/pricing`
 - reset-password: lambda redirect to `/account/reset`
 - help: lambda redirect to `/wikkit/help`
-- create poster: lambda redirect to /poster/create
+- create-poster: lambda redirect to /poster/create
 
 
 ## Endpoint Intents
@@ -78,10 +82,16 @@ Selected endpoints have a collection of page-specific intents and/or a map of in
 For any given input, use openai.dispatch_intent to identify the user's intent and extract explicitly mentioned named entities.
 If there is an intent in the user's input and the current intent map has a handler function for the intent, then invoke the handler function for the intent, passing the user's message to the handler as a parameter. Return the intent, extracted entities, and handler result together. Otherwise, pass the message back to the client with intent information as a JSON data structure.
 
-# Routers
+# Routers and Endpoints
 
 Place each router in its own file with any local-to-it functions
 
+Place any router-specific javascript in /static/javascript/{router}/router.js
+Place any page-specific javascript in /static/{router}/{page}.js
+
+Place any router-specific CSS in /static/javascript/{router}/router.css
+Place any page-specific CSS in /static/{router}/{page}.css
+ 
 # Router: Wikkit the Wizard
 
 **`/wikkit`**
@@ -287,7 +297,6 @@ change password
 delete acccount
 
 
-
 ## Password Recovery
 
 **`/account/recover`**
@@ -423,7 +432,7 @@ Enter the number or the name of the {scope}
 If @@@@@
 
 ### Intents
-
+@@@@
 
 
 # Content Router
@@ -443,6 +452,8 @@ If the document is a PDF, DocX, MD, RTF, Apple Pages:
 - For extracted images, charts, formulae (math), and graphs:
 	- Hash images, charts, formulae (math), and graphs and verify that they don't already exist in the database.
 	- If unique: 
+		- If a graphic's name.lower() contains 'logo' or its description contains 'logo':
+			- Store or udpdate that graphic as the source logo for the poster unless a larger logo already exists.
 		- Store their descriptions with them in the source table and store their data in the file system or cloud as described. 
 		- Set their parent field to the document from which they were extracted.
 Elif the document is a XLSX, XLSM Text, or Apple Numbers:
@@ -450,6 +461,8 @@ Elif the document is a XLSX, XLSM Text, or Apple Numbers:
 Else for images, charts, formulae (math), and graphs:
 - Hash images, charts, formulae (math), and graphs and verify that they don't already exist in the database.
 - If unique:
+	- If a graphic's name.lower() contains 'logo' or its description contains 'logo':
+		- Store or udpdate that graphic as the source logo for the poster unless a larger logo already exists.
 	- For items with dimensions in pixels, store those dimensions in the source's height and width fields in the source table.
 	- Store items descriptions and thier hashes with them in the source table and store their data in the file system or cloud as described. 
 
@@ -611,54 +624,131 @@ Every fifteen to thirty seconds, Wikkit says randomly:
 - "Getting a cup of tea."
 - "I&rsquo;m indisposed for a moment..."
 
+@@@@ EMBEDDED IMAGES AND URLS
+@@@@ RESIZABLE COLUMNS
+@@@@ LOGO UPLOAD
+@@@@ MORE INFO URL
 
 # Layout Router
+
+Create a function, layout(template, pid)) for laying out a template, which takes a template name and a poster ID.
+- Get the poster's section contents from the database's section table.
+- Get the poster's logo, if any, from the database's poster table.
+
+- Start with a copy of the raw template.
+	- If there is a logo, set the contents of #logo to 
+
+- For each pane in the template:
+	- Get the list of sections the pane contains from the pane's data-section attribute.
+	- Split the list of sections on commas (',')
+	- For each section:
+		- Split the section on pipes ('|') into items
+		- If there is only one item:
+			- If the section is 'title' or 'author':
+				- Set the contents of those sections directly.
+			- Else:		
+				- Wrap a <div id="{section}" class="section"><div class="header">{section.title())</div><div class="content">{item}</div></div> around the item and append it to the pane.
+		- Else:
+			- Wrap a <div id="{section}" class="section"><div class="header">{section.title())</div><div class="content">{item}</div></div> around the item and append it to the pane.
+		- Else:
+			- Create a <div id="{section}-parent" class="section-parent"></div> and append it to the pane.
+			- classes = 'section vertical' if the pane has class '.vertical' else 'section'
+			- For each item:
+				- Wrap each item in a <div id="{section}" class="{classes}"><div class="header">{</div><div class="content">{item{</div></div> and append it to the section.
+- Return the rendered HTML
+
+Whenever looking up a poster record, cache the last poster record found, since the same poster record likely will be successively accessed by other endpoints.
+
+
+**`/layout/qrcode`**
+Takes a poster id (pid), looks up its reccord and outputs the contents of its poster.qrcode field as an image of type png.
+
+**`/layout/logo`**
+Takes a poster id (pid), looks up its record and outputs the contents of its poster.logo field as an image of type poster.logotype.
+
+**`/layout/source`**
+Takes the source id (sid) of a source and outputs the associated file
+Used to display images.
+
 
 **`/layout/edit`**
 ### Internal Logic
 Displays the current poster in a zoomable, pannable viewport. 
 
+Start with a raw rendered template.
+- Load the stylesheet from /static/css/layouts/ specific to the poster's template.
+- Set the class of the poster's font set on the poster's body element.
+
 For each pane in the template:
-- Get the list of sections the pane contents from the pane's data-section attribute.
+- Get the list of sections the pane contains from the pane's data-section attribute.
 - Split the list of sections on commas (',')
 - For each section:
 	- Split the section on pipes ('|') into items
 	- If there is only one item:
-		- Create a <div id="{section}" class="section"></div> and append it to the pane.
+		If the section is 'title' or 'author':
+			- Set the contents of those sections directly.
+		- Else:		
+			- Wrap a <div id="{section}" class="section"><div class="header">{section.title())</div><div class="content">{item}</div></div> around the item and append it to the pane.
 	- Else:
 		- Create a <div id="{section}-parent" class="section-parent"></div> and append it to the pane.
 		- classes = 'section vertical' if the pane has class '.vertical' else 'section'
 		- For each item:
-			- Wrap each item in a <div id="{section}" class="{classes}"></div> and append it to the section.
+			- Wrap each item in a <div id="{section}" class="{classes}"><div class="header">{section.title())</div><div class="content">{item{</div></div> and append it to the section.
 
-Poster elements having .item are contentEditable.
-- Clicking into a .item activates a pop-up window of editing tools: (organized into tool groups)
+If there is a logo source for the poster, append <img class="qrcode" src="/layout/qrcode?pid={poster id}"> to the end of #information.
+
+On a double tap or double click, display a pop-up window which shows:
+- If the poster is wider than tall:
+	- On the left display miniatures of arena.html and central.html templates with their sections in the current theme with the miniature of the current template highlighted.
+	- Touching, tappingm or clicking on either selects that template as the current template, highlights it, and rerenders and redisplays the poster.
+- Else
+	- On the left display a miniature of the vertical.html template in the current theme with the template highlighted.
+- Display the names of the miniature or miniatures in title case and centered underneath each miniature.
+
+- On the right, show vertically: the current template name; the current theme name, followed by "<i class="fa-solid fa-arrows-up-down"></i>" the current font set name, followed by "<i class="fa-solid fa-arrows-left-right"></i>"
+
+- Swiping left or right changes the current font set and causes the poster and pop-up examples to be rerendered.
+- Swiping up or down changes the current theme and causes the poster and pop-up examples to be rerendered.
+- A "Revert" button restores the settings to what they were before the pop-up window was displayed and causes the poster and pop-up examples to be rerendered.
+- "Cancel" and "OK" have their typical functionality with "Cancel" also performing a "Revert" .
+
+On the first tap or click, show each section's name in large bold type centered over its section.
+On the second tap or click, hide the section names and, if over a section, set the section as contentEditable="true" and activate the pop-up editor as described, set the previous section, if any, as contentEditable="false"
+
+Clicking a .item activates a draggable pop-up window of editing tools:
+- The tools are organized into groiups
 	- Cut, Copy, Paste
 	- Bold, Italic, Underline, Strikethrough
 	- Superscript, Subscript
 	- Fixed-width (toggle)
-	- Insert image (launches a pop-up dialog, see below)
-- Inserted images must be set contentEditable="False"
-- Inserted items: (charts, graphs, images, math)
-	- Double clicking inserted items toggles resize handles for them.
-	- The text must flow around inserted items while they are being resized.
-	- Inserted items cannot be resized beyond the limits of their pane.
-	- When not being resized, inserted items must be draggable through the text in their pane. 
-	- When resizing, snap inserted items dimensions to those of other inserted items in the section.
-		- Briefly indicated snapped elements with a border flash.
-		- If the element is a PNG or JPG and is being grown, check that the image as sized will print at 150 DPI or higher without distortion (the image is oversized).
-			- If the image won't print without distortion:
-				- Snap the image at its largest printable size. 
-				- Wikkit says f"<div>I&rsquo;m sorry, {username}.</div><div>That image shouldn&rsquo;t be made any larger or it will print blurry.</div>
-		- If the element is a PNG or JPG and it is being shrunk, if the image was previously oversized and cannot print at 150 DPI or higher without distortion:
-			- Wikkit says "Okay. That image will now print clearly."
+	- Insert (charts, graphs, images, math, launches a pop-up dialog, see below)
+		- Inserted items must be set contentEditable="False"
+	- Rewrite
 
-On the first tap, show each section's name in large bold type centered over its section.
-On the second tap, hide the section names and, if over a section, set the section as contentEditable="true" otherwise set all sections as contentEditable="false"
+If Insert is clicked:
+- Display the container for a content management pop-up whose contents will be designed later, but which allows the insertion of non-text sources (items).
+- Has Cancel and OK buttons, which will be wired later.
 
+Inserted Items:
+- Double clicking inserted items toggles resize handles for them.
+- The text must flow around inserted items while they are being resized.
+- Inserted items cannot be resized beyond the limits of their pane.
+- When not being resized, inserted items must be draggable through the text in their pane. 
+- When resizing, snap inserted items' dimensions to those of other inserted items in the section.
+	- Briefly indicated snapped elements with a border flash.
+	- If the element is a PNG or JPG and is being grown, check that the image as sized will print at 150 DPI or higher without distortion (the image is oversized).
+		- If the image won't print without distortion:
+			- Snap the image at its largest printable size. 
+			- Wikkit says f"<div>I&rsquo;m sorry, {username}.</div><div>That image shouldn&rsquo;t be made any larger or it will print blurry.</div>
+	- If the element is a PNG or JPG and it is being shrunk, if the image was previously oversized and cannot print at 150 DPI or higher without distortion:
+		- Wikkit says "Okay. That image will now print clearly."
 
-
-
+If Rewrite is clicked and no section is contentEditable="true":
+- Show section names.
+- Wikkit Says: "Which section would you like me to rewrite?"
+	- Wait for user input
+	- Strip the input and remove r/^\s*rewrite\s*|the\s+/i to get the section name
+	- Activate the item  as if it was cl
 
 ### Wikkit Says:
 
@@ -681,14 +771,23 @@ change-theme: change the theme, change theme, replace the theme, replace theme, 
 change-fonts: change the fonts, change fonts, replace the fonts, replace fonts, change typefaces, change the typefaces, replace the typefaces, replace typefaces
 rewrite-section: rewrite
 show-sections: show sections, identify sections
-which-is: which is
+add-qrcode: more information, add qrcode, qrcode, 
+remove-qrcode: delete qrcode, delete more information, remove qrcode, remove more information
 
 ### Intents Map
-change-layout: display 
-
-send-command: show-sections
+change-layout: display the layout-theme-font pop-up
+change-theme: display the layout-theme-font pop-up
+change-fonts display the layout-theme-font pop-up
+show-sections: show section names like after a single tap or click.
+hide-sections: hide section names if displayed
+rewrite-section: display rewrite pop-up, described above.
+add-qrcode: 
+- Request the URL from the user
+- Generate a QR-code PNG
+- Save the URL in poster.moreinfo and the QR-code PNG in poster.moreinfopng
 
 # Purchase Router
+
 
 **`/purchase/poster`**
 
@@ -698,6 +797,67 @@ Uses Stripe in cloud and simulates purchases on the local machine.
 Marks the poster as having been purchased.
 Redirects to **`/purchase/download`**
 
+### Wikkit Says
+
+f"""
+<p>
+Okay, {username}, I&rsquo;m going to hand you off to Stripe now for you to make your purchase.
+</p>
+
+
 **`/purchase/download`**
 
-Renders the poster full sized in HTML using playwright and generates a PDF which is then downloaded to the browser.
+### Internal Logic
+Renders the poster full sized in HTML using playwright and generates a PDF which is then downloaded to the browser.  
+
+### Template Content
+If payment went through:
+	- Includes /static/graphics/wikkit.svg on the left with {APPLICATION_NAME} in a large font on the right.
+	- Underneath display "Thank You" in centered large letters.
+
+<div class="centered-text">
+<button>Create Another Poster</button>
+</div>
+
+### Wikkit Says
+
+If payment went through:
+	f"""
+	<div>
+		<p>
+			Congratulations, {username}! Your payment went through and your poster has been downloaded.
+		<p>
+		<p>
+			Thank you very much for letting me work with you on your poster, {username}.
+		<p>
+	"""
+
+	Choose a random message:
+	[
+		"I had fun working with you.",
+		"I enjoyed working together.",
+		"It was fun working together",
+		"I enjoyed working with you."
+	]
+
+	f"""
+		<p>
+		<p>
+			I hope you&rsquo; think of me when you need to create another poster.
+		</p>
+	"""
+Else:
+	f"""
+	<div>
+		<p>
+			Don&rsquo;t like your poster, {username}? Would you like to make some changes? Just let me know.
+		<p>
+	"""
+
+### Intents
+make-changes: make changes, make fixes, fix, change, update
+
+### Intents Map
+make-changes: 
+	Wikkit Says: "Your wish is my command!"
+	Redirect to /layout/edit

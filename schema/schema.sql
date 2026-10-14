@@ -60,19 +60,23 @@ CREATE INDEX IF NOT EXISTS idx_conference_hidden ON conference (hidden) WHERE hi
 CREATE INDEX IF NOT EXISTS idx_conference_verified ON conference (verified) WHERE verified IS NULL;
 
 CREATE TABLE IF NOT EXISTS poster (
-    pid        SERIAL PRIMARY KEY,
-    uid        INTEGER REFERENCES "user"(uid) ON DELETE SET NULL,
-    logo       BYTEA,
-    dimensions TEXT NOT NULL DEFAULT '36x48',
-    template   TEXT,
-    theme      TEXT,
-    font       TEXT,
-    searchable INTEGER NOT NULL DEFAULT 0 CHECK (searchable IN (0, 1)),
-    downloads  INTEGER NOT NULL DEFAULT 0,
-    created    TIMESTAMPTZ NOT NULL,
-    updated    TIMESTAMPTZ,
+    pid          SERIAL PRIMARY KEY,
+    uid          INTEGER REFERENCES "user"(uid) ON DELETE SET NULL,
+--    logo         BYTEA,
+--    logotype     TEXT,        -- type of the logo (e.g., 'png', 'jpg', 'svg')
+    dimensions   TEXT NOT NULL DEFAULT '36x48',
+    description  TEXT NOT NULL,
+--    moreinfo     TEXT,
+--    moreinfopng  BYTEA,
+    template     TEXT,
+    theme        TEXT,
+    fonts        TEXT,         -- name of the font set used in the poster
+    searchable   INTEGER NOT NULL DEFAULT 0 CHECK (searchable IN (0, 1)),
+    downloads    INTEGER NOT NULL DEFAULT 0,
+    created      TIMESTAMPTZ NOT NULL,
+    updated      TIMESTAMPTZ,
     search_vector tsvector,
-    embedding  vector(1536)
+    embedding    vector(1536)
 );
 
 CREATE INDEX IF NOT EXISTS idx_poster_uid ON poster (uid);
@@ -130,7 +134,7 @@ CREATE INDEX IF NOT EXISTS idx_show_approved ON show (approved) WHERE approved I
 CREATE TABLE IF NOT EXISTS source (
     sid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
-    kind        TEXT NOT NULL CHECK (kind IN ('text', 'svg','mixed','image','chart','table','logo')),
+    kind        TEXT NOT NULL CHECK (kind IN ('text', 'svg','mixed','image','chart','table','logo','moreinfo', 'qrcode')),
     parent      INTEGER NOT NULL REFERENCES source(sid) ON DELETE CASCADE,
     text        TEXT,
     description TEXT,
@@ -149,6 +153,9 @@ CREATE TABLE IF NOT EXISTS source (
 CREATE INDEX IF NOT EXISTS idx_source_pid ON source (pid);
 CREATE INDEX IF NOT EXISTS idx_source_fileid ON source (fileid);
 CREATE INDEX IF NOT EXISTS idx_source_parent ON source (parent);
+
+-- Allow at most one source of each special kind per poster.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_pid_kind_unique ON source (pid, kind);
 
 CREATE INDEX IF NOT EXISTS idx_source_embedding_ivfflat ON source
 USING ivfflat (embedding vector_cosine_ops)
