@@ -185,48 +185,65 @@ def identify_intent(
     return _dispatch(_classify(examples, message), [intent_map])
 
 
+@dataclass(frozen=True, eq=False)
+class _IntentLayer:
+    handlers: Handlers
+    examples: Examples | None = None
+    autopop: bool = False
+
+
 class IntentStack:
     """Create one stack per conversation; general maps cannot be popped."""
 
     def __init__(self) -> None:
-        self._examples_stack: list[Examples] = [GENERAL_EXAMPLES]
-        self._handlers_stack: list[Handlers] = [GENERAL_HANDLERS]
-        self._paired_examples: list[bool] = [True]
+        self._layers = [_IntentLayer(GENERAL_HANDLERS, GENERAL_EXAMPLES)]
 
     @property
     def examples_stack(self) -> tuple[Examples, ...]:
-        return tuple(self._examples_stack)
+        return tuple(
+            layer.examples for layer in self._layers if layer.examples is not None
+        )
 
     @property
     def handlers_stack(self) -> tuple[Handlers, ...]:
-        return tuple(self._handlers_stack)
+        return tuple(layer.handlers for layer in self._layers)
 
     def accumulated_examples(self) -> dict[str, Sequence[str]]:
         examples: dict[str, Sequence[str]] = {}
-        for layer in self._examples_stack:
+        for layer in self.examples_stack:
             examples.update(layer)
         return examples
 
-    def push(self, handlers: Handlers, examples: Examples | None = None) -> None:
-        """Push handlers alone, or push handlers paired with an examples map."""
+    def push(
+        self, handlers: Handlers, examples: Examples | None = None,
+        autopop: bool = False,
+    ) -> None:
+        """Push a layer, optionally consumed after handling the next message."""
         copied_examples = None if examples is None else _copy_examples(examples)
         copied_handlers = MappingProxyType(dict(handlers))
         available = self.accumulated_examples()
         if copied_examples is not None:
             available.update(copied_examples)
         _validate_handlers(copied_handlers, available)
-        if copied_examples is not None:
-            self._examples_stack.append(copied_examples)
-        self._handlers_stack.append(copied_handlers)
-        self._paired_examples.append(copied_examples is not None)
+        self._layers.append(_IntentLayer(copied_handlers, copied_examples, autopop))
 
     def pop(self) -> tuple[Examples | None, Handlers]:
         """Pop top handlers and their paired examples, if any, atomically."""
-        if len(self._handlers_stack) == 1:
+        if len(self._layers) == 1:
             raise IndexError("cannot pop the general intent maps")
-        handlers = self._handlers_stack.pop()
-        examples = self._examples_stack.pop() if self._paired_examples.pop() else None
-        return examples, handlers
+        layer = self._layers.pop()
+        return layer.examples, layer.handlers
+
+    def _autopop(self, layer: _IntentLayer) -> None:
+        if not layer.autopop or layer not in self._layers:
+            return
+        remaining = [entry for entry in self._layers if entry is not layer]
+        available: dict[str, Sequence[str]] = {}
+        for entry in remaining:
+            if entry.examples is not None:
+                available.update(entry.examples)
+            _validate_handlers(entry.handlers, available)
+        self._layers.remove(layer)
 
     def identify_intent(self, message: str) -> IntentClassification:
         return _classify(self.accumulated_examples(), message)
@@ -234,7 +251,16 @@ class IntentStack:
     def handle_intent(
         self, classification: IntentClassification
     ) -> IntentDispatchResult[object] | None:
-        return _dispatch(classification, self._handlers_stack)
+        layer = self._layers[-1]
+        try:
+            return _dispatch(classification, self.handlers_stack)
+        finally:
+            self._autopop(layer)
 
     def dispatch(self, message: str) -> IntentDispatchResult[object] | None:
-        return self.handle_intent(self.identify_intent(message))
+        layer = self._layers[-1]
+        try:
+            classification = self.identify_intent(message)
+            return _dispatch(classification, self.handlers_stack)
+        finally:
+            self._autopop(layer)

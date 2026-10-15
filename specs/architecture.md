@@ -396,7 +396,7 @@ Else scope = 'conference or fair'
 
 f"""
 <p>
-{username}, please select the {scope} that best matches your poster requirements by clicking on it, entering the corresponding number, or telling me its name.
+{username}, please select the {scope} that best matches your poster requirements by clicking on it, entering its corresponding number, or telling me its name.
 If there is no matching {scope}, just let me know and we&rsquo;ll move on.
 </p>
 <p>

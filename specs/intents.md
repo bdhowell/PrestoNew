@@ -43,7 +43,23 @@ At the bottom of the handlers stack is a map of general intents and handler func
 
 Additional examples maps and handlers maps can be pushed onto and popped from their respective stacks in pairs.
 Handler maps can also be pushed individually.
-It is an error for a handlers map to not have an intent which is found in any examples map currently on the examples stack.
+It is an error for a handlers map to have an intent which is not found in any examples map currently on the examples stack.
+
+`push(handlers, examples=None, autopop=False)` stores the autopop flag with the
+layer. When true, the layer is active for one message, then its handlers and
+paired examples are removed after handling, even on fallthrough, a None handler,
+or an exception. Only the layer on top at the start of processing is consumed;
+lower autopop layers remain for subsequent messages. General maps never autopop.
+
+`dispatch(message)` performs classification and handling together, with cleanup
+also occurring if classification fails. For separate classification and handling,
+`identify_intent(message)` leaves the layer active; `handle_intent(classification)`
+performs cleanup after handling.
+
+If a handler pushes a new layer, cleanup removes the completed autopop layer,
+not the new layer. New handlers must not depend solely on the completed layer's
+examples: if removal would leave handlers without examples, cleanup raises
+ValueError and leaves the completed layer in place.
 
 There also need to be a function which allows either or both stacks to be popped.
 Popping always pops the last handlers map and the examples map with which it was pushed, if any.
