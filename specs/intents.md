@@ -43,7 +43,7 @@ At the bottom of the handlers stack is a map of general intents and handler func
 
 Additional examples maps and handlers maps can be pushed onto and popped from their respective stacks in pairs.
 Handler maps can also be pushed individually.
-It is an error for a handlers map to have an intent which is found in any examples map currently on the examples stack.
+It is an error for a handlers map to not have an intent which is found in any examples map currently on the examples stack.
 
 There also need to be a function which allows either or both stacks to be popped.
 Popping always pops the last handlers map and the examples map with which it was pushed, if any.

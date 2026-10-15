@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Generic, TypeVar
 
 import common
-import llm
 import openai
 
 
@@ -102,7 +101,7 @@ def interact_with_openai(
     if not NO_CACHE and cache_file.exists():
         return json.loads(cache_file.read_text(encoding="utf-8"))["output_text"]
 
-    client = llm.OpenAI()
+    client = openai.OpenAI()
     response = client.responses.create(**request)
     output_text = response.output_text.strip()
 

@@ -7,7 +7,7 @@ We are going to build it in stages, and by feature, section, and page.
 # Data Storage
 
 The database is PostgreSQL equipped with PGVector. 
-On-going chats are stored in Postgres to allow review and continuation between sessions.
+On-going chats are stored in Postgres to allow review of and continuation between sessions.
 Sessions are managed with Redis (locally installed).
 
 # Session Management
@@ -41,46 +41,15 @@ A preliminary schema is in `schema/schema.sql`. It needs rewriting.
 
 In schema.sql, modify the source and item tables so that conferences suppor full-text search, along with embedding.
 See search.md for an explanation of search goals and implementation guidelines.
+ 
+# Client-side functions
 
-# Intents
-## General Intents
+1 **`apiobj.say(html)`**
+Pass a text or an HTML fragement to `say()` to have it wrapped in <div class="chat"></div> tags and added as a chatbot message to the end of the #chatbot div message stream (above the contentEditable region).
 
-There is a collection of standard intents and a map of intents to handler functions.
-
-### Default Intents: 
-- sign-out: sign out, sign out, log off, logout
-- sign-up: register, create an account, sign up, sign-up, make a poster
-- sign-in: sign in, log in, login, log-in
-- product-pricing: pricing, what does it cost, is this free
-- reset-password: reset password, change password, lost password
-- purchase: buy
-- delete: remove, delete, discard
-- create-poster: create poster
-- delete-poster: delete poster
-- download: downloads
-- help: help
-- undo: undo
-- redo: redo
-- okay: okay
-
-### Intent Map:
-- sign-up: lambda redirect to `/account/register`
-- sign-in: lambda redirect to `/acccount/signin`
-- sign-out: lambda redirect to `/account/signout`
-- product-pricing: lambda redirect to `/wikkit/pricing`
-- reset-password: lambda redirect to `/account/reset`
-- help: lambda redirect to `/wikkit/help`
-- create-poster: lambda redirect to /poster/create
-
-
-## Endpoint Intents
-
-Selected endpoints have a collection of page-specific intents and/or a map of intents to handler functions in the router that contains the endpoint. Page-specific intent handler map function specifications, which may be None, supersede like-named global intent map functions.
-
-## Intent Processing
-
-For any given input, use openai.dispatch_intent to identify the user's intent and extract explicitly mentioned named entities.
-If there is an intent in the user's input and the current intent map has a handler function for the intent, then invoke the handler function for the intent, passing the user's message to the handler as a parameter. Return the intent, extracted entities, and handler result together. Otherwise, pass the message back to the client with intent information as a JSON data structure.
+2 **`apiobj.command(html, echo=false)`**
+Pass text directly to the server via the websocket.
+If echo is true then also call `apiobj.say(html)`.
 
 # Routers and Endpoints
 
@@ -91,7 +60,7 @@ Place any page-specific javascript in /static/{router}/{page}.js
 
 Place any router-specific CSS in /static/javascript/{router}/router.css
 Place any page-specific CSS in /static/{router}/{page}.css
- 
+
 # Router: Wikkit the Wizard
 
 **`/wikkit`**
@@ -111,13 +80,20 @@ When a page is loaded into the iframe, the page must call a wikkit.js function, 
 The listen parameter is a callback that delivers chatbot messages to the client page.
 `connect(listen)` returns a JavaScript object, `apiobj`, which should probably be a singleton, that exposes two methods to the client:
 
-1 **`apiobj.say(html)`**
-Pass a text or an HTML fragement to `say()` to have it wrapped in <div class="chat"></div> tags and added as a chatbot message to the end of the #chatbot div message stream (above the contentEditable region).
+# Chatbot Server-client Interactions
 
-2 **`apiobj.command(html, echo=false)`**
-Pass text directly to the server via the websocket.
-If echo is true then also call `apiobj.say(html)`.
+User input sent to the server are processed there as intents using the logic in intents.py with results sent back.
+Results sent back can contain a message to the user and/or a command to the client:
 
+{
+	"user" : string,
+	"client" : {
+		"action" : string,
+		"payload" : (optional string)
+	}
+}
+
+Currently the only valid command is 'redirect' where the payload is the URL for the chatbot to navigate to.
 And see `Wikkit.md`
 
 # Home Page
@@ -392,7 +368,7 @@ Given a set of criteria describing a conference or fair, including its name, loc
 
 **`/conferences/query`**
 
-### Wikkit says:
+### Wikkit says: (client output)
 
 f"""
 <div>Let me begin by asking what you know about the conference or fair for which we're creating your poster.</div<>>
@@ -466,7 +442,8 @@ Else for images, charts, formulae (math), and graphs:
 	- For items with dimensions in pixels, store those dimensions in the source's height and width fields in the source table.
 	- Store items descriptions and thier hashes with them in the source table and store their data in the file system or cloud as described. 
 
-As each item is uploaded and added, display it as table row consisting a thumbnail or icon, its filename or its parent's filename, the document type, and an optional delete button, ordered chronologically, in #items-list.
+As each item is uploaded and added to the database, display the entire list, including any previously uploaded content in a table with each row consisting of a thumbnail or icon, the content's filename or its parent's filename, the document type, and an optional delete button, ordered chronologically, in #items-list.
+
 - If the item has height and width, and it is less than two inches on either axis:
 	- Display the item's filename with the class '.ill-sized'.
 	- Keep a count of such sized items
@@ -523,9 +500,20 @@ Upload raw content for your poster.
 This can include PDFs, Microsoft Word, PowerPoint, and Excel documents, Apple Pages, Keynote, and Numbers documents, and PNG, TIFF, JPG (JPEG) images.
 </p>
 <p>
-Click the <strong>Finish</strong> when you have finished uploading. 
+Click the <strong>Finish</strong> button or let me know when you have finished uploading. 
 </p>
 """
+
+### Intents
+finished-uploading: Finished, I'm finished, I am finished, All done, I'm all done
+- Wikkit says "Moving on..."
+go-back: 
+- Wikkit says "
+
+### Intents-map:
+finished-uploading:
+- Wikkit says f"Terrific, {username}. We&rsquo;re making great progress."
+- redirect to `/content/elucidate`
 
 
 **`/content/elucidate`**
@@ -624,8 +612,7 @@ Every fifteen to thirty seconds, Wikkit says randomly:
 - "Getting a cup of tea."
 - "I&rsquo;m indisposed for a moment..."
 
-@@@@ RESIZABLE COLUMNS
-\
+
 # Layout Router
 
 Create a function, layout(template, pid)) for laying out a template, which takes a template name and a poster ID.
@@ -768,8 +755,8 @@ change-theme: change the theme, change theme, replace the theme, replace theme, 
 change-fonts: change the fonts, change fonts, replace the fonts, replace fonts, change typefaces, change the typefaces, replace the typefaces, replace typefaces
 rewrite-section: rewrite
 show-sections: show sections, identify sections
-add-qrcode: more information, add qrcode, qrcode, 
-remove-qrcode: delete qrcode, delete more information, remove qrcode, remove more information
+add-qrcode: more information, add qrcode, qrcode, change qrcode
+remove-qrcode: delete the qrcode, remove the qrcode
 
 ### Intents Map
 change-layout: display the layout-theme-font pop-up
@@ -781,8 +768,11 @@ rewrite-section: display rewrite pop-up, described above.
 add-qrcode: 
 - Request the URL from the user
 - Generate a QR-code PNG
-- Save the URL in poster.moreinfo and the QR-code PNG in poster.moreinfopng
-
+- Update the URL in poster.moreinfo and the QR-code PNG in poster.moreinfopng
+- Append 
+remove-qrcoode
+- Set the poster's URL in poster.moreinfo = null and poster.moreinfopng = null
+- Remove the QR-code's 
 # Purchase Router
 
 
@@ -852,7 +842,7 @@ Else:
 	"""
 
 ### Intents
-make-changes: make changes, make fixes, fix, change, update
+make-changes: make changes, make fixes, fix, change, update, go-back
 
 ### Intents Map
 make-changes: 
