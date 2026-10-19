@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS source (
     mimetype    TEXT NOT NULL,
     added       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     usable      BOOLEAN NOT NULL DEFAULT TRUE,
+    search_vector tsvector,
     embedding   vector(1536)
 );
 
@@ -177,6 +178,7 @@ CREATE TABLE IF NOT EXISTS section (
     which       section_which NOT NULL,
     content     TEXT NOT NULL,
     updated     TIMESTAMPTZ NOT NULL,
+    search_vector tsvector,
     embedding   vector(1536),
     UNIQUE (pid, which)
 );
@@ -278,6 +280,50 @@ WHERE NOT EXISTS (SELECT 1 FROM administration WHERE username = 'root');
 -- =========================================================================
 -- Full-text search
 -- =========================================================================
+
+-- Source and section vectors use NEW values so inserts and edits are indexed
+-- before the row is visible to queries.
+ALTER TABLE source ADD COLUMN IF NOT EXISTS search_vector tsvector;
+ALTER TABLE section ADD COLUMN IF NOT EXISTS search_vector tsvector;
+
+CREATE OR REPLACE FUNCTION trg_source_fts()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.search_vector :=
+        setweight(to_tsvector('english', coalesce(NEW.text, '')), 'A') ||
+        setweight(to_tsvector('english', coalesce(NEW.description, '')), 'B');
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_section_fts()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.search_vector := to_tsvector('english', coalesce(NEW.content, ''));
+    RETURN NEW;
+END;
+$$;
+
+SET client_min_messages TO WARNING;
+DROP TRIGGER IF EXISTS source_fts_update ON source;
+DROP TRIGGER IF EXISTS section_fts_update ON section;
+RESET client_min_messages;
+
+CREATE TRIGGER source_fts_update
+BEFORE INSERT OR UPDATE OF text, description
+ON source
+FOR EACH ROW EXECUTE FUNCTION trg_source_fts();
+
+CREATE TRIGGER section_fts_update
+BEFORE INSERT OR UPDATE OF content
+ON section
+FOR EACH ROW EXECUTE FUNCTION trg_section_fts();
+
+UPDATE source SET text = text;
+UPDATE section SET content = content;
+
+CREATE INDEX IF NOT EXISTS idx_source_fts ON source USING GIN (search_vector);
+CREATE INDEX IF NOT EXISTS idx_section_fts ON section USING GIN (search_vector);
 
 -- ── Conference ────────────────────────────────────────────────────────────
 

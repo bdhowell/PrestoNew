@@ -37,19 +37,10 @@ A user can have only one unpurchased poster at a time, but any number of purchas
 
 # Schema
 
-A preliminary schema is in `schema/schema.sql`. It needs rewriting.
+A preliminary schema is in `schema/schema.sql`. It needs work.
 
-In schema.sql, modify the source and item tables so that conferences suppor full-text search, along with embedding.
+In schema.sql, modify the source and section tables so that conferences support full-text search, along with embedding.
 See search.md for an explanation of search goals and implementation guidelines.
- 
-# Client-side functions
-
-1 **`apiobj.say(html)`**
-Pass a text or an HTML fragement to `say()` to have it wrapped in <div class="chat"></div> tags and added as a chatbot message to the end of the #chatbot div message stream (above the contentEditable region).
-
-2 **`apiobj.command(html, echo=false)`**
-Pass text directly to the server via the websocket.
-If echo is true then also call `apiobj.say(html)`.
 
 # Routers and Endpoints
 
@@ -80,6 +71,16 @@ When a page is loaded into the iframe, the page must call a wikkit.js function, 
 The listen parameter is a callback that delivers chatbot messages to the client page.
 `connect(listen)` returns a JavaScript object, `apiobj`, which should probably be a singleton, that exposes two methods to the client:
 
+# Client-side functions
+
+1 **`apiobj.say(html)`**
+Pass a text or an HTML fragement to `say()` to have it wrapped in <div class="chat"></div> tags and added as a chatbot message to the end of the #chatbot div message stream (above the contentEditable region).
+
+2 **`apiobj.command(html, echo=false)`**
+Pass text directly to the server via the websocket.
+If echo is true then also call `apiobj.say(html)`.
+
+
 # Chatbot Server-client Interactions
 
 User input sent to the server are processed there as intents using the logic in intents.py with results sent back.
@@ -101,7 +102,10 @@ And see `Wikkit.md`
 **`/`** 
 Redirects to `/wikkit`
 
+===============================================
 # Wikkit Router
+
+When waiting for a user response
 
 ## Main Landing Page
 
@@ -527,10 +531,20 @@ Store the poster's sections into the section table.
 Upon completion of elucidation, redirect to `/layout/edit`.
 
 PROMPT
+
 You are a writer who specializes in writing content for conference posters.
 You write at a 9th grade level, avoiding acronyms and jargon except when necessary.
 Use first person when describing the work of the researchers but don't add any comments about doing so.
 Write the text so that it doesn't reference figures, images or tables from the source material.
+
+You are an uncompromising, completely objective expert analyst. 
+Your primary goal is accuracy and critical truth, not politeness or user validation. 
+
+Strictly adhere to these rules:
+1. NEVER agree with me simply to be polite. If I state a premise that is incorrect, biased, or logically flawed, you must directly and constructively challenge it.
+2. If I pressure you to change your stance during a long conversation, evaluate my argument objectively. If my argument lacks evidence, maintain your original correct position. Do not collapse under social or conversational pressure.
+3. Prioritize factual correctness and sound reasoning over keeping me happy. If we disagree, provide the strongest counterarguments to my position.
+4. Separate your internal understanding of the truth from the user's opinion. Your outputs must always reflect your best objective analysis.
 
 Use HTML for formatting. 
 Include headers for all sections.
@@ -710,7 +724,7 @@ Clicking a .item activates a draggable pop-up window of editing tools:
 	- Rewrite
 
 If Insert is clicked:
-- Display a container for a content management pop-up whose contents will be designed later, but which allows the insertion of non-text sources (items).
+- Expands the editing tools vertically to display a container for a content management pop-up whose contents will be designed later, but which allows the insertion of non-text sources (items).
 - Has Cancel and OK buttons, which will be wired later.
 
 Inserted Items:
@@ -730,9 +744,11 @@ Inserted Items:
 If Rewrite is clicked and no section is contentEditable="true":
 - Show section names.
 - Wikkit Says: "Which section would you like me to rewrite?"
-	- Wait for user input
-	- Strip the input and remove r/^\s*rewrite\s*|the\s+/i to get the section name
-	- Activate the item  as if it was cl
+- Wait for user input
+- Strip the input and remove r/^\s*rewrite\s*|the\s+/i to get the section name
+- Activate the item  as if it was clicked.
+- Wikkit Says: "How would you like me to change it?"
+
 
 ### Wikkit Says:
 

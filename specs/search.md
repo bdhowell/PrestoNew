@@ -35,6 +35,19 @@ The schema also keeps the vectors up to date with trigger-backed recomputation. 
 - conference FTS includes `name`, `location`, `description`, and key terms
 - poster FTS includes `title`, `subtitle`, `authors`, `footnotes`, content titles, content bodies, footnote rows, and key terms
 
+The `source` and `section` tables also support FTS alongside their existing
+1536-dimensional embeddings:
+
+- source FTS includes `text` (weight A) and `description` (weight B); null values are treated as empty text
+- section FTS includes `content`
+- `BEFORE INSERT OR UPDATE` triggers compute vectors from the new row values when searchable text changes
+- GIN indexes support `search_vector @@ websearch_to_tsquery('english', q)` on both tables
+- the schema adds missing search columns on existing tables and backfills existing rows through the triggers
+
+These row-level vectors do not change conference/poster autocomplete scopes or
+automatically regenerate embeddings. The schema calls poster content rows
+`section`; there is no separate `item` table.
+
 ## Vector Similarity Layer
 
 Each searchable row can also have a pgvector `embedding` column.
