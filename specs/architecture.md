@@ -101,29 +101,39 @@ specified in [Chatbot Details](./%23%20Chatbot%20Details.md). New replies use
 `say` and `command: {does, payload}`; the client continues accepting the legacy
 `user`/`client` format above.
 
-# Home Page
-
-**`/`** 
-Redirects to `/wikkit`
+# Web Page
 
 Each web page can have its own CSS in `/static/css/pages/{page}.css` and JavaScript in `/static/javascript/pages/{page}.js`. The page name is a stable, lowercase slug supplied by the route. Shared head templates conditionally include each file when it exists, in addition to the CSS and JavaScript already loaded by the core template.
 
-===============================================
+# Session, Poster, and User Memory Request Availability
+
+During requests, `session`, `poster`, and `user` memories are available at request.state.session, request.state.poster, and request.state.user respectively.
+
+# Basic Menu
+
+Provide a simple navigation menu for the web page, allowing users to access the main sections such as Home, Pricing, Help, Account, and Sign-in or Sign-out as appropriate, depending on the user's authentication status.
+
+The menu should be included in the shared head template and be consistent across all pages.
+
+# Home Page
+
+**`/`** 
+Redirects to `/wikkit/magic`
+
 # Wikkit Router
 
 ## Main Landing Page
-
 **`/wikkit/magic`**
-### Internal Logic
-If the user is returning (as indicated by the presence of the user cookie):
-    redirect to `/returning`
 
 ### Template Content
 Displays a landing page.
-Shows `/static/graphics/wikkit.svg` on the left with {APPLICATION_NAME} in a large font on the right.
+Shows `/static/graphics/wikkit.svg` on the left with {APPLICATION_NAME} large Wikkit's font on the right.
 
-### Wikkit says:
-f"""
+### Internal Logic
+If the user is returning (as indicated by the presence of the user cookie):
+    redirect to `/account/signin`
+
+Wikkit Says:f"""
 <div>
 Welcome to {APPLICATION_NAME}. I&rsquo;m {APPLICATION_NAME}&rsquo;s resident wizard.
 </div>
@@ -137,69 +147,62 @@ Can I have your name to start?
 
 Wait for the user to respond.
 Use common.clean_string to clean the user's response.
+Store the cleaned response in request.state.user as `user-name`.
 
-## Returning User Landing Page
-
-**`/wikkit/returning`**
-### Internal Logic
-Set session.username to cookie.username
-
-### Template Content
-Display a welcome back to {cookie.username}.
-
-"Please sign-in to continue working on your poster."
-
-Includes /static/graphics/wikkit.svg on the left with {APPLICATION_NAME} in a large font on the right.
-
-### Wikkit says:
-
-f"""
+Wikkit Says:f"""
 <p>
-Welcome back, {} to {APPLICATION_NAME}! 
-I&*rsquo;m happy to see you again.
-</p>
-<p>
-Ready to get back to work on your poster?
+Nice to meet you, {request.state.user['user-name']}!
 </p>
 """
+
+Store the user's name also in a cookie so that returning users can be recognized and greeted appropriately.
+
+Redirect to `/account/register`
 
 ## Service Pricing Breakdown
 
 **`/wikkit/pricing`**
-### Internal Logic
-
-(None)
-
 ### Template Content 
 Placeholder content about posters being paid for only when ready for printing.
 
-### Wikkit says:
+### Internal Logic
 
-f"""
+Wikkit Says:f"""
 <p>
-Here is the pricing information. Is there anything else I can tell you?
+Here is our pricing information, {request.state.user['user-name']}. 
+As you can see, it&rsquo;s really simple: you pay only when you&rsquo;re ready to download your print-ready poster.
 </p>
 """
+
+Wait for user input.
+Use common.clean_response to clean the user's response.
+If response indicates the user has further questions:
+	Wikkit Says:f"""
+<p>
+Sure, what else would you like to know?
+</p>
+"""
+	Wait for user input.
+	Use common.clean_response to clean the user's response.
+
 
 ## Help Page 
 
 **`/wikkit/help`**
-### Internal Logic
-
-(None)
-
 ### Template Content
 
+Empathize with the user's situation and offer assistance.
 What can I help you with?
 
 - Link to account page.
 - Link to password reset.
+- Link to contact support.
 
-### Wikkit says:
+### Internal Logic
 
-f"""
+Wikkit Says:f"""
 <p>
-What  can I help you with?
+What  can I help you with, {request.state.user['user-name']}?
 </p>
 """
 
@@ -207,7 +210,7 @@ What  can I help you with?
 
 ## Account Registration Page
 
-**`/acccount/register`**
+**`/account/register`**
 ### Internal Logic
 Allows a user to create an account.
 Requires a unique email address and a password.
@@ -239,7 +242,7 @@ Thank the user by name for completing the registration process.
 
 f"""
 <p>
-Congratulations, {username}. 
+Congratulations, {request.state.user['user-name']}. 
 We&rsquo;re all set.
 </p>
 <p>
@@ -249,15 +252,62 @@ Let&rsquo;s get started on your poster!"
 ## Account Sign-in
 
 **`/account/signin`**
-Allows the user to sign into an existing account.
-Provides a link to `/account/reset` to allow the user to reset their password.
+### Template Content
+Display a welcome back to {APPLICATION_NAME}, {cookie.username}.
 
-### Wikkit Says:
+"Please sign-in to continue working on your poster."
 
+Includes /static/graphics/wikkit.svg on the left with {APPLICATION_NAME} in a large font on the right.
+
+Form for the user to enter their email and password to sign in does an AJAX submission to /account/validate via POST.
+- The form should include a submit button.
+- There should also be a forgotten password button that redirects to `/account/recover` to allow the user to reset their password, passing their email address as a query parameter if they've entered it into the form.
+
+### Internal Logic
+Set session.username to cookie.username
+
+Wikkit Says:f"""
+<p>
+Welcome back, {request.state.user['user-name']} to {APPLICATION_NAME}! 
+I&rsquo;m happy to see you again.
+</p>
+<p>
+Please sign in to continue working on your poster.
+</p>
+"""
+
+After successful sign-in, redirect the user to request.state.poster['restart-page'], or to `/posters/list` if it doesn't exist.
+
+**`/account/validate`**
+### Internal Logic
+
+Validate the user's email and password.
+If valid:
+- set request.state.user to the authenticated user
+- Wikkit says:
 f"""
 <p>
-"Please sign in to {APPLICATION_NAME}.
+Let&rsquo;s get back to work on your poster!
 </p>
+"""
+- return a success response.
+Elif cookie.username:
+- Wikkit says:
+f"""
+<p>
+I&rsquo;m sorry, {cookie.username}, I don&rsquo;t recognize your email or password. 
+Please try again.
+</p>
+"""
+Else:
+- Wikkit says:
+	f"""
+	<p>
+	I&rsquo;m sorry, I don&rsquo;t recognize that email or password. 
+	Please try again.
+	</p>
+	"""
+- return an error response.
 """
 
 ## Account Sign-out
@@ -284,6 +334,13 @@ delete acccount
 **`/account/recover`**
 ### Internal Logic
 Recover password using user&rsquo;s email address.
+
+Wikkit says:
+f"""
+<p>
+Please tell me your email address, {} to recover your password.
+</p>
+"""
 Send a recovery link to the user's email address.
 
 ### Template Content
@@ -311,15 +368,15 @@ Form for the user's email address with a submit button,,
 
 f"""
 <p>
-{username}, please provide your email address to reset your password.
+{request.state.user['user-name']}, please provide your email address to reset your password.
 </p>
 # Posters Router
 Create a common function that checks whether the user has an existing unpurchased poster.
 - If it does: 
-	- Have Wikkit say f"I&rsquo;m sorry, {username}, you can work on only one poster at a time.
+	- Have Wikkit say f"I&rsquo;m sorry, {request.state.user['user-name']}, you can work on only one poster at a time.
 - Else:
 	- Create a new unpurchased poster.
-	- Have Wikkit say f"I&rsquo'm creating your new poster, {username}!"
+	- Have Wikkit say f"I&rsquo'm creating your new poster, {request.state.user['user-name']}!"
 	- Redirect to `/posters/create/`
 
 
@@ -334,17 +391,17 @@ Clicking on purchased posters displays them completely filling the viewport, scr
 Posters can be optionally deleted with confirmation by clicking on a per-poster deletion affordance.
 Has a button, "New Poster" which when clicked checks whether the user has an existing unpurchased poster.
 - If it does: 
-	- Have Wikkit say f"I&rsquo;m sorry, {username}, you can work on only one poster at a time. Would you like me to open it for you?"
+	- Have Wikkit say f"I&rsquo;m sorry, {request.state.user['user-name']}, you can work on only one poster at a time. Would you like me to open it for you?"
 
 - Else:
 	- Create a new unpurchased poster.
-	- Have Wikkit say f"I&rsquo'm creating your new poster, {username}!"
+	- Have Wikkit say f"I&rsquo'm creating your new poster, {request.state.user['user-name']}!"
 	- Redirect to `/posters/create`
 
 **`/posters/create`**
 ### Internal Logic
 If the user already has an unpurchased poster:
-- Have Wikkit say f"I&rsquo'm sorry, {username}! You already have an existing unpurchased poster. Would you "
+- Have Wikkit say f"I&rsquo'm sorry, {request.state.user['user-name']}! You already have an existing unpurchased poster. Would you "
 - Redirect to `/layout/edit`
 
 If the poster's template has not been set:

@@ -13,6 +13,7 @@
     {% include "page_assets.html" %}
 </head>
 <body class="wikkit">
+    {% include "menu.html" %}
     <iframe id="wikkit-frame" title="Wikkit page" data-src="{{ url }}"></iframe>
     <section id="chatbot" aria-label="Wikkit chatbot" data-socket="{{ socket_path }}">
         <header class="chatbot-handle">Wikkit</header>

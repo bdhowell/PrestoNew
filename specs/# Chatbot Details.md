@@ -27,6 +27,9 @@ An array is passed intact, not spread into multiple arguments. A command's
 and explicit null is passed through. Registrations belong to the iframe page
 and are discarded when that page unloads.
 
+Page-specific commands are registered in the `.does` files and override intrinsic commands with the same key
+Pages can also dynamically register or unregister commands at runtime using the same `window.registerWikkitCommands` API.
+
 ## Server replies
 
 User input is processed by the conversation's `IntentStack`. The server sends

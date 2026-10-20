@@ -1,0 +1,13 @@
+<nav class="basic-menu" aria-label="Main navigation">
+    <ul>
+        <li><a href="/wikkit">Home</a></li>
+        <li><a href="/wikkit/pricing">Pricing</a></li>
+        <li><a href="/wikkit/help">Help</a></li>
+        <li><a href="/account">Account</a></li>
+        {% if request.state.user_id is defined and request.state.user_id %}
+        <li><a href="/account/signout">Sign out</a></li>
+        {% else %}
+        <li><a href="/account/signin">Sign in</a></li>
+        {% endif %}
+    </ul>
+</nav>

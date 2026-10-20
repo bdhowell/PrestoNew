@@ -33,12 +33,32 @@ class WikkitPageTests(unittest.TestCase):
     def test_get_loads_default_page_in_iframe(self) -> None:
         response = self.client.get("/wikkit")
         self.assertEqual(response.status_code, 200)
+        self.assertIn('<nav class="basic-menu" aria-label="Main navigation">', response.text)
+        self.assertIn('href="/wikkit/pricing">Pricing</a>', response.text)
+        self.assertIn('href="/account/signin">Sign in</a>', response.text)
+        self.assertNotIn('href="/account/signout">Sign out</a>', response.text)
         self.assertIn('id="chatbot"', response.text)
         self.assertIn('id="chatinput" contenteditable="plaintext-only"', response.text)
         self.assertIn('data-src="/wikkit/magic"', response.text)
         self.assertIn('data-socket="/wikkit/ws"', response.text)
         self.assertIn('src="/static/javascript/wikkit.js"', response.text)
         self.assertIn('href="/static/css/router.css"', response.text)
+
+    def test_authenticated_user_sees_sign_out_link(self) -> None:
+        request = wikkit.Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/wikkit",
+            "headers": [],
+            "query_string": b"",
+            "state": {"user_id": 1},
+        })
+
+        response = wikkit._shell(request, None)
+        rendered = response.body.decode()
+
+        self.assertIn('href="/account/signout">Sign out</a>', rendered)
+        self.assertNotIn('href="/account/signin">Sign in</a>', rendered)
 
     def test_post_loads_requested_url_in_iframe(self) -> None:
         response = self.client.post("/wikkit", data={"url": "/poster/create?step=1&a=b"})
