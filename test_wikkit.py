@@ -3,9 +3,10 @@ import asyncio
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -318,6 +319,108 @@ class WikkitSocketTests(unittest.TestCase):
 
 
 class WikkitAsyncTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.websocket = WebSocket({"type": "websocket", "state": {
+            "user": {"name": "Ada", "active": False, "count": 0},
+            "poster": SimpleNamespace(title="A poster", author={"name": "Grace"}),
+            "session": {"id": 42},
+        }}, receive=AsyncMock(), send=AsyncMock())
+        self.session = chatbot.Chatbot(self.websocket)
+
+    async def test_substitute_reads_mapping_and_object_fields(self) -> None:
+        self.assertEqual(
+            self.session.substitute(
+                "{{user.name}}: {{poster.title}} by {{poster.author.name}} "
+                "({{ session.id }}) {{user.active}}/{{user.count}}/{{user.name}}"
+            ),
+            "Ada: A poster by Grace (42) False/0/Ada",
+        )
+
+    async def test_substitute_leaves_unavailable_values_unchanged(self) -> None:
+        self.websocket.state.user = None
+        self.websocket.state.poster = {"title": None}
+        del self.websocket.state.session
+        text = "{{user.name}} {{poster.title}} {{session.id}}"
+        with self.assertLogs("wikkit", "WARNING"):
+            self.assertEqual(self.session.substitute(text), text)
+
+    async def test_substitute_leaves_missing_fields_and_methods_unchanged(self) -> None:
+        text = "{{user.missing}} {{poster.missing.name}} {{user.name.upper}}"
+        with self.assertLogs("wikkit", "WARNING"):
+            self.assertEqual(self.session.substitute(text), text)
+
+    async def test_substitute_does_not_evaluate_or_recurse(self) -> None:
+        self.websocket.state.user = {"name": "{{session.id}}"}
+        text = "{{other.name}} {{user.__class__}} {{user.name.upper()}} {{user}}"
+        self.assertEqual(self.session.substitute(text), text)
+        self.assertEqual(self.session.substitute("{{user.name}}"), "{{session.id}}")
+        self.assertEqual(self.session.substitute("Plain text {user.name}"), "Plain text {user.name}")
+        self.assertEqual(self.session.substitute(""), "")
+
+    async def test_send_substitutes_only_say_without_mutating_reply(self) -> None:
+        reply = {
+            "say": "Hello {{user.name}}",
+            "command": {"does": "highlight", "payload": "{{poster.title}}"},
+        }
+        with patch.object(self.websocket, "send_json", new_callable=AsyncMock) as send:
+            await self.session.send(reply)
+            send.assert_awaited_once_with({
+                "say": "Hello Ada",
+                "command": {"does": "highlight", "payload": "{{poster.title}}"},
+            })
+        self.assertEqual(reply["say"], "Hello {{user.name}}")
+
+    async def test_send_uses_current_conversation_state(self) -> None:
+        with patch.object(self.websocket, "send_json", new_callable=AsyncMock) as send:
+            await self.session.send({"say": "{{user.name}}"})
+            self.websocket.state.user = {"name": "Grace"}
+            await self.session.send({"say": "{{user.name}}"})
+        self.assertEqual(
+            [call.args[0] for call in send.await_args_list],
+            [{"say": "Ada"}, {"say": "Grace"}],
+        )
+
+    async def test_send_rejects_non_string_say(self) -> None:
+        with patch.object(self.websocket, "send_json", new_callable=AsyncMock) as send:
+            with self.assertRaisesRegex(TypeError, "say must be a string"):
+                await self.session.send({"say": 42})
+            send.assert_not_awaited()
+
+    async def test_substitute_keeps_conversations_isolated(self) -> None:
+        other = chatbot.Chatbot(WebSocket({
+            "type": "websocket", "state": {"user": {"name": "Grace"}},
+        }, receive=AsyncMock(), send=AsyncMock()))
+        self.assertEqual(other.substitute("Hi {{user.name}}"), "Hi Grace")
+        self.assertEqual(self.session.substitute("Hi {{user.name}}"), "Hi Ada")
+
+    async def test_random_replies_are_substituted(self) -> None:
+        with patch.object(self.websocket, "send_json", new_callable=AsyncMock) as send:
+            await self.session.replies(["Hi {{user.name}}"])
+            send.assert_awaited_once_with({"say": "Hi Ada"})
+
+    async def test_response_prompt_is_substituted(self) -> None:
+        with patch.object(self.websocket, "send_json", new_callable=AsyncMock) as send:
+            waiting = asyncio.create_task(self.session.request_response("Hi {{user.name}}"))
+            await asyncio.sleep(0)
+            try:
+                send.assert_awaited_once_with({
+                    "say": "Hi Ada", "command": {"does": "request-response"},
+                })
+            finally:
+                waiting.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await waiting
+
+    async def test_intent_responses_are_substituted(self) -> None:
+        with (
+            patch.object(self.session.stack, "dispatch", return_value=dispatched({
+                "responses": ["Hi {{user.name}}"],
+            })),
+            patch.object(self.websocket, "send_json", new_callable=AsyncMock) as send,
+        ):
+            await self.session.handle_message("hello")
+            send.assert_awaited_once_with({"say": "Hi Ada"})
+
     async def test_send_after_close_fails_explicitly(self) -> None:
         session = chatbot.Chatbot(AsyncMock())
         session._closed = True

@@ -334,9 +334,22 @@ Else:
 ## Account Sign-out
 
 **`/account/signout`**
-Sign out of an active account.
+## Template Content
+Shows a page confirming that the user has been signed out of {APPLICATION_NAME}.Sign out of an active account.
 Shows a page telling the user that they've been signed out of {APPLICATION_NAME}.
 Provides a link back to `/home`.
+
+## Internal Logic
+Clear the user's session.
+Wikkit says:
+f"""
+<p>
+Okay, {request.state.user['user-name']}, you have been signed out of {APPLICATION_NAME}.
+</p>
+<p>
+I hope to see you again soon.
+</p>
+"""
 
 ## Account Password Change
 

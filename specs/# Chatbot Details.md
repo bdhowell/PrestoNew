@@ -283,3 +283,25 @@ TEST_DATABASE_URL=postgresql:///presto_memory_test \
 Without `TEST_DATABASE_URL`, PostgreSQL integration tests are explicitly skipped;
 request/context and session-configuration unit tests still run. Session tests
 create the backend table in the dedicated database; KV tests use temporary schemas.
+
+# Chatbot Output Filtering
+
+`chatbot.substitute(text)` replaces tokens such as `{{user.name}}`,
+`{{poster.title}}`, and `{{session.id}}` using the current connection's
+`state.user`, `state.poster`, and `state.session`. For chatbot workflows, this
+is `websocket.state`, the websocket equivalent of `request.state`. These values
+must be supplied by server-side application code; the filter does not load
+identities or infer them from memory or the session middleware.
+
+Fields can be dictionary keys or object attributes, including nested public
+fields such as `{{poster.author.name}}`. Whitespace around the identifier is
+allowed. Values are converted to strings, including zero and false. Missing
+or null values and callable attributes leave the original token unchanged and
+log a warning. Other roots, private attributes, and expressions are not
+supported and remain unchanged. Replacement values are not expanded again.
+
+Every `chatbot.send(reply)` passes its top-level `say` string through
+`substitute`, including intent replies, random responses, response prompts,
+and unsolicited messages. Other keys (including command payloads) are not
+filtered, and the original reply dictionary is not modified. A non-string
+`say` raises `TypeError`.

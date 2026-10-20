@@ -3,10 +3,11 @@
 import asyncio
 import logging
 import random
+import re
 from collections.abc import Mapping
 from contextlib import suppress
 
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket, WebSocketDisconnect, responses
 from fastapi.concurrency import run_in_threadpool
 
 from intents import IntentStack
@@ -22,6 +23,9 @@ TOO_LONG_MESSAGE = (
 
 logger = logging.getLogger(__name__)
 type ClientReply = dict[str, object]
+_SUBSTITUTION_PATTERN = re.compile(
+    r"\{\{\s*((?:user|poster|session)(?:\.[A-Za-z][A-Za-z0-9_]*)+)\s*\}\}"
+)
 
 
 def client_reply(result: IntentDispatchResult[object] | None) -> ClientReply:
@@ -92,11 +96,38 @@ class Chatbot:
         self._response: asyncio.Future[str] | None = None
         self._closed = False
 
+    def substitute(self, text: str) -> str:
+        """Replace public state fields, leaving unavailable values unchanged."""
+        def replace(match: re.Match[str]) -> str:
+            root, *fields = match.group(1).split(".")
+            value: object = getattr(self.websocket.state, root, None)
+            for field in fields:
+                if isinstance(value, Mapping):
+                    value = value.get(field)
+                else:
+                    value = getattr(value, field, None)
+            if value is None or callable(value):
+                logger.warning("Unavailable chatbot placeholder: %s", match.group(0))
+                return match.group(0)
+            return str(value)
+
+        return _SUBSTITUTION_PATTERN.sub(replace, text)
+
     async def send(self, reply: ClientReply) -> None:
         async with self._send_lock:
             if self._closed:
                 raise RuntimeError("Wikkit conversation is closed")
+            if "say" in reply:
+                say = reply["say"]
+                if not isinstance(say, str):
+                    raise TypeError("say must be a string")
+                reply = {**reply, "say": self.substitute(say)}
             await self.websocket.send_json(reply)
+
+
+    async def replies(self, options: list[str]) -> None:
+        await self.send({"say": random.choice(options)}) if options else None
+
 
     async def request_response(self, say: str | None = None) -> str:
         """Pause this workflow until the next nonempty, valid user message."""
