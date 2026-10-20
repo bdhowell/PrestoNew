@@ -131,7 +131,7 @@ Shows `/static/graphics/wikkit.svg` on the left with {APPLICATION_NAME} large Wi
 
 ### Internal Logic
 If the user is returning (as indicated by the presence of the user cookie):
-    redirect to `/account/signin`
+- redirect to `/account/signin`
 
 Wikkit Says:f"""
 <div>
@@ -145,15 +145,35 @@ Can I have your name to start?
 </p>
 """
 
-Wait for the user to respond.
-Use common.clean_string to clean the user's response.
-Store the cleaned response in request.state.user as `user-name`.
-
-Wikkit Says:f"""
+tries = 3
+while tries > 0:
+- Wait for the user to respond.
+- If the user provides a non-empty response:
+	- Use common.clean_string to clean the user's response.
+	- Store the cleaned response in request.state.user['user-name'] as `user-name`.
+	- Wikkit Says:f"""
 <p>
 Nice to meet you, {request.state.user['user-name']}!
 </p>
 """
+	- break
+- tries -= 1
+- if tries == 0:
+- wikkit_says(f"""
+<p>
+I&rsquo;m sorry, I didn't catch your name. 
+You can always tell me later.
+For now I&rsquo;ll call you <em>Friend</em>.
+</p>
+""")
+- Set request.state.user['user-name'] to 'Friend'
+- break
+
+- Wikkit Says:f"""
+	<p>
+	I&rsquo;m sorry, I didn&rsquo;t catch your name. Could you please tell it to me?
+	</p>
+	"""
 
 Store the user's name also in a cookie so that returning users can be recognized and greeted appropriately.
 
@@ -272,11 +292,12 @@ Welcome back, {request.state.user['user-name']} to {APPLICATION_NAME}!
 I&rsquo;m happy to see you again.
 </p>
 <p>
-Please sign in to continue working on your poster.
+Please sign in and we&rsquo;ll continue working on your poster.
 </p>
 """
 
-After successful sign-in, redirect the user to request.state.poster['restart-page'], or to `/posters/list` if it doesn't exist.
+Uses `/account/validate` for AJAX submission of the sign-in form.
+- After successful sign-in, as indicated from the response of `/account/validate`, redirect the user to request.state.poster['resumption-page'], or to `/posters/list` if there is no resumption page doesn't exist.
 
 **`/account/validate`**
 ### Internal Logic
@@ -338,10 +359,11 @@ Recover password using user&rsquo;s email address.
 Wikkit says:
 f"""
 <p>
-Please tell me your email address, {} to recover your password.
+Please tell me your email address, {request.state.user['user-name']}, so I can send you a recovery link.
 </p>
 """
-Send a recovery link to the user's email address.
+Send a recovery link to the user's email address using MailJet API.
+Mock up the email sending process for development and testing purposes.
 
 ### Template Content
 Form for the user's email address
