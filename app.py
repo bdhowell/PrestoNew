@@ -1,5 +1,6 @@
 """PrestoPresentations FastAPI application."""
 
+import mimetypes
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,6 +14,7 @@ load_dotenv(BASE_DIR / ".env")
 from routers import wikkit  # noqa: E402  (loaded after .env so routers see its settings)
 
 app = FastAPI(title="PrestoPresentations")
+mimetypes.add_type("text/javascript", ".does")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.include_router(wikkit.router)
 

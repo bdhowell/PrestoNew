@@ -1,34 +1,44 @@
 """Wikkit the Wizard: chatbot shell page, default iframe page, and websocket."""
 
-import logging
-from collections.abc import Mapping
+import re
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Form, Request, WebSocket
-from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from intents import IntentStack
-from llm import IntentDispatchResult
+from wikkit import Chatbot
 
 DEFAULT_URL = "/wikkit/magic"
 SOCKET_PATH = "/wikkit/ws"
-MAX_MESSAGE_LENGTH = 2000
-
-UNHANDLED_MESSAGE = "Sorry, I can't help with that yet."
-FAILURE_MESSAGE = "Sorry, I had trouble understanding that. Please try again."
-TOO_LONG_MESSAGE = (
-    f"That message is too long. Please keep it under {MAX_MESSAGE_LENGTH} characters."
-)
-
-logger = logging.getLogger(__name__)
-templates = Jinja2Templates(directory=Path(__file__).resolve().parent.parent / "templates")
+BASE_DIR = Path(__file__).resolve().parent.parent
+STATIC_DIR = BASE_DIR / "static"
+templates = Jinja2Templates(directory=BASE_DIR / "templates")
 router = APIRouter(prefix="/wikkit", tags=["wikkit"])
 
-type ClientReply = dict[str, object]
+_PAGE_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
+
+
+def page_assets(page_name: str) -> dict[str, str | None]:
+    if not _PAGE_NAME_PATTERN.fullmatch(page_name):
+        raise ValueError(f"Invalid page asset name: {page_name!r}")
+
+    assets: dict[str, str | None] = {}
+    for asset_type, extension in (
+        ("css", "css"), ("javascript", "js"), ("javascript", "does")
+    ):
+        asset_path = STATIC_DIR / asset_type / "pages" / f"{page_name}.{extension}"
+        assets["does" if extension == "does" else asset_type] = (
+            f"/static/{asset_type}/pages/{page_name}.{extension}"
+            if asset_path.is_file()
+            else None
+        )
+    return assets
+
+
+templates.env.globals["page_assets"] = page_assets
 
 
 def frame_url(url: str | None) -> str:
@@ -50,38 +60,15 @@ def frame_url(url: str | None) -> str:
     return url
 
 
-def client_reply(result: IntentDispatchResult[object] | None) -> ClientReply:
-    """Translate an intent dispatch result into the websocket reply format."""
-    if result is None:
-        return {"user": UNHANDLED_MESSAGE}
-    handled = result.handler_result
-    if (
-        isinstance(handled, Mapping)
-        and handled.get("type") == "redirect"
-        and isinstance(handled.get("url"), str)
-    ):
-        return {"client": {"action": "redirect", "payload": handled["url"]}}
-    logger.warning(
-        "Unsupported handler result for intent %r: %r", result.intent, handled
-    )
-    return {"user": UNHANDLED_MESSAGE}
-
-
-def respond(stack: IntentStack, message: str) -> ClientReply:
-    if len(message) > MAX_MESSAGE_LENGTH:
-        return {"user": TOO_LONG_MESSAGE}
-    try:
-        return client_reply(stack.dispatch(message))
-    except Exception:
-        logger.exception("Wikkit failed to handle a message")
-        return {"user": FAILURE_MESSAGE}
-
-
 def _shell(request: Request, url: str | None) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "wikkit/wikkit.html",
-        {"url": frame_url(url), "socket_path": SOCKET_PATH},
+        {
+            "url": frame_url(url),
+            "socket_path": SOCKET_PATH,
+            "page_name": "wikkit",
+        },
     )
 
 
@@ -99,21 +86,14 @@ async def wikkit_with_url(
 
 @router.get("/magic", response_class=HTMLResponse)
 async def magic(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "wikkit/magic.html")
+    return templates.TemplateResponse(
+        request, "wikkit/magic.html", {"page_name": "wikkit-magic"}
+    )
 
 
 @router.websocket("/ws")
 async def wikkit_socket(websocket: WebSocket) -> None:
     await websocket.accept()
-    stack = IntentStack()
-    while True:
-        event = await websocket.receive()
-        if event["type"] == "websocket.disconnect":
-            return
-        text = event.get("text")
-        if text is None:
-            await websocket.close(code=1003, reason="Wikkit accepts text messages only.")
-            return
-        message = text.strip()
-        if message:
-            await websocket.send_json(await run_in_threadpool(respond, stack, message))
+    chatbot = Chatbot(websocket)
+    websocket.state.chatbot = chatbot
+    await chatbot.run()

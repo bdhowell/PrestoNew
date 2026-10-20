@@ -1,0 +1,12 @@
+{% if page_name is defined %}
+    {% set assets = page_assets(page_name) %}
+    {% if assets.css %}
+    <link rel="stylesheet" href="{{ assets.css }}">
+    {% endif %}
+    {% if assets.javascript %}
+    <script src="{{ assets.javascript }}" defer></script>
+    {% endif %}
+    {% if assets.does %}
+    <script src="{{ assets.does }}" defer></script>
+    {% endif %}
+{% endif %}

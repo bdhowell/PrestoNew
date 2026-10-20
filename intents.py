@@ -24,7 +24,7 @@ GENERAL_EXAMPLES: Examples = MappingProxyType({
     "create-poster": ("create poster",),
     "delete-poster": ("delete poster",),
     "download": ("downloads",),
-    "help": ("help",),
+    "help": ("help","I'm stuck", "I need help", "I'm confused"),
     "undo": ("undo",),
     "redo": ("redo",),
     "okay": ("okay",),

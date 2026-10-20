@@ -8,12 +8,48 @@
 (() => {
     "use strict";
 
+    const pageCommands = new Map();
+    const pageReady = document.readyState === "loading"
+        ? new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true }))
+        : Promise.resolve();
+
+    window.registerWikkitCommands = function registerWikkitCommands({ commands }) {
+        if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
+            throw new TypeError("commands must be an object.");
+        }
+        const entries = Object.entries(commands);
+        for (const [name, command] of entries) {
+            if (!name.trim() || !command || typeof command.does !== "function") {
+                throw new TypeError(`Command ${name} must contain a does function.`);
+            }
+        }
+        for (const [name, command] of entries) {
+            pageCommands.set(name, { does: command.does, data: command.data });
+        }
+    };
+
+    async function dispatchPageCommand(command) {
+        await pageReady;
+        const handler = pageCommands.get(command.does);
+        if (!handler) {
+            return false;
+        }
+        const data = command.payload === undefined ? handler.data : command.payload;
+        await handler.does(data ?? null);
+        return true;
+    }
+
     function createHost(chatbot, frame) {
         const chatlog = chatbot.querySelector("#chatlog");
         const chatinput = chatbot.querySelector("#chatinput");
         const handle = chatbot.querySelector(".chatbot-handle");
         const pending = [];
+        const attachmentWaiters = [];
         let client = null;
+        let closed = false;
+        let reminderTimer = null;
+        let requestingResponse = false;
+        const reminderInterval = 120000;
 
         function append(div) {
             chatlog.appendChild(div);
@@ -34,39 +70,123 @@
             append(div);
         }
 
+        function stopRequest() {
+            requestingResponse = false;
+            clearTimeout(reminderTimer);
+            reminderTimer = null;
+        }
+
+        function resetReminder() {
+            clearTimeout(reminderTimer);
+            if (requestingResponse) {
+                reminderTimer = setTimeout(() => {
+                    sayText("Are you still there? Let me know if you need help.", "notice");
+                    resetReminder();
+                }, reminderInterval);
+            }
+        }
+
+        function requestResponse() {
+            requestingResponse = true;
+            resetReminder();
+        }
+
+        const intrinsicCommands = new Map([
+            ["redirect", (payload) => {
+                if (typeof payload !== "string") {
+                    throw new TypeError("redirect requires a URL string.");
+                }
+                const url = new URL(payload, location.href);
+                if (url.origin !== location.origin || !["http:", "https:"].includes(url.protocol)) {
+                    throw new Error("Wikkit can only redirect to same-origin pages.");
+                }
+                client = null;
+                frame.src = url.href;
+            }],
+            ["request", requestResponse],
+            ["request-response", requestResponse],
+        ]);
+
         const scheme = location.protocol === "https:" ? "wss:" : "ws:";
         const socket = new WebSocket(`${scheme}//${location.host}${chatbot.dataset.socket}`);
 
         function send(text) {
             if (socket.readyState === WebSocket.OPEN) {
+                if (text.trim()) {
+                    stopRequest();
+                }
                 socket.send(text);
             } else if (socket.readyState === WebSocket.CONNECTING) {
+                if (text.trim()) {
+                    stopRequest();
+                }
                 pending.push(text);
             } else {
                 sayText("Wikkit is not connected.", "notice");
             }
         }
 
-        function deliver(message) {
-            if (typeof message.user === "string" && message.user) {
-                say(message.user);
+        async function executeCommand(command) {
+            if (closed) {
+                return;
             }
-            if (client) {
+            if (!command || typeof command !== "object") {
+                throw new TypeError("Wikkit command must be an object.");
+            }
+            const normalized = {
+                does: command.does ?? command.action,
+                payload: command.payload,
+            };
+            if (typeof normalized.does !== "string" || !normalized.does.trim()) {
+                throw new TypeError("Wikkit command requires a does key.");
+            }
+            const entry = client;
+            if (!entry) {
+                await new Promise((resolve) => attachmentWaiters.push(resolve));
+                return executeCommand(normalized);
+            }
+            await entry.ready;
+            if (closed) {
+                return;
+            }
+            if (client !== entry) {
+                return executeCommand(normalized);
+            }
+            if (await entry.dispatch(normalized)) {
+                return;
+            }
+            const intrinsic = intrinsicCommands.get(normalized.does);
+            if (!intrinsic) {
+                throw new Error(`Unknown Wikkit client command: ${normalized.does}`);
+            }
+            await intrinsic(normalized.payload);
+        }
+
+        function commandFailed(error) {
+            console.error("Wikkit command failed", error);
+            sayText("Wikkit could not complete a page action. Please try again.", "notice");
+        }
+
+        let delivery = Promise.resolve();
+
+        function deliver(message) {
+            const html = message.say ?? message.user;
+            if (typeof html === "string" && html) {
+                say(html);
+            }
+            const entry = client;
+            if (entry) {
                 try {
-                    client.listen(message);
+                    entry.listen(message);
                 } catch (error) {
                     console.error("Wikkit listener failed", error);
                 }
             }
-            const command = message.client;
+            const command = message.command ?? message.client;
             if (!command) {
                 return;
             }
-            if (command.action === "redirect" && typeof command.payload === "string") {
-                frame.src = command.payload;
-            } else {
-                console.warn("Unknown Wikkit client command", command);
-            }
+            delivery = delivery.then(() => executeCommand(command)).catch(commandFailed);
         }
 
         socket.addEventListener("open", () => {
@@ -87,11 +207,19 @@
             }
         });
         socket.addEventListener("close", (event) => {
+            closed = true;
+            stopRequest();
             pending.length = 0;
+            for (const resolve of attachmentWaiters.splice(0)) {
+                resolve();
+            }
             chatbot.classList.add("disconnected");
             chatinput.contentEditable = "false";
             sayText(event.reason || "The connection to Wikkit has closed.", "notice");
         });
+
+        chatinput.addEventListener("input", resetReminder);
+        window.addEventListener("pagehide", stopRequest, { once: true });
 
         chatinput.addEventListener("keydown", (event) => {
             if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
@@ -134,7 +262,7 @@
         frame.src = frame.dataset.src;
 
         return Object.freeze({
-            attach(win, listen) {
+            attach(win, listen, dispatch, ready) {
                 if (win.frameElement !== frame) {
                     throw new Error("connect() must be called from the Wikkit iframe.");
                 }
@@ -153,8 +281,11 @@
                         send(String(html));
                     },
                 });
-                const entry = { win, listen, apiobj };
+                const entry = { win, listen, apiobj, dispatch, ready };
                 client = entry;
+                for (const resolve of attachmentWaiters.splice(0)) {
+                    resolve();
+                }
                 win.addEventListener("pagehide", () => {
                     if (client === entry) {
                         client = null;
@@ -189,7 +320,7 @@
         if (!host) {
             throw new Error("connect() must be called from a page loaded in the /wikkit iframe.");
         }
-        return host.attach(window, listen);
+        return host.attach(window, listen, dispatchPageCommand, pageReady);
     };
 
     if (document.readyState === "loading") {

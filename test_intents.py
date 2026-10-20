@@ -33,7 +33,9 @@ class IntentStackTests(unittest.TestCase):
         )
         self.stack.pop()
         self.assertNotIn("custom", self.stack.accumulated_examples())
-        self.assertEqual(self.stack.accumulated_examples()["help"], ("help",))
+        self.assertEqual(
+            self.stack.accumulated_examples()["help"], intents.GENERAL_EXAMPLES["help"]
+        )
 
     def test_pop_removes_only_paired_examples(self) -> None:
         self.stack.push({"custom": None}, {"custom": ["custom"]})
@@ -211,7 +213,9 @@ class IntentStackTests(unittest.TestCase):
         self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
         self.assertEqual(len(self.stack.handlers_stack), 2)
         self.assertEqual(self.stack.handlers_stack[-1], {"undo": None})
-        self.assertEqual(self.stack.accumulated_examples()["help"], ("help",))
+        self.assertEqual(
+            self.stack.accumulated_examples()["help"], intents.GENERAL_EXAMPLES["help"]
+        )
         self.stack.handle_intent(intents.IntentClassification("undo", [], "undo"))
         self.assertEqual(len(self.stack.handlers_stack), 1)
 

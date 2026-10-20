@@ -47,10 +47,10 @@ See search.md for an explanation of search goals and implementation guidelines.
 Place each router in its own file with any local-to-it functions
 
 Place any router-specific javascript in /static/javascript/{router}/router.js
-Place any page-specific javascript in /static/{router}/{page}.js
+Place any page-specific javascript in /static/javascript/pages/{page}.js
 
-Place any router-specific CSS in /static/javascript/{router}/router.css
-Place any page-specific CSS in /static/{router}/{page}.css
+Place the Wikkit router stylesheet in /static/css/router.css.
+Place any page-specific CSS in /static/css/pages/{page}.css
 
 # Router: Wikkit the Wizard
 
@@ -80,7 +80,6 @@ Pass a text or an HTML fragement to `say()` to have it wrapped in <div class="ch
 Pass text directly to the server via the websocket.
 If echo is true then also call `apiobj.say(html)`.
 
-
 # Chatbot Server-client Interactions
 
 User input sent to the server are processed there as intents using the logic in intents.py with results sent back.
@@ -97,10 +96,17 @@ Results sent back can contain a message to the user and/or a command to the clie
 Currently the only valid command is 'redirect' where the payload is the URL for the chatbot to navigate to.
 And see `Wikkit.md`
 
+The current chatbot protocol and page-specific `.does` command registries are
+specified in [Chatbot Details](./%23%20Chatbot%20Details.md). New replies use
+`say` and `command: {does, payload}`; the client continues accepting the legacy
+`user`/`client` format above.
+
 # Home Page
 
 **`/`** 
 Redirects to `/wikkit`
+
+Each web page can have its own CSS in `/static/css/pages/{page}.css` and JavaScript in `/static/javascript/pages/{page}.js`. The page name is a stable, lowercase slug supplied by the route. Shared head templates conditionally include each file when it exists, in addition to the CSS and JavaScript already loaded by the core template.
 
 ===============================================
 # Wikkit Router
