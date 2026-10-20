@@ -71,6 +71,7 @@ def check_seeking(str: str, keywords: list[str]) -> dict|None:
             return {"type":"caller", "keyword": keyword, "scope": scope }
         
     return None
+
 def clean_string(s: str, spaces="") -> str:
     return  (s.replace(" ", spaces).translate(PUNCTUATION_TRANSLATION_TABLE) if spaces else s).lower().strip()
 

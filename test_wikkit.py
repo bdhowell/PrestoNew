@@ -1,5 +1,6 @@
 import unittest
 import asyncio
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
@@ -9,7 +10,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from app import app
+with patch.dict(os.environ, {"SESSION_BACKEND": "none"}):
+    from app import app
 from llm import IntentDispatchResult
 from routers import wikkit
 import wikkit as chatbot

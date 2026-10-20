@@ -94,6 +94,6 @@ async def magic(request: Request) -> HTMLResponse:
 @router.websocket("/ws")
 async def wikkit_socket(websocket: WebSocket) -> None:
     await websocket.accept()
-    chatbot = Chatbot(websocket)
+    chatbot = Chatbot(websocket, websocket.state.memory)
     websocket.state.chatbot = chatbot
     await chatbot.run()

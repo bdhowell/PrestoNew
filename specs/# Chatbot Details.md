@@ -86,3 +86,197 @@ per websocket. The router makes that instance available as
 The receive loop remains active while a workflow waits. Only one response
 request may be outstanding per conversation, and disconnecting cancels
 pending response waits and the message-processing task.
+
+
+# Chatbot memory:
+- Stores user responses and context for ongoing interactions.
+- Keeps track of the current state of the conversation.
+- Can be used to recall previous user inputs when needed.
+- Can be used to maintain context across multiple steps in a conversation.
+
+# Backed KV Store
+Write a Python KV store that stores its values in Postgres.
+- The chatbot uses a KV store backed by a database to persist long-term and user memory.
+- Loaded into the session when the chatbot is initialized.
+  - Pickled with the session for persistence.
+- Initializes with an optional parent key table.
+- If the parent key table was provided, identify name and data type of its primary key.
+- If the table doesn't exist, create it.
+  - If the table is created and a parent key table was provided, add a foreign key to its parent table with the same name and data type as the parent's primary key.
+- `kvstore.set(key, value, [foreign_key_value])` sets a value in the KV store, optionally with a foreign key.
+- (value, foreign_key_value|None) = kvstore.get(key)
+- When the KV store is initialized, get the primary key name and data type of its foreign key, if applicable.
+  - The name of that field becomes the name of the foreign key parameter, looked up using kwargs.
+  - The data type of that field becomes the data type of the foreign key column in the KV store table.
+
+## Session Memory
+Short-term memory stores information relevant to the current conversation session.
+- A Python dictionary used to keep track of recent user inputs and context that may influence the chatbot's responses.
+
+## Poster Memory
+Long-term memory stores information that persists across multiple conversation sessions.
+- It is used to maintain context and recall user inputs from previous interactions.
+- It is a Backed KV Store whose parent table is poster
+
+## User Memory
+User memory stores information that is accessible across all sessions for a particular user.
+It is used to maintain context and recall user inputs specific to an individual user.
+- It is a KV store implemented in Postgres and associated with a particular user.
+
+## Short-Term, Long-Term, and User Memory
+Each made available as part of the execution context when handling web requests and chat interactions.
+- Short-term memory as short_term_memory
+- Long-term memory as long_term_memory
+- User memory as user_memory
+
+## Memory implementation and integration
+
+`kvstore.KVStore` provides synchronous PostgreSQL-backed JSON storage. Install
+the driver with `bin/python -m pip install -r requirements-memory.txt` and set
+`DATABASE_URL`. The database role needs schema access and table/index creation
+permissions. Parent tables must already exist in the selected schema and have a
+single-column primary key. Composite keys and incompatible existing KV schemas
+are rejected rather than silently migrated.
+
+```python
+from kvstore import KVStore
+
+store = KVStore("poster_memory", "poster")
+store.set("title", "My poster", pid=42)  # pid is discovered, not hard-coded
+value, owner = store.get("title", pid=42)
+
+# Bound stores use their owner by default and reject other owners.
+poster_memory = KVStore("poster_memory", "poster", foreign_key_value=42)
+poster_memory.set("title", "Updated title")
+value, owner = poster_memory.get("title")
+```
+
+The optional foreign-key value can also be positional. Unbound stores with no
+owner argument access the unowned scope; they never search other owners.
+Each `(key, owner)` is unique, including the unowned scope, and writes use atomic
+upserts. Missing keys raise `KeyError`; a stored JSON null returns `(None, owner)`.
+Values must be JSON serializable. Foreign-key values retain their PostgreSQL
+types (for example, integer or UUID). Identifiers are quoted and values are
+parameterized. Existing tables are inspected for their foreign key even when
+`parent_table` is omitted. Other schemas are supported with `schema=...`; the
+parent is resolved in that same schema.
+
+`memory.Memory` holds the dictionary `short_term_memory` and optional bound
+`long_term_memory` (poster) and `user_memory` stores. It is pickleable, but it
+contains no sockets, tasks, locks, database connections, or database credentials.
+Store handles retain only the database environment-variable name and reopen
+connections for operations. Credentials must remain available in the environment
+after restoring a session. Values are read from PostgreSQL on demand, not cached
+in session snapshots.
+
+The application's `memory_context` dependency exposes the same three names on
+`request.state` and `websocket.state`, and on the websocket's `Chatbot` instance.
+Intent handlers and other downstream code can use `memory.current_memory()` to
+access those names without changing existing handler signatures. Context is
+propagated into the intent-dispatch threadpool and isolated between requests.
+Synchronous KV operations must be run in a threadpool from async workflows:
+
+```python
+from fastapi.concurrency import run_in_threadpool
+from memory import current_memory
+
+memory = current_memory()
+short_term_memory = memory.short_term_memory
+if memory.long_term_memory is not None:
+    await run_in_threadpool(memory.long_term_memory.set, "title", "My poster")
+```
+
+Authentication/authorization code must populate `state.user_id` and/or
+`state.poster_id` with authorized positive integer IDs **before** the dependency
+runs. IDs are never taken from query strings, forms, or websocket messages.
+Absent IDs leave the respective persistent scopes as `None`, rather than sharing
+an unowned store. The store is not itself an authorization mechanism.
+
+`sessions.PostgresSessionMiddleware` supplies the trusted server-side mapping as
+`scope["session"]`. The dependency loads and saves a `Memory` object under
+`session["chatbot_memory"]`. An identity change replaces all three scopes to
+avoid retaining another user's/poster's context. Authentication is still a
+separate integration; merely having a session does not identify a user or grant
+access to a poster.
+
+### PostgreSQL session backend
+
+The app enables sessions automatically when `DATABASE_URL` and `SECRET_KEY` are
+configured. `SECRET_KEY` must contain at least 32 bytes of random secret data;
+generate one with `bin/python -c 'import secrets; print(secrets.token_urlsafe(48))'`
+and place it in the deployment's secret configuration, not source control.
+Every worker must use the same secret. Partial configuration fails explicitly.
+
+```env
+SESSION_BACKEND=auto
+SESSION_MAX_AGE=600
+SESSION_COOKIE_SECURE=true
+```
+
+- `SESSION_BACKEND=postgres` requires database and secret configuration.
+- `SESSION_BACKEND=none` explicitly disables persistence for database-free
+  development. `auto` also disables persistence, with a warning, when neither
+  database nor secret is configured.
+- `SESSION_COOKIE_SECURE=true` is the default and requires HTTPS/WSS. Set it to
+  `false` only for local HTTP/WS development.
+- `SESSION_MAX_AGE` is a positive lifetime in seconds (default 600). Expiry is
+  fixed at session creation, not sliding; sessions are not resurrected by old
+  websocket connections after expiration. Choose a lifetime long enough for
+  expected conversations.
+
+The backend creates `public.chatbot_session` and its expiry index on first use.
+The database role needs table/index creation permissions. Expired rows are
+removed on session loads. Static assets under `/static/` bypass sessions.
+No additional PostgreSQL extensions are needed.
+
+The `presto_session` cookie is HttpOnly, SameSite=Lax, host-only, and scoped to
+`/`. It contains only a cryptographically random opaque identifier. Session
+objects are pickled **only on the server**, with an HMAC-SHA256 integrity check
+verified before unpickling. The signature also binds the payload to its session
+identifier. Database access must still be restricted to trusted application
+roles: signing is not encryption, and pickle is not a format for untrusted data.
+Changing `SECRET_KEY` invalidates stored payload signatures; clear existing
+sessions as part of an intentional key rotation rather than silently falling
+back after an integrity error.
+
+HTTP sessions are saved before response headers. The app uses function-scoped
+memory dependencies so their cleanup completes before this save. Changes from
+streaming response bodies, background tasks, or request-scoped dependency
+cleanup are not supported; finalize session mutations before sending headers.
+Websocket sessions are saved after workflow/dependency teardown on disconnect,
+including cancelled workflows. Unsaved websocket changes do not survive process
+termination or crashes. HTTP responses carrying sessions use `Cache-Control:
+no-store` and vary on `Cookie`.
+
+Open an HTTP page first to obtain the cookie, then use the same cookie for WS/WSS.
+Websockets without an existing, unexpired session are rejected with code 1008.
+Browser websocket origins must match the handshake's scheme and host; configure
+trusted proxy headers correctly when terminating TLS upstream.
+
+Concurrent writes use optimistic version checks. Unchanged snapshots do not
+overwrite newer data. Conflicting or expired writes fail rather than lose data:
+HTTP returns 409 and websocket teardown raises/logs the persistence error.
+Clients should reload/reconnect before retrying; there is no automatic merge.
+Avoid editing the same session in multiple active conversations simultaneously.
+This backend does not implement authentication, logout, or session-ID rotation
+for login transitions.
+
+When persistence is disabled, short-term memory lasts for one HTTP request or
+websocket connection. Starlette's JSON cookie-session middleware cannot replace
+this backend because it cannot store Python memory objects.
+
+Valid chat messages, including answers to `request_response`, update
+`short_term_memory["last_user_input"]`. Workflows can add other conversation state
+to the dictionary; no unbounded transcript is retained automatically.
+
+Run the memory and chatbot tests with:
+
+```sh
+# Use a dedicated test database, never production.
+TEST_DATABASE_URL=postgresql:///presto_memory_test \
+    bin/python -m unittest test_sessions test_memory test_wikkit test_intents
+```
+
+Without `TEST_DATABASE_URL`, PostgreSQL integration tests are explicitly skipped;
+request/context and session-configuration unit tests still run. Session tests
+create the backend table in the dedicated database; KV tests use temporary schemas.

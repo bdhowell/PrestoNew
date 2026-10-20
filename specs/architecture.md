@@ -111,8 +111,6 @@ Each web page can have its own CSS in `/static/css/pages/{page}.css` and JavaScr
 ===============================================
 # Wikkit Router
 
-When waiting for a user response
-
 ## Main Landing Page
 
 **`/wikkit/magic`**
@@ -138,9 +136,7 @@ Can I have your name to start?
 """
 
 Wait for the user to respond.
-Strip any whitespace from the form.
-Change any run of whitespace to a single space.
-Strip any non-alphanumeric characters except spaces.
+Use common.clean_string to clean the user's response.
 
 ## Returning User Landing Page
 

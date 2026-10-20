@@ -11,6 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from intents import IntentStack
 from llm import IntentDispatchResult
+from memory import Memory
 
 MAX_MESSAGE_LENGTH = 2000
 UNHANDLED_MESSAGE = "Sorry, I can't help with that yet."
@@ -79,8 +80,12 @@ def respond(stack: IntentStack, message: str) -> ClientReply:
 class Chatbot:
     """One instance per socket; retain it to send unsolicited server messages."""
 
-    def __init__(self, websocket: WebSocket) -> None:
+    def __init__(self, websocket: WebSocket, memory: Memory | None = None) -> None:
         self.websocket = websocket
+        self.memory = memory if memory is not None else Memory()
+        self.short_term_memory = self.memory.short_term_memory
+        self.long_term_memory = self.memory.long_term_memory
+        self.user_memory = self.memory.user_memory
         self.stack = IntentStack()
         self._messages: asyncio.Queue[str] = asyncio.Queue()
         self._send_lock = asyncio.Lock()
@@ -116,7 +121,9 @@ class Chatbot:
 
     async def _dispatch(self) -> None:
         while True:
-            await self.handle_message(await self._messages.get())
+            message = await self._messages.get()
+            self.short_term_memory["last_user_input"] = message
+            await self.handle_message(message)
 
     async def _receive(self) -> None:
         while True:
@@ -141,6 +148,7 @@ class Chatbot:
                     reply["command"] = {"does": "request-response"}
                 await self.send(reply)
             elif self._response is not None and not self._response.done():
+                self.short_term_memory["last_user_input"] = message
                 self._response.set_result(message)
             else:
                 await self._messages.put(message)
