@@ -45,8 +45,23 @@ For a detailed feature inventory, see [FEATURES.md](FEATURES.md). For search and
 ## Prerequisites
 
 - Python 3.14
-- PostgreSQL 14 or newer
+- PostgreSQL 14 or newer, with the pgvector extension
 - A database role that can create and alter tables
+
+Homebrew's pgvector is built only for PostgreSQL 17 and 18. For PostgreSQL 14,
+build it from source and load the schema:
+
+```sh
+git clone --branch v0.8.2 --depth 1 https://github.com/pgvector/pgvector.git
+cd pgvector
+make PG_CONFIG=/opt/homebrew/opt/postgresql@14/bin/pg_config PG_SYSROOT="$(xcrun --show-sdk-path)"
+make install PG_CONFIG=/opt/homebrew/opt/postgresql@14/bin/pg_config PG_SYSROOT="$(xcrun --show-sdk-path)"
+createdb presto
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/schema.sql
+```
+
+The schema objects must be owned by the role in `DATABASE_URL`, which runs
+`CREATE ... IF NOT EXISTS` at startup.
 - Poppler (`pdftocairo`) for importing vector figures from PDFs
 - Playwright browser binaries installed
 

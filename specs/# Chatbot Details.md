@@ -60,6 +60,9 @@ Unknown commands and execution errors are logged and shown as a chatbot notice.
 
 ## Intrinsic commands
 
+- `clear-chat`: clear the visible chat log.
+  Account AJAX replies can include `command`; the page awaits
+  `window.wikkit.execute(command)` before displaying `say` or redirecting.
 - `redirect`: navigate the iframe to the same-origin URL in the string payload.
 - `request-response`: start waiting for user input on the client.
   `request` is an alias for the example's original command key.
@@ -110,7 +113,12 @@ magic workflow sends the `remember-name` command from
 `POST /wikkit/name` to set the name cookie.
 
 `data-signed-in` updates the shell menu's Sign in/Sign out link. Menu clicks
-navigate the iframe. A page opened directly at top level posts its path to
+navigate the iframe. Successful sign-in, password recovery, and account deletion
+AJAX replies also include a boolean `signed_in`; the account client calls
+`window.wikkit.setSignedIn(...)` before redirecting, so the menu updates even
+if the destination page cannot load. Sign out clears the server-side session
+and its page reports `data-signed-in="false"` to restore the Sign in link.
+A page opened directly at top level posts its path to
 `/wikkit` so it reopens inside the shell, so a top-level GET is loaded twice;
 single-use links (such as account confirmation) redirect to a token-free page
 after use.

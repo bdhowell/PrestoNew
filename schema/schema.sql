@@ -181,6 +181,14 @@ CREATE TABLE IF NOT EXISTS authors (
     UNIQUE (pid, name)
 );
 
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'section_which') THEN
+        CREATE TYPE section_which AS ENUM('title','abstract','introduction','materials and methods','results','conclusion', 'future plans', 'literature cited', 'additional information');
+    END IF;
+END
+$$;
+
 CREATE TABLE IF NOT EXISTS section (
     xid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
@@ -192,7 +200,6 @@ CREATE TABLE IF NOT EXISTS section (
     UNIQUE (pid, which)
 );
 
-CREATE TYPE section_which AS ENUM('title','abstract','introduction','materials and methods','results','conclusion', 'future plans', 'literature cited', 'additional information'); 
 
 -- DO $$
 -- BEGIN
@@ -221,7 +228,8 @@ CREATE TYPE section_which AS ENUM('title','abstract','introduction','materials a
 -- ADD CONSTRAINT extract_kind_check
 -- CHECK (kind IN ('svg','mixed','image'));
 
-CREATE INDEX IF NOT EXISTS idx_extract_sid ON extract (sid);
+-- TODO: restore once the extract table is defined.
+-- CREATE INDEX IF NOT EXISTS idx_extract_sid ON extract (sid);
 
 -- CREATE TABLE IF NOT EXISTS reference (
 --     rid         SERIAL PRIMARY KEY,
@@ -375,164 +383,168 @@ FOR EACH ROW EXECUTE FUNCTION trg_conference_fts();
 
 CREATE INDEX IF NOT EXISTS idx_poster_fts ON poster USING GIN (search_vector);
 
--- Recompute the tsvector for a single poster.
--- Weights: title=A, subtitle/authors/content-titles=B,
---          poster-footnotes/footnote-rows=C, content-bodies=D, keyterms=A
-CREATE OR REPLACE FUNCTION poster_search_vector(pid_in INTEGER)
-RETURNS tsvector LANGUAGE sql STABLE AS $$
-    SELECT
-        setweight(to_tsvector('english', coalesce(p.title,     '')), 'A') ||
-        setweight(to_tsvector('english', coalesce(p.subtitle,  '')), 'B') ||
-        setweight(to_tsvector('english', coalesce(p.authors,   '')), 'B') ||
-        setweight(to_tsvector('english', coalesce(p.footnotes, '')), 'C') ||
-        -- keyterms associated with this poster
-        setweight(to_tsvector('english', coalesce(
-            (SELECT string_agg(text, ' ') FROM keyterm WHERE pid = pid_in), ''
-        )), 'A') ||
-        -- rows in the footnote table (poster-level and via content blocks)
-        setweight(to_tsvector('english', coalesce(
-            (SELECT string_agg(fn.text, ' ')
-               FROM footnote fn
-              WHERE fn.pid = pid_in
-                 OR fn.xid IN (SELECT xid FROM content WHERE pid = pid_in)), ''
-        )), 'C') ||
-        -- content block titles
-        setweight(to_tsvector('english', coalesce(
-            (SELECT string_agg(coalesce(cx.title, ''), ' ')
-               FROM content cx WHERE cx.pid = pid_in), ''
-        )), 'B') ||
-        -- content block bodies (subtitle, content text, footnotes field)
-        setweight(to_tsvector('english', coalesce(
-            (SELECT string_agg(
-                coalesce(cx.subtitle,  '') || ' ' ||
-                coalesce(cx.content,   '') || ' ' ||
-                coalesce(cx.footnotes, ''),
-                ' '
-             )
-               FROM content cx WHERE cx.pid = pid_in), ''
-        )), 'D')
-    FROM poster p
-    WHERE p.pid = pid_in;
-$$;
+-- TODO: poster search below uses poster.title/subtitle/authors/footnotes and the
+-- content and footnote tables, none of which exist yet; rewrite it around section
+-- before re-enabling. The keyterm trigger is disabled with it, so keyterm changes
+-- don't refresh conference.search_vector until it returns.
+-- -- Recompute the tsvector for a single poster.
+-- -- Weights: title=A, subtitle/authors/content-titles=B,
+-- --          poster-footnotes/footnote-rows=C, content-bodies=D, keyterms=A
+-- CREATE OR REPLACE FUNCTION poster_search_vector(pid_in INTEGER)
+-- RETURNS tsvector LANGUAGE sql STABLE AS $$
+--     SELECT
+--         setweight(to_tsvector('english', coalesce(p.title,     '')), 'A') ||
+--         setweight(to_tsvector('english', coalesce(p.subtitle,  '')), 'B') ||
+--         setweight(to_tsvector('english', coalesce(p.authors,   '')), 'B') ||
+--         setweight(to_tsvector('english', coalesce(p.footnotes, '')), 'C') ||
+--         -- keyterms associated with this poster
+--         setweight(to_tsvector('english', coalesce(
+--             (SELECT string_agg(text, ' ') FROM keyterm WHERE pid = pid_in), ''
+--         )), 'A') ||
+--         -- rows in the footnote table (poster-level and via content blocks)
+--         setweight(to_tsvector('english', coalesce(
+--             (SELECT string_agg(fn.text, ' ')
+--                FROM footnote fn
+--               WHERE fn.pid = pid_in
+--                  OR fn.xid IN (SELECT xid FROM content WHERE pid = pid_in)), ''
+--         )), 'C') ||
+--         -- content block titles
+--         setweight(to_tsvector('english', coalesce(
+--             (SELECT string_agg(coalesce(cx.title, ''), ' ')
+--                FROM content cx WHERE cx.pid = pid_in), ''
+--         )), 'B') ||
+--         -- content block bodies (subtitle, content text, footnotes field)
+--         setweight(to_tsvector('english', coalesce(
+--             (SELECT string_agg(
+--                 coalesce(cx.subtitle,  '') || ' ' ||
+--                 coalesce(cx.content,   '') || ' ' ||
+--                 coalesce(cx.footnotes, ''),
+--                 ' '
+--              )
+--                FROM content cx WHERE cx.pid = pid_in), ''
+--         )), 'D')
+--     FROM poster p
+--     WHERE p.pid = pid_in;
+-- $$;
 
--- Fired before insert/update of text columns on poster itself.
-CREATE OR REPLACE FUNCTION trg_poster_fts()
-RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    NEW.search_vector := poster_search_vector(NEW.pid);
-    RETURN NEW;
-END;
-$$;
+-- -- Fired before insert/update of text columns on poster itself.
+-- CREATE OR REPLACE FUNCTION trg_poster_fts()
+-- RETURNS trigger LANGUAGE plpgsql AS $$
+-- BEGIN
+--     NEW.search_vector := poster_search_vector(NEW.pid);
+--     RETURN NEW;
+-- END;
+-- $$;
 
-SET client_min_messages TO WARNING;
-DROP TRIGGER IF EXISTS poster_fts_update ON poster;
-RESET client_min_messages;
+-- SET client_min_messages TO WARNING;
+-- DROP TRIGGER IF EXISTS poster_fts_update ON poster;
+-- RESET client_min_messages;
 
-CREATE TRIGGER poster_fts_update
-BEFORE INSERT OR UPDATE OF title, subtitle, authors, footnotes
-ON poster
-FOR EACH ROW EXECUTE FUNCTION trg_poster_fts();
+-- CREATE TRIGGER poster_fts_update
+-- BEFORE INSERT OR UPDATE OF title, subtitle, authors, footnotes
+-- ON poster
+-- FOR EACH ROW EXECUTE FUNCTION trg_poster_fts();
 
--- ── Cross-table triggers ──────────────────────────────────────────────────
+-- -- ── Cross-table triggers ──────────────────────────────────────────────────
 
--- Keyterms: a row may belong to a conference (cid) OR a poster (pid).
--- Refreshes whichever parent has a non-null foreign key.
-CREATE OR REPLACE FUNCTION trg_keyterm_fts()
-RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE
-    target_cid INTEGER;
-    target_pid INTEGER;
-BEGIN
-    IF TG_OP = 'DELETE' THEN
-        target_cid := OLD.cid;  target_pid := OLD.pid;
-    ELSE
-        target_cid := NEW.cid;  target_pid := NEW.pid;
-    END IF;
-    IF target_cid IS NOT NULL THEN
-        UPDATE conference
-           SET search_vector = conference_search_vector(target_cid)
-         WHERE cid = target_cid;
-    END IF;
-    IF target_pid IS NOT NULL THEN
-        UPDATE poster
-           SET search_vector = poster_search_vector(target_pid)
-         WHERE pid = target_pid;
-    END IF;
-    RETURN NULL;
-END;
-$$;
+-- -- Keyterms: a row may belong to a conference (cid) OR a poster (pid).
+-- -- Refreshes whichever parent has a non-null foreign key.
+-- CREATE OR REPLACE FUNCTION trg_keyterm_fts()
+-- RETURNS trigger LANGUAGE plpgsql AS $$
+-- DECLARE
+--     target_cid INTEGER;
+--     target_pid INTEGER;
+-- BEGIN
+--     IF TG_OP = 'DELETE' THEN
+--         target_cid := OLD.cid;  target_pid := OLD.pid;
+--     ELSE
+--         target_cid := NEW.cid;  target_pid := NEW.pid;
+--     END IF;
+--     IF target_cid IS NOT NULL THEN
+--         UPDATE conference
+--            SET search_vector = conference_search_vector(target_cid)
+--          WHERE cid = target_cid;
+--     END IF;
+--     IF target_pid IS NOT NULL THEN
+--         UPDATE poster
+--            SET search_vector = poster_search_vector(target_pid)
+--          WHERE pid = target_pid;
+--     END IF;
+--     RETURN NULL;
+-- END;
+-- $$;
 
-SET client_min_messages TO WARNING;
-DROP TRIGGER IF EXISTS keyterm_fts_update ON keyterm;
-RESET client_min_messages;
+-- SET client_min_messages TO WARNING;
+-- DROP TRIGGER IF EXISTS keyterm_fts_update ON keyterm;
+-- RESET client_min_messages;
 
-CREATE TRIGGER keyterm_fts_update
-AFTER INSERT OR UPDATE OR DELETE ON keyterm
-FOR EACH ROW EXECUTE FUNCTION trg_keyterm_fts();
+-- CREATE TRIGGER keyterm_fts_update
+-- AFTER INSERT OR UPDATE OR DELETE ON keyterm
+-- FOR EACH ROW EXECUTE FUNCTION trg_keyterm_fts();
 
--- Content blocks: refresh the owning poster whenever a block changes.
-CREATE OR REPLACE FUNCTION trg_content_fts()
-RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE
-    target_pid INTEGER;
-BEGIN
-    IF TG_OP = 'DELETE' THEN
-        target_pid := OLD.pid;
-    ELSE
-        target_pid := NEW.pid;
-    END IF;
-    UPDATE poster
-       SET search_vector = poster_search_vector(target_pid)
-     WHERE pid = target_pid;
-    RETURN NULL;
-END;
-$$;
+-- -- Content blocks: refresh the owning poster whenever a block changes.
+-- CREATE OR REPLACE FUNCTION trg_content_fts()
+-- RETURNS trigger LANGUAGE plpgsql AS $$
+-- DECLARE
+--     target_pid INTEGER;
+-- BEGIN
+--     IF TG_OP = 'DELETE' THEN
+--         target_pid := OLD.pid;
+--     ELSE
+--         target_pid := NEW.pid;
+--     END IF;
+--     UPDATE poster
+--        SET search_vector = poster_search_vector(target_pid)
+--      WHERE pid = target_pid;
+--     RETURN NULL;
+-- END;
+-- $$;
 
-SET client_min_messages TO WARNING;
-DROP TRIGGER IF EXISTS content_fts_update ON content;
-RESET client_min_messages;
+-- SET client_min_messages TO WARNING;
+-- DROP TRIGGER IF EXISTS content_fts_update ON content;
+-- RESET client_min_messages;
 
-CREATE TRIGGER content_fts_update
-AFTER INSERT OR UPDATE OR DELETE ON content
-FOR EACH ROW EXECUTE FUNCTION trg_content_fts();
+-- CREATE TRIGGER content_fts_update
+-- AFTER INSERT OR UPDATE OR DELETE ON content
+-- FOR EACH ROW EXECUTE FUNCTION trg_content_fts();
 
--- Footnote rows: refresh via poster.pid directly, or via content.pid when
--- the footnote belongs to a content block (xid).
-CREATE OR REPLACE FUNCTION trg_footnote_fts()
-RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE
-    target_pid INTEGER;
-    target_xid INTEGER;
-BEGIN
-    IF TG_OP = 'DELETE' THEN
-        target_pid := OLD.pid;  target_xid := OLD.xid;
-    ELSE
-        target_pid := NEW.pid;  target_xid := NEW.xid;
-    END IF;
-    IF target_pid IS NOT NULL THEN
-        UPDATE poster
-           SET search_vector = poster_search_vector(target_pid)
-         WHERE pid = target_pid;
-    ELSIF target_xid IS NOT NULL THEN
-        UPDATE poster p
-           SET search_vector = poster_search_vector(c.pid)
-          FROM content c
-         WHERE c.xid = target_xid
-           AND p.pid = c.pid;
-    END IF;
-    RETURN NULL;
-END;
-$$;
+-- -- Footnote rows: refresh via poster.pid directly, or via content.pid when
+-- -- the footnote belongs to a content block (xid).
+-- CREATE OR REPLACE FUNCTION trg_footnote_fts()
+-- RETURNS trigger LANGUAGE plpgsql AS $$
+-- DECLARE
+--     target_pid INTEGER;
+--     target_xid INTEGER;
+-- BEGIN
+--     IF TG_OP = 'DELETE' THEN
+--         target_pid := OLD.pid;  target_xid := OLD.xid;
+--     ELSE
+--         target_pid := NEW.pid;  target_xid := NEW.xid;
+--     END IF;
+--     IF target_pid IS NOT NULL THEN
+--         UPDATE poster
+--            SET search_vector = poster_search_vector(target_pid)
+--          WHERE pid = target_pid;
+--     ELSIF target_xid IS NOT NULL THEN
+--         UPDATE poster p
+--            SET search_vector = poster_search_vector(c.pid)
+--           FROM content c
+--          WHERE c.xid = target_xid
+--            AND p.pid = c.pid;
+--     END IF;
+--     RETURN NULL;
+-- END;
+-- $$;
 
-SET client_min_messages TO WARNING;
-DROP TRIGGER IF EXISTS footnote_fts_update ON footnote;
-RESET client_min_messages;
+-- SET client_min_messages TO WARNING;
+-- DROP TRIGGER IF EXISTS footnote_fts_update ON footnote;
+-- RESET client_min_messages;
 
-CREATE TRIGGER footnote_fts_update
-AFTER INSERT OR UPDATE OR DELETE ON footnote
-FOR EACH ROW EXECUTE FUNCTION trg_footnote_fts();
+-- CREATE TRIGGER footnote_fts_update
+-- AFTER INSERT OR UPDATE OR DELETE ON footnote
+-- FOR EACH ROW EXECUTE FUNCTION trg_footnote_fts();
 
 -- ── Back-fill existing rows ───────────────────────────────────────────────
 
 UPDATE conference SET search_vector = conference_search_vector(cid);
-UPDATE poster     SET search_vector = poster_search_vector(pid);
+-- UPDATE poster     SET search_vector = poster_search_vector(pid);

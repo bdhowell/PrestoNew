@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 import psycopg
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from httpx import Response
 
 with patch.dict(os.environ, {"SESSION_BACKEND": "none"}):
     import app  # noqa: F401  (loads .env and the routers in application order)
@@ -18,7 +19,7 @@ import users
 from identity import NAME_COOKIE, identity_context
 from memory import memory_context
 from routers import account, wikkit
-from sessions import PostgresSessionMiddleware, PostgresSessionStore
+from sessions import PostgresSessionMiddleware, PostgresSessionStore, Session
 
 SECRET = "s" * 48
 
@@ -115,6 +116,88 @@ class AccountWithoutDatabaseTests(unittest.TestCase):
         self.assertIn("&lt;b&gt;Ada&lt;/b&gt;", response.text)
         self.assertNotIn("<b>Ada</b>", response.text)
         self.assertIn('src="/static/graphics/wikkit.svg"', response.text)
+
+
+class AccountMenuTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.user = users.User(
+            7, "Ada", "ada", "ada@example.com", users.hash_password("analytical"),
+            None, datetime.now(timezone.utc),
+        )
+        store = patch.object(users, "store")
+        self.store = store.start().return_value
+        self.addCleanup(store.stop)
+        self.store.get.return_value = self.user
+        self.store.get_by_email.return_value = self.user
+        session_store = PostgresSessionStore(SECRET)
+        session = Session("menu-test", {}, 1, datetime.now(timezone.utc), b"")
+        for method, result in (("load", session), ("save", None)):
+            mocked = patch.object(session_store, method, return_value=result)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+        application = FastAPI(dependencies=[Depends(identity_context)])
+        application.add_middleware(
+            PostgresSessionMiddleware, store=session_store, secure=False,
+        )
+        application.include_router(wikkit.router)
+        application.include_router(account.router)
+        self.client = TestClient(application)
+
+    def sign_in(self) -> Response:
+        return self.client.post("/account/validate", json={
+            "email": self.user.email, "password": "analytical",
+        })
+
+    def test_sign_in_reports_state_before_redirect_and_sign_out_clears_session(self) -> None:
+        response = self.sign_in()
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(response.json()["signed_in"], True)
+        self.assertEqual(response.json()["redirect"], "/posters/list")
+        self.assertIn('href="/account/signout">Sign out</a>', self.client.get("/wikkit").text)
+
+        response = self.client.get("/account/signout")
+        self.assertIn('data-signed-in="false"', response.text)
+        shell = self.client.get("/wikkit").text
+        self.assertIn('href="/account/signin">Sign in</a>', shell)
+        self.assertNotIn('href="/account/signout">Sign out</a>', shell)
+        self.assertEqual(
+            self.client.get("/account/update", follow_redirects=False).headers["location"],
+            "/account/signin",
+        )
+
+    def test_failed_sign_in_does_not_report_a_state_change(self) -> None:
+        response = self.client.post("/account/validate", json={
+            "email": self.user.email, "password": "wrong",
+        })
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn("signed_in", response.json())
+
+    def test_password_recovery_reports_signed_in_state(self) -> None:
+        recovery = datetime.now(timezone.utc)
+        self.user = users.User(
+            7, "Ada", "ada", "ada@example.com", self.user.password,
+            recovery, self.user.verified,
+        )
+        self.store.get.return_value = self.user
+        self.store.set_password.return_value = self.user
+        with patch.dict(os.environ, {"SECRET_KEY": SECRET}):
+            token = users.link_token(users.RECOVERY_PURPOSE, self.user)
+            response = self.client.get(
+                "/account/recovered", params={"uid": self.user.uid, "token": token},
+            )
+        self.assertEqual(response.status_code, 200)
+        response = self.client.post("/account/password", json={"password": "difference"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(response.json()["signed_in"], True)
+
+    def test_account_deletion_reports_signed_out_state(self) -> None:
+        self.sign_in()
+        response = self.client.post("/account/delete", json={
+            "email": self.user.email, "password": "analytical",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(response.json()["signed_in"], False)
+        self.assertIn('href="/account/signin">Sign in</a>', self.client.get("/wikkit").text)
 
 
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_URL"), "set TEST_DATABASE_URL for PostgreSQL tests")
@@ -239,6 +322,8 @@ class AccountFlowTests(unittest.TestCase):
         response = self.sign_in(email="ADA@example.com")
         self.assertEqual(response.json(), {
             "ok": True, "redirect": "/posters/list",
+            "signed_in": True,
+            "command": {"does": "clear-chat"},
             "say": response.json()["say"],
         })
         self.assertEqual(

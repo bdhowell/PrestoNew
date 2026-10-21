@@ -149,7 +149,7 @@ async def magic_workflow(bot: Chatbot) -> None:
     app_name = _app_name()
     await bot.send({"say": f"""
 <div>
-Welcome to {app_name}. I&rsquo;m {app_name}&rsquo;s resident wizard.
+Welcome to {app_name}. I&rsquo;m Wikkit, {app_name}&rsquo;s resident wizard.
 </div>
 <div>
 With a few minutes and a little magic, we can quickly and easily prepare your conference or fair poster.

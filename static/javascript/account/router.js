@@ -1,7 +1,8 @@
 /*
  * Account router: submits .account-form forms as same-origin JSON (AJAX).
  *
- * Replies are {ok, say?, redirect?, errors?}. Wikkit says `say`; `errors` maps
+ * Replies are {ok, say?, command?, signed_in?, redirect?, errors?}.
+ * `signed_in` updates the shell menu before navigating. Wikkit says `say`; `errors` maps
  * field names to plain-text messages; `redirect` navigates this iframe page.
  * Forms with data-done="hide" are hidden after a successful submission.
  */
@@ -48,6 +49,12 @@
             if (!reply || typeof reply.ok !== "boolean") {
                 message.textContent = reply?.detail ?? "Something went wrong. Please try again.";
                 return;
+            }
+            if (typeof reply.signed_in === "boolean") {
+                window.wikkit.setSignedIn(reply.signed_in);
+            }
+            if (reply.command) {
+                await window.wikkit.execute(reply.command);
             }
             wikkitSay(reply.say);
             showErrors(form, reply.errors);

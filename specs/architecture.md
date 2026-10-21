@@ -135,7 +135,7 @@ If the user is returning (as indicated by the presence of the user cookie):
 
 Wikkit Says:f"""
 <div>
-Welcome to {APPLICATION_NAME}. I&rsquo;m {APPLICATION_NAME}&rsquo;s resident wizard.
+Welcome to {APPLICATION_NAME}. I&rsquo;m Wikkit, {APPLICATION_NAME}&rsquo;s resident wizard.
 </div>
 <div>
 With a few minutes and a little magic, we can quickly and easily prepare your conference or fair poster.

@@ -91,6 +91,10 @@
             resetReminder();
         }
 
+        function clearChat() {
+            chatlog.innerHTML = "";
+        }
+
         const intrinsicCommands = new Map([
             ["redirect", (payload) => {
                 if (typeof payload !== "string") {
@@ -105,6 +109,7 @@
             }],
             ["request", requestResponse],
             ["request-response", requestResponse],
+            ["clear-chat", clearChat],
         ]);
 
         const scheme = location.protocol === "https:" ? "wss:" : "ws:";
@@ -178,11 +183,13 @@
 
         // The shell is rendered once, so iframe pages report sign-in changes.
         function updateMenu(signedIn) {
+            if (typeof signedIn !== "boolean") {
+                throw new TypeError("Sign-in state must be a boolean.");
+            }
             const link = document.querySelector('.basic-menu a[href="/account/signin"], .basic-menu a[href="/account/signout"]');
-            if (link && (signedIn === "true" || signedIn === "false")) {
-                const inside = signedIn === "true";
-                link.href = inside ? "/account/signout" : "/account/signin";
-                link.textContent = inside ? "Sign out" : "Sign in";
+            if (link) {
+                link.href = signedIn ? "/account/signout" : "/account/signin";
+                link.textContent = signedIn ? "Sign out" : "Sign in";
             }
         }
 
@@ -308,6 +315,8 @@
                     return client.apiobj;
                 }
                 const apiobj = Object.freeze({
+                    execute: (command) => executeCommand(command),
+                    setSignedIn: updateMenu,
                     // Appends text or an HTML fragment to #chatlog as <div class="chat">.
                     say: (html) => say(String(html)),
                     // Sends text to the server; with echo, also shows it via say().
@@ -321,7 +330,9 @@
                 const entry = { win, listen, apiobj, dispatch, ready };
                 client = entry;
                 const dataset = win.document.body?.dataset ?? {};
-                updateMenu(dataset.signedIn);
+                if (dataset.signedIn === "true" || dataset.signedIn === "false") {
+                    updateMenu(dataset.signedIn === "true");
+                }
                 announcePage(dataset.page);
                 for (const resolve of attachmentWaiters.splice(0)) {
                     resolve();

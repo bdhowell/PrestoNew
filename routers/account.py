@@ -40,6 +40,8 @@ def recovery_max_age() -> int:
 def _reply(
     ok: bool, says: str | None = None, *, redirect: str | None = None,
     errors: dict[str, str] | None = None, status_code: int = 200,
+    command: dict[str, str] | None = None,
+    signed_in: bool | None = None,
 ) -> JSONResponse:
     """AJAX result: `says` is trusted HTML for Wikkit; `errors` are plain text per field."""
     body: dict[str, object] = {"ok": ok}
@@ -49,6 +51,10 @@ def _reply(
         body["redirect"] = redirect
     if errors:
         body["errors"] = errors
+    if command is not None:
+        body["command"] = command
+    if signed_in is not None:
+        body["signed_in"] = signed_in
     return JSONResponse(body, status_code=status_code)
 
 
@@ -291,12 +297,16 @@ I&rsquo;ve sent a fresh confirmation link to <strong>{html.escape(user.email)}</
         return _reply(False, says, status_code=403)
     if user is not None and valid:
         identity.sign_in(request, user)
+
         says = """
 <p>
 Let&rsquo;s get back to work on your poster!
 </p>
 """
-        return _reply(True, says, redirect=resumption_page(request))
+        return _reply(
+            True, says, redirect=resumption_page(request), command={"does": "clear-chat"},
+            signed_in=True,
+        )
     name = identity.cookie_name(request)
     if name is not None:
         says = f"""
@@ -486,7 +496,7 @@ Please <a href="/account/recover">request a new one</a>.
 All done, {identity.display_name(request)}! Your new password is in place.
 </p>
 """
-    return _reply(True, says, redirect=resumption_page(request))
+    return _reply(True, says, redirect=resumption_page(request), signed_in=True)
 
 
 @router.get("/delete", response_class=HTMLResponse)
@@ -534,6 +544,6 @@ async def delete(request: Request) -> JSONResponse:
 Your account has been deleted, {name}. Farewell, and may your future posters be magnificent!
 </p>
 """
-    response = _reply(True, says, redirect="/wikkit/magic")
+    response = _reply(True, says, redirect="/wikkit/magic", signed_in=False)
     response.delete_cookie(identity.NAME_COOKIE, path="/")
     return response
