@@ -1,6 +1,7 @@
 """Wikkit the Wizard: chatbot shell, landing/pricing/help pages, and websocket."""
 
 import html
+import logging
 import os
 import re
 from pathlib import Path
@@ -15,6 +16,7 @@ import identity
 from common import clean_response
 from wikkit import Chatbot, Workflow
 
+logger = logging.getLogger(__name__)
 DEFAULT_URL = "/wikkit/magic"
 SOCKET_PATH = "/wikkit/ws"
 BASE_DIR = Path(__file__).resolve().parent.parent
