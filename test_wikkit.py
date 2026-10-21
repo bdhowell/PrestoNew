@@ -1,5 +1,6 @@
 import unittest
 import asyncio
+import json
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,6 +15,7 @@ from starlette.websockets import WebSocketDisconnect
 with patch.dict(os.environ, {"SESSION_BACKEND": "none"}):
     from app import app
 from llm import IntentDispatchResult
+import identity
 from routers import wikkit
 import wikkit as chatbot
 
@@ -26,10 +28,10 @@ class WikkitPageTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
 
-    def test_home_redirects_to_wikkit(self) -> None:
+    def test_home_redirects_to_magic_page(self) -> None:
         response = self.client.get("/", follow_redirects=False)
         self.assertEqual(response.status_code, 307)
-        self.assertEqual(response.headers["location"], "/wikkit")
+        self.assertEqual(response.headers["location"], "/wikkit/magic")
 
     def test_get_loads_default_page_in_iframe(self) -> None:
         response = self.client.get("/wikkit")
@@ -439,6 +441,162 @@ class WikkitAsyncTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await waiting
         self.assertIsNone(session._response)
+
+
+class WikkitRouterPageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = TestClient(app)
+
+    def test_magic_page_shows_brand_for_new_visitors(self) -> None:
+        response = self.client.get("/wikkit/magic")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('src="/static/graphics/wikkit.svg"', response.text)
+        self.assertIn('class="brand-name"', response.text)
+        self.assertIn('data-page="wikkit-magic"', response.text)
+        self.assertIn('src="/static/javascript/pages/wikkit-magic.does"', response.text)
+        self.assertEqual(self.client.get("/static/graphics/wikkit.svg").status_code, 200)
+
+    def test_magic_page_sends_returning_visitors_to_sign_in(self) -> None:
+        self.client.cookies.set(identity.NAME_COOKIE, "Ada")
+        response = self.client.get("/wikkit/magic", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/account/signin")
+
+    def test_pricing_and_help_greet_by_escaped_name(self) -> None:
+        self.client.cookies.set(identity.NAME_COOKIE, "%3Ci%3EAda%3C%2Fi%3E")
+        for path, page in (("/wikkit/pricing", "wikkit-pricing"), ("/wikkit/help", "wikkit-help")):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(f'data-page="{page}"', response.text)
+                self.assertIn(r"\u0026lt;i\u0026gt;Ada\u0026lt;/i\u0026gt;", response.text)
+                self.assertNotIn("<i>Ada</i>", response.text)
+        self.assertIn('href="/account/recover"', self.client.get("/wikkit/help").text)
+
+    def test_pricing_shows_configured_price(self) -> None:
+        with patch.dict(os.environ, {"RENDER_PRICE": "19.5"}):
+            self.assertIn("$19.50", self.client.get("/wikkit/pricing").text)
+        with patch.dict(os.environ, {"RENDER_PRICE": "0"}):
+            self.assertIn("<strong>free</strong>", self.client.get("/wikkit/pricing").text)
+
+    def test_remember_name_sets_cookie_from_json_only(self) -> None:
+        self.assertEqual(self.client.post("/wikkit/name", data={"name": "Ada"}).status_code, 415)
+        self.assertEqual(self.client.post("/wikkit/name", json={"name": " "}).status_code, 422)
+        response = self.client.post("/wikkit/name", json={"name": "  Ada   Lovelace "})
+        self.assertEqual(response.json(), {"ok": True})
+        cookie = response.headers["set-cookie"]
+        self.assertIn(f"{identity.NAME_COOKIE}=Ada%20Lovelace", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("samesite=lax", cookie.lower())
+
+    def test_extract_name(self) -> None:
+        for reply, name in (
+            ("Ada", "Ada"), ("  my name is Ada Lovelace. ", "Ada Lovelace"),
+            ("Call me Ada!", "Ada"), ("Hi, I'm Jean-Luc", "Jean-Luc"),
+            ("Hello Ada", "Ada"), ("Imogen", "Imogen"), ("Zoë O'Brien", "Zoë O'Brien"),
+            ("no", None), ("idk", None), ("???", None), ("<b>Ada</b>", None),
+            ("r2d2", None), ("I would rather not say that", None), ("hi", None),
+        ):
+            with self.subTest(reply=reply):
+                self.assertEqual(wikkit.extract_name(reply), name)
+
+
+class WikkitWorkflowTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = TestClient(app)
+
+    def open_page(self, socket, page: str) -> None:
+        socket.send_text(json.dumps({"page": page}))
+
+    def test_page_events_are_parsed_strictly(self) -> None:
+        self.assertEqual(chatbot.page_event('{"page": "wikkit-help"}'), "wikkit-help")
+        for message in ('{"page": 1}', '{"page": "x", "y": 1}', "page", "{nope", '["page"]'):
+            with self.subTest(message=message):
+                self.assertIsNone(chatbot.page_event(message))
+
+    def test_magic_workflow_learns_and_remembers_name(self) -> None:
+        with self.client.websocket_connect("/wikkit/ws") as socket:
+            self.open_page(socket, "wikkit-magic")
+            self.assertIn("Can I have your name to start?", socket.receive_json()["say"])
+            self.assertEqual(socket.receive_json(), {"command": {"does": "request-response"}})
+            socket.send_text("no")
+            retry = socket.receive_json()
+            self.assertIn("Could you please tell it to me?", retry["say"])
+            self.assertEqual(retry["command"], {"does": "request-response"})
+            socket.send_text("Call me Ada.")
+            self.assertIn("Nice to meet you, Ada!", socket.receive_json()["say"])
+            self.assertEqual(socket.receive_json(), {
+                "command": {"does": "remember-name", "payload": {"name": "Ada"}},
+            })
+            self.assertEqual(socket.receive_json(), {
+                "command": {"does": "redirect", "payload": "/account/register"},
+            })
+
+    def test_magic_workflow_calls_unnamed_visitors_friend(self) -> None:
+        with self.client.websocket_connect("/wikkit/ws") as socket:
+            self.open_page(socket, "wikkit-magic")
+            socket.receive_json()
+            socket.receive_json()
+            for _ in range(2):
+                socket.send_text("?")
+                socket.receive_json()
+            socket.send_text("no")
+            self.assertIn("For now I&rsquo;ll call you <em>Friend</em>.", socket.receive_json()["say"])
+            self.assertEqual(socket.receive_json()["command"]["payload"], {"name": "Friend"})
+
+    def test_new_page_cancels_previous_workflow(self) -> None:
+        with patch.object(chatbot.IntentStack, "dispatch", return_value=None) as dispatch:
+            with self.client.websocket_connect("/wikkit/ws") as socket:
+                self.open_page(socket, "wikkit-magic")
+                socket.receive_json()
+                socket.receive_json()
+                self.open_page(socket, "wikkit-help")
+                socket.send_text("Ada")
+                self.assertEqual(socket.receive_json(), {"say": chatbot.UNHANDLED_MESSAGE})
+        dispatch.assert_called_once()
+        self.assertEqual(dispatch.call_args.args[-1], "Ada")
+
+    def test_pricing_workflow_answers_follow_up_questions(self) -> None:
+        with patch.object(chatbot.IntentStack, "dispatch", return_value=dispatched(
+            {"type": "redirect", "url": "/account/register"}
+        )) as dispatch:
+            with self.client.websocket_connect("/wikkit/ws") as socket:
+                self.open_page(socket, "wikkit-pricing")
+                self.assertEqual(socket.receive_json(), {"command": {"does": "request-response"}})
+                socket.send_text("yes")
+                follow_up = socket.receive_json()
+                self.assertIn("what else would you like to know?", follow_up["say"])
+                socket.send_text("How do I sign up?")
+                self.assertEqual(socket.receive_json(), {
+                    "command": {"does": "redirect", "payload": "/account/register"},
+                })
+                self.open_page(socket, "wikkit-pricing")
+                socket.receive_json()
+                socket.send_text("nope")
+                self.assertIn("Okay!", socket.receive_json()["say"])
+        dispatch.assert_called_once()
+        self.assertEqual(dispatch.call_args.args[-1], "How do I sign up?")
+
+    def test_failed_workflow_tells_user(self) -> None:
+        async def broken(_bot: chatbot.Chatbot) -> None:
+            raise RuntimeError("boom")
+
+        with patch.dict(wikkit.WORKFLOWS, {"broken": broken}):
+            with self.client.websocket_connect("/wikkit/ws") as socket:
+                with self.assertLogs("wikkit", "ERROR"):
+                    self.open_page(socket, "broken")
+                    self.assertEqual(socket.receive_json(), {"say": chatbot.FAILURE_MESSAGE})
+
+
+class WikkitSubstitutionEscapingTests(unittest.TestCase):
+    def test_substituted_values_are_html_escaped_and_hyphenated_fields_work(self) -> None:
+        websocket = WebSocket({"type": "websocket", "state": {
+            "user": {"user-name": "<script>x</script>"},
+        }}, receive=AsyncMock(), send=AsyncMock())
+        self.assertEqual(
+            chatbot.Chatbot(websocket).substitute("Hi {{user.user-name}}"),
+            "Hi &lt;script&gt;x&lt;/script&gt;",
+        )
 
 
 if __name__ == "__main__":

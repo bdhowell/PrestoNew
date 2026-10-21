@@ -1,0 +1,19 @@
+{% extends "account/base.html" %}
+{% block title %}Delete account · {{ app_name() }}{% endblock %}
+{% block content %}
+    <section class="panel">
+        <h1>Delete your account</h1>
+        <p>This permanently deletes your account. It can&rsquo;t be undone.</p>
+        <form class="account-form" method="post" action="/account/delete" novalidate>
+            <label>Email
+                <input name="email" type="email" autocomplete="email" required>
+            </label>
+            <label>Password
+                <input name="password" type="password" autocomplete="current-password" required>
+            </label>
+            <p class="form-message" role="status"></p>
+            <button type="submit" class="danger">Delete my account</button>
+        </form>
+        <p><a href="/account/update">Never mind</a></p>
+    </section>
+{% endblock %}

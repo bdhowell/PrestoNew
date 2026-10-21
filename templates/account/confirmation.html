@@ -1,0 +1,15 @@
+{% extends "account/base.html" %}
+{% block title %}Confirmation · {{ app_name() }}{% endblock %}
+{% block content %}
+    <section class="panel">
+        {% if confirmed %}
+        <h1>Thank you, {{ name }}!</h1>
+        <p>Your registration is complete.</p>
+        <p><a class="button" href="{{ next_page }}">Start my poster</a></p>
+        {% else %}
+        <h1>That link didn&rsquo;t work</h1>
+        <p>The confirmation link is invalid, already used, or expired.</p>
+        <p><a class="button" href="/account/signin">Sign in for a new link</a></p>
+        {% endif %}
+    </section>
+{% endblock %}

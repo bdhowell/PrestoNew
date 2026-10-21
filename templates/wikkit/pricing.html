@@ -1,0 +1,13 @@
+{% extends "page.html" %}
+{% block title %}Pricing · {{ app_name() }}{% endblock %}
+{% block content %}
+    <section class="panel">
+        <h1>Pricing</h1>
+        <p>
+            Creating and editing your poster costs nothing. You pay only when your poster is
+            ready for printing and you download the print-ready PDF.
+        </p>
+        <p class="price">Print-ready poster: <strong>{{ price }}</strong></p>
+        <p>Purchased posters can be downloaded again at any time.</p>
+    </section>
+{% endblock %}

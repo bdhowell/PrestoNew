@@ -90,6 +90,31 @@ The receive loop remains active while a workflow waits. Only one response
 request may be outstanding per conversation, and disconnecting cancels
 pending response waits and the message-processing task.
 
+## Page workflows
+
+Pages rendered in the iframe extend `templates/page.html`, which sets
+`<body data-page="slug" data-signed-in="true|false">`. When a page attaches,
+the client sends the control frame `{"page": "slug"}`; `wikkit.page_event`
+recognizes only that exact shape. `Chatbot.open_page(slug)` cancels and awaits
+the previous page's workflow, then starts the coroutine registered for the slug
+in `routers.wikkit.WORKFLOWS` (currently `wikkit-magic` and `wikkit-pricing`).
+Pages without a workflow leave messages to the intent stack. Workflow
+exceptions are logged and the user sees `FAILURE_MESSAGE`.
+
+Static page greetings ("Wikkit says") are rendered by the HTTP route into the
+page and spoken by `window.wikkit.say(...)`, so they reflect the request's
+current session. The websocket's session is a connect-time snapshot, so state
+that must survive (the visitor's name, sign-in) is written over HTTP: the
+magic workflow sends the `remember-name` command from
+`static/javascript/pages/wikkit-magic.does`, which posts JSON to
+`POST /wikkit/name` to set the name cookie.
+
+`data-signed-in` updates the shell menu's Sign in/Sign out link. Menu clicks
+navigate the iframe. A page opened directly at top level posts its path to
+`/wikkit` so it reopens inside the shell, so a top-level GET is loaded twice;
+single-use links (such as account confirmation) redirect to a token-free page
+after use.
+
 
 # Chatbot memory:
 - Stores user responses and context for ongoing interactions.
@@ -198,9 +223,9 @@ an unowned store. The store is not itself an authorization mechanism.
 `sessions.PostgresSessionMiddleware` supplies the trusted server-side mapping as
 `scope["session"]`. The dependency loads and saves a `Memory` object under
 `session["chatbot_memory"]`. An identity change replaces all three scopes to
-avoid retaining another user's/poster's context. Authentication is still a
-separate integration; merely having a session does not identify a user or grant
-access to a poster.
+avoid retaining another user's/poster's context. A session identifies a user
+only after `identity.sign_in` stores a verified `user_id` (see Accounts);
+poster access is still a separate integration.
 
 ### PostgreSQL session backend
 
@@ -261,8 +286,8 @@ overwrite newer data. Conflicting or expired writes fail rather than lose data:
 HTTP returns 409 and websocket teardown raises/logs the persistence error.
 Clients should reload/reconnect before retrying; there is no automatic merge.
 Avoid editing the same session in multiple active conversations simultaneously.
-This backend does not implement authentication, logout, or session-ID rotation
-for login transitions.
+Sign-in and sign-out are implemented by `identity.py` and `routers/account.py`
+(see Accounts below); the backend still does not rotate session IDs at login.
 
 When persistence is disabled, short-term memory lasts for one HTTP request or
 websocket connection. Starlette's JSON cookie-session middleware cannot replace
@@ -277,7 +302,7 @@ Run the memory and chatbot tests with:
 ```sh
 # Use a dedicated test database, never production.
 TEST_DATABASE_URL=postgresql:///presto_memory_test \
-    bin/python -m unittest test_sessions test_memory test_wikkit test_intents
+    bin/python -m unittest test_sessions test_memory test_wikkit test_intents test_account
 ```
 
 Without `TEST_DATABASE_URL`, PostgreSQL integration tests are explicitly skipped;
@@ -294,7 +319,9 @@ must be supplied by server-side application code; the filter does not load
 identities or infer them from memory or the session middleware.
 
 Fields can be dictionary keys or object attributes, including nested public
-fields such as `{{poster.author.name}}`. Whitespace around the identifier is
+fields such as `{{poster.author.name}}` and hyphenated keys such as
+`{{user.user-name}}`. Substituted values are HTML-escaped because `say` is
+rendered as HTML. Whitespace around the identifier is
 allowed. Values are converted to strings, including zero and false. Missing
 or null values and callable attributes leave the original token unchanged and
 log a warning. Other roots, private attributes, and expressions are not
@@ -305,3 +332,41 @@ Every `chatbot.send(reply)` passes its top-level `say` string through
 and unsolicited messages. Other keys (including command payloads) are not
 filtered, and the original reply dictionary is not modified. A non-string
 `say` raises `TypeError`.
+
+# Accounts
+
+`identity.py` resolves each request's identity before memory loads:
+`state.user_id` (from `session["user_id"]`, verified against the `"user"` table)
+and `state.user = {"user-name", "uid", "username", "email"}`. The visitor's
+name is kept in the `presto_user` cookie (HttpOnly, SameSite=Lax, one year), so
+returning visitors go from `/wikkit/magic` to `/account/signin`.
+
+`users.py` stores accounts in the `"user"` table from `schema/schema.sql`
+(created if missing). Passwords are hashed with salted scrypt. Confirmation and
+recovery links are HMACs of `SECRET_KEY` over the purpose, user, the record's
+`recovery` timestamp, and the password hash; using a link clears or replaces
+`recovery`, so each link works once. Unconfirmed users cannot sign in;
+attempting to sends a new confirmation link. Recovery responses never reveal
+whether an email is registered.
+
+Account form endpoints accept JSON only (`static/javascript/account/router.js`)
+and reply `{ok, say, redirect?, errors?}`. Successful sign-in redirects to
+`state.poster["resumption-page"]`, or `/posters/list`.
+
+```env
+MAIL_BACKEND=console          # console (logs; default) or smtp
+MAIL_FROM=wikkit@example.com  # required for smtp
+SMTP_HOST=mail.smtp2go.com
+SMTP_PORT=587
+SMTP_SECURITY=starttls        # none, starttls, or ssl
+SMTP_USERNAME=...
+SMTP_PASSWORD=...
+PUBLIC_BASE_URL=https://example.com  # base for emailed links; defaults to the request URL
+CONFIRMATION_LINK_MAX_AGE=86400      # seconds
+RECOVERY_LINK_MAX_AGE=3600           # seconds
+SUPPORT_EMAIL=support@example.com    # shown on /wikkit/help
+RENDER_PRICE=0.00                    # shown on /wikkit/pricing; 0 shows "free"
+```
+
+Account tests truncate the `"user"` table, so `TEST_DATABASE_URL` must point to
+a dedicated database.

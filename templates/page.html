@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ app_name() }}{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Aladin&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/main.css">
+    {% block styles %}{% endblock %}
+    <script src="/static/javascript/wikkit.js"></script>
+    {% block scripts %}{% endblock %}
+    {% include "page_assets.html" %}
+</head>
+{% set signed_in = request.state.user_id is defined and request.state.user_id %}
+<body class="wikkit-page" data-page="{{ page_name }}" data-signed-in="{{ 'true' if signed_in else 'false' }}">
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <script>
+        window.wikkit = connect(() => {});
+        {% if wikkit_says %}
+        window.wikkit.say({{ wikkit_says | tojson }});
+        {% endif %}
+    </script>
+</body>
+</html>

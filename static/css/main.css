@@ -55,3 +55,150 @@
   font-size: 1.5rem;
   font-style: normal;
 }
+
+/* Pages shown in the Wikkit iframe */
+.wikkit-page {
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(160deg, #1d1840, #2f2766 60%, #3d2f7a);
+  color: #eee;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+.wikkit-page main {
+  /* clears the shell's fixed menu */
+  padding: 4.5rem 1.5rem 2rem;
+}
+
+.wikkit-page a {
+  color: #f4d35e;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2rem;
+  flex-wrap: wrap;
+  margin: 1rem auto 2rem;
+}
+
+.brand-logo {
+  width: min(40vw, 22rem);
+  height: auto;
+  margin: 0;
+}
+
+.brand-name {
+  margin: 0;
+  color: #f4d35e;
+  font-family: "Aladin", system-ui;
+  font-weight: 400;
+  font-size: clamp(3rem, 9vw, 7rem);
+  line-height: 1;
+}
+
+.panel {
+  max-width: 32rem;
+  margin: 0 auto;
+  padding: 1.5rem 2rem;
+  border: 2px solid #c9a227;
+  border-radius: 8px;
+  background: rgb(15 12 36 / 70%);
+}
+
+.panel h1,
+.panel h2 {
+  margin-top: 0;
+  color: #f4d35e;
+  font-family: "Aladin", system-ui;
+  font-weight: 400;
+}
+
+.panel .price {
+  font-size: 1.25rem;
+}
+
+.panel .links {
+  padding-left: 1.25rem;
+}
+
+.account-form {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.account-form[hidden] {
+  display: none;
+}
+
+.account-form label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.account-form input {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #6b62b5;
+  border-radius: 4px;
+  background: #0f0c24;
+  color: #fff;
+  font: inherit;
+}
+
+.account-form input:focus {
+  border-color: #f4d35e;
+  outline: none;
+}
+
+.account-form input[aria-invalid] {
+  border-color: #ff7b7b;
+}
+
+.field-error,
+.form-message {
+  margin: 0;
+  color: #ffb3b3;
+}
+
+.field-error:empty,
+.form-message:empty {
+  display: none;
+}
+
+.account-form .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.wikkit-page button,
+.wikkit-page .button {
+  display: inline-block;
+  padding: 0.5rem 1.1rem;
+  border: 0;
+  border-radius: 4px;
+  background: #c9a227;
+  color: #1d1840;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.wikkit-page button.secondary {
+  background: transparent;
+  color: #f4d35e;
+  text-decoration: underline;
+}
+
+.wikkit-page button.danger {
+  background: #d9534f;
+  color: #fff;
+}
+
+.wikkit-page button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}

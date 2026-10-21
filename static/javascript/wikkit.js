@@ -162,6 +162,43 @@
             await intrinsic(normalized.payload);
         }
 
+        // Lets the server cancel the previous page's workflow and start this page's.
+        function announcePage(page) {
+            if (!page) {
+                return;
+            }
+            stopRequest();
+            const message = JSON.stringify({ page });
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send(message);
+            } else if (socket.readyState === WebSocket.CONNECTING) {
+                pending.push(message);
+            }
+        }
+
+        // The shell is rendered once, so iframe pages report sign-in changes.
+        function updateMenu(signedIn) {
+            const link = document.querySelector('.basic-menu a[href="/account/signin"], .basic-menu a[href="/account/signout"]');
+            if (link && (signedIn === "true" || signedIn === "false")) {
+                const inside = signedIn === "true";
+                link.href = inside ? "/account/signout" : "/account/signin";
+                link.textContent = inside ? "Sign out" : "Sign in";
+            }
+        }
+
+        // Menu links navigate the iframe rather than replacing the shell.
+        document.querySelector(".basic-menu")?.addEventListener("click", (event) => {
+            const link = event.target.closest("a[href]");
+            if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                return;
+            }
+            const url = new URL(link.href, location.href);
+            if (url.origin === location.origin) {
+                event.preventDefault();
+                frame.src = url.href;
+            }
+        });
+
         function commandFailed(error) {
             console.error("Wikkit command failed", error);
             sayText("Wikkit could not complete a page action. Please try again.", "notice");
@@ -283,6 +320,9 @@
                 });
                 const entry = { win, listen, apiobj, dispatch, ready };
                 client = entry;
+                const dataset = win.document.body?.dataset ?? {};
+                updateMenu(dataset.signedIn);
+                announcePage(dataset.page);
                 for (const resolve of attachmentWaiters.splice(0)) {
                     resolve();
                 }
@@ -312,11 +352,31 @@
         }
     }
 
+    // Reopens a page opened outside the shell (e.g. from an email link) inside it.
+    function openInShell() {
+        const form = document.createElement("form");
+        form.method = "post";
+        form.action = "/wikkit";
+        const url = document.createElement("input");
+        url.type = "hidden";
+        url.name = "url";
+        url.value = location.pathname + location.search + location.hash;
+        form.appendChild(url);
+        document.documentElement.appendChild(form);
+        form.submit();
+    }
+
+    const inert = Object.freeze({ say: () => {}, command: () => {} });
+
     window.connect = function connect(listen) {
         if (typeof listen !== "function") {
             throw new TypeError("connect(listen) requires a callback function.");
         }
         const host = findHost();
+        if (!host && window.top === window && !document.getElementById("chatbot")) {
+            openInShell();
+            return inert;
+        }
         if (!host) {
             throw new Error("connect() must be called from a page loaded in the /wikkit iframe.");
         }

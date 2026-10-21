@@ -1,0 +1,24 @@
+{% extends "account/base.html" %}
+{% block title %}Register · {{ app_name() }}{% endblock %}
+{% block content %}
+    <section class="panel">
+        <h1>Create your account</h1>
+        <form class="account-form" method="post" action="/account/register" data-done="hide" novalidate>
+            <label>Username
+                <input name="username" autocomplete="username" required minlength="3" maxlength="40">
+                <small class="field-error" data-for="username"></small>
+            </label>
+            <label>Email
+                <input name="email" type="email" autocomplete="email" required maxlength="254">
+                <small class="field-error" data-for="email"></small>
+            </label>
+            <label>Password
+                <input name="password" type="password" autocomplete="new-password" required minlength="8" maxlength="256">
+                <small class="field-error" data-for="password"></small>
+            </label>
+            <p class="form-message" role="status"></p>
+            <button type="submit">Register</button>
+        </form>
+        <p>Already registered? <a href="/account/signin">Sign in</a>.</p>
+    </section>
+{% endblock %}

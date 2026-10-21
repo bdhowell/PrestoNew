@@ -1,0 +1,27 @@
+{% extends "account/base.html" %}
+{% block title %}Sign in · {{ app_name() }}{% endblock %}
+{% block content %}
+    {% include "brand.html" %}
+    <section class="panel">
+        {% if returning_name %}
+        <h2>Welcome back to {{ app_name() }}, {{ returning_name }}.</h2>
+        {% else %}
+        <h2>Welcome to {{ app_name() }}.</h2>
+        {% endif %}
+        <p>Please sign in to continue working on your poster.</p>
+        <form class="account-form" method="post" action="/account/validate" novalidate>
+            <label>Email
+                <input name="email" type="email" autocomplete="email" required value="{{ email }}">
+            </label>
+            <label>Password
+                <input name="password" type="password" autocomplete="current-password" required>
+            </label>
+            <p class="form-message" role="status"></p>
+            <div class="actions">
+                <button type="submit">Sign in</button>
+                <button type="button" class="secondary" data-recover>Forgot your password?</button>
+            </div>
+        </form>
+        <p>New here? <a href="/account/register">Create an account</a>.</p>
+    </section>
+{% endblock %}

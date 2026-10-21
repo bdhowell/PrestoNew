@@ -1,0 +1,9 @@
+{% extends "account/base.html" %}
+{% block title %}Recover password · {{ app_name() }}{% endblock %}
+{% block content %}
+    <section class="panel">
+        <h1>That recovery link didn&rsquo;t work</h1>
+        <p>It may be invalid, already used, or expired. Enter your email address for a new one.</p>
+        {% include "account/recover_form.html" %}
+    </section>
+{% endblock %}

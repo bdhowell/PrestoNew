@@ -1,0 +1,16 @@
+{% extends "page.html" %}
+{% block title %}Help · {{ app_name() }}{% endblock %}
+{% block content %}
+    <section class="panel">
+        <h1>Help</h1>
+        <p>
+            Stuck, confused, or just not sure what comes next? That happens to every
+            poster-maker, and Wikkit is here to help. Ask Wikkit in the chat, or choose one of these:
+        </p>
+        <ul class="links">
+            <li><a href="/account">Your account</a></li>
+            <li><a href="/account/recover">Reset your password</a></li>
+            <li><a href="mailto:{{ support_email }}">Contact support</a></li>
+        </ul>
+    </section>
+{% endblock %}

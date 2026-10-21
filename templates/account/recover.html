@@ -1,0 +1,8 @@
+{% extends "account/base.html" %}
+{% block title %}Recover password · {{ app_name() }}{% endblock %}
+{% block content %}
+    <section class="panel">
+        <h1>Recover your password</h1>
+        {% include "account/recover_form.html" %}
+    </section>
+{% endblock %}

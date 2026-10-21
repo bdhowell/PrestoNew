@@ -1,0 +1,19 @@
+window.registerWikkitCommands({
+    commands: {
+        // Remembers the visitor's name in a cookie so Wikkit can greet them when they return.
+        "remember-name": {
+            does: async (data) => {
+                const response = await fetch("/wikkit/name", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "same-origin",
+                    body: JSON.stringify({ name: data?.name ?? "" }),
+                });
+                if (!response.ok) {
+                    throw new Error(`Could not remember name: ${response.status}`);
+                }
+            },
+            data: null,
+        },
+    },
+});

@@ -37,10 +37,10 @@ def _redirect(url: str) -> Handler:
 
 GENERAL_HANDLERS: Handlers = MappingProxyType({
     "sign-up": _redirect("/account/register"),
-    "sign-in": _redirect("/acccount/signin"),
+    "sign-in": _redirect("/account/signin"),
     "sign-out": _redirect("/account/signout"),
     "product-pricing": _redirect("/wikkit/pricing"),
-    "reset-password": _redirect("/account/reset"),
+    "reset-password": _redirect("/account/recover"),
     "help": _redirect("/wikkit/help"),
     "create-poster": _redirect("/poster/create"),
     "purchase": None,

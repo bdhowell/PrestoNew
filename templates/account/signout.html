@@ -1,0 +1,9 @@
+{% extends "account/base.html" %}
+{% block title %}Signed out · {{ app_name() }}{% endblock %}
+{% block content %}
+    <section class="panel">
+        <h1>You&rsquo;re signed out</h1>
+        <p>You have been signed out of {{ app_name() }}.</p>
+        <p><a class="button" href="/">Back to {{ app_name() }}</a></p>
+    </section>
+{% endblock %}

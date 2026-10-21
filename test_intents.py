@@ -246,10 +246,10 @@ class IntentStackTests(unittest.TestCase):
     def test_default_redirects_and_null_handlers(self) -> None:
         urls = {
             "sign-up": "/account/register",
-            "sign-in": "/acccount/signin",
+            "sign-in": "/account/signin",
             "sign-out": "/account/signout",
             "product-pricing": "/wikkit/pricing",
-            "reset-password": "/account/reset",
+            "reset-password": "/account/recover",
             "help": "/wikkit/help",
             "create-poster": "/poster/create",
         }

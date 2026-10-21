@@ -1,10 +1,12 @@
 """Conversation-local Wikkit protocol, server sends, and response waiting."""
 
 import asyncio
+import html
+import json
 import logging
 import random
 import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 
 from fastapi import WebSocket, WebSocketDisconnect, responses
@@ -23,8 +25,9 @@ TOO_LONG_MESSAGE = (
 
 logger = logging.getLogger(__name__)
 type ClientReply = dict[str, object]
+type Workflow = Callable[["Chatbot"], Awaitable[None]]
 _SUBSTITUTION_PATTERN = re.compile(
-    r"\{\{\s*((?:user|poster|session)(?:\.[A-Za-z][A-Za-z0-9_]*)+)\s*\}\}"
+    r"\{\{\s*((?:user|poster|session)(?:\.[A-Za-z][A-Za-z0-9_-]*)+)\s*\}\}"
 )
 
 
@@ -71,6 +74,19 @@ def client_reply(result: IntentDispatchResult[object] | None) -> ClientReply:
     return {"say": UNHANDLED_MESSAGE}
 
 
+def page_event(message: str) -> str | None:
+    """Return the page slug from a `{"page": slug}` control message, if it is one."""
+    if not message.startswith("{"):
+        return None
+    try:
+        data = json.loads(message)
+    except ValueError:
+        return None
+    if isinstance(data, dict) and set(data) == {"page"} and isinstance(data["page"], str):
+        return data["page"]
+    return None
+
+
 def respond(stack: IntentStack, message: str) -> ClientReply:
     if len(message) > MAX_MESSAGE_LENGTH:
         return {"say": TOO_LONG_MESSAGE}
@@ -84,7 +100,10 @@ def respond(stack: IntentStack, message: str) -> ClientReply:
 class Chatbot:
     """One instance per socket; retain it to send unsolicited server messages."""
 
-    def __init__(self, websocket: WebSocket, memory: Memory | None = None) -> None:
+    def __init__(
+        self, websocket: WebSocket, memory: Memory | None = None,
+        workflows: Mapping[str, Workflow] | None = None,
+    ) -> None:
         self.websocket = websocket
         self.memory = memory if memory is not None else Memory()
         self.short_term_memory = self.memory.short_term_memory
@@ -95,9 +114,14 @@ class Chatbot:
         self._send_lock = asyncio.Lock()
         self._response: asyncio.Future[str] | None = None
         self._closed = False
+        self.workflows = dict(workflows or {})
+        self._workflow: asyncio.Task[None] | None = None
 
     def substitute(self, text: str) -> str:
-        """Replace public state fields, leaving unavailable values unchanged."""
+        """Replace public state fields with HTML-escaped values.
+
+        Unavailable values are left unchanged.
+        """
         def replace(match: re.Match[str]) -> str:
             root, *fields = match.group(1).split(".")
             value: object = getattr(self.websocket.state, root, None)
@@ -109,7 +133,7 @@ class Chatbot:
             if value is None or callable(value):
                 logger.warning("Unavailable chatbot placeholder: %s", match.group(0))
                 return match.group(0)
-            return str(value)
+            return html.escape(str(value))
 
         return _SUBSTITUTION_PATTERN.sub(replace, text)
 
@@ -150,6 +174,27 @@ class Chatbot:
         """Override for async conversation workflows that request responses."""
         await self.send(await run_in_threadpool(respond, self.stack, message))
 
+    async def open_page(self, page: str) -> None:
+        """Cancel the previous page's workflow, then start this page's, if any."""
+        previous, self._workflow = self._workflow, None
+        if previous is not None and not previous.done():
+            previous.cancel()
+            with suppress(asyncio.CancelledError):
+                await previous
+        workflow = self.workflows.get(page)
+        if workflow is not None:
+            self._workflow = asyncio.create_task(self._run_workflow(workflow))
+
+    async def _run_workflow(self, workflow: Workflow) -> None:
+        try:
+            await workflow(self)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Wikkit page workflow failed")
+            with suppress(RuntimeError):
+                await self.send({"say": FAILURE_MESSAGE})
+
     async def _dispatch(self) -> None:
         while True:
             message = await self._messages.get()
@@ -173,7 +218,10 @@ class Chatbot:
             message = text.strip()
             if not message:
                 continue
-            if len(message) > MAX_MESSAGE_LENGTH:
+            page = page_event(message)
+            if page is not None:
+                await self.open_page(page)
+            elif len(message) > MAX_MESSAGE_LENGTH:
                 reply: ClientReply = {"say": TOO_LONG_MESSAGE}
                 if self._response is not None and not self._response.done():
                     reply["command"] = {"does": "request-response"}
@@ -197,8 +245,11 @@ class Chatbot:
             self._closed = True
             if self._response is not None:
                 self._response.cancel()
-            for task in (receiver, worker):
+            tasks = [receiver, worker]
+            if self._workflow is not None:
+                tasks.append(self._workflow)
+            for task in tasks:
                 task.cancel()
-            for task in (receiver, worker):
+            for task in tasks:
                 with suppress(asyncio.CancelledError):
                     await task

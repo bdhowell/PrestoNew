@@ -12,13 +12,18 @@ from fastapi.staticfiles import StaticFiles
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-from routers import wikkit  # noqa: E402  (loaded after .env so routers see its settings)
+from routers import account, wikkit  # noqa: E402  (loaded after .env so routers see its settings)
+from identity import identity_context  # noqa: E402
 from memory import memory_context  # noqa: E402
 from sessions import PostgresSessionMiddleware, configured_session_store  # noqa: E402
 
 app = FastAPI(
     title="PrestoPresentations",
-    dependencies=[Depends(memory_context, scope="function")],
+    # identity_context installs the trusted user_id that memory_context relies on.
+    dependencies=[
+        Depends(identity_context),
+        Depends(memory_context, scope="function"),
+    ],
 )
 secure_cookie = os.environ.get("SESSION_COOKIE_SECURE", "true")
 if secure_cookie not in ("true", "false"):
@@ -30,8 +35,9 @@ app.add_middleware(
 mimetypes.add_type("text/javascript", ".does")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.include_router(wikkit.router)
+app.include_router(account.router)
 
 
 @app.get("/", include_in_schema=False)
 async def home() -> RedirectResponse:
-    return RedirectResponse("/wikkit", status_code=307)
+    return RedirectResponse("/wikkit/magic", status_code=307)
