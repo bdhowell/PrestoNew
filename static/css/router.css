@@ -31,6 +31,18 @@ body.wikkit {
     background: rgb(24 20 48 / 94%);
     box-shadow: 0 6px 24px rgb(0 0 0 / 45%);
     color: #ddd;
+    transition:
+        opacity var(--chat-window-transition, 330ms) ease,
+        visibility 0s linear;
+}
+
+#chatbot.chat-hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition:
+        opacity var(--chat-window-transition, 330ms) ease,
+        visibility 0s linear var(--chat-window-transition, 330ms);
 }
 
 #chatbot .chatbot-handle {

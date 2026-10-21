@@ -44,8 +44,15 @@ class WikkitPageTests(unittest.TestCase):
         self.assertIn('id="chatinput" contenteditable="plaintext-only"', response.text)
         self.assertIn('data-src="/wikkit/magic"', response.text)
         self.assertIn('data-socket="/wikkit/ws"', response.text)
+        self.assertIn("--chat-window-transition: 330ms", response.text)
         self.assertIn('src="/static/javascript/wikkit.js"', response.text)
         self.assertIn('href="/static/css/router.css"', response.text)
+
+    def test_chat_window_transition_uses_configured_duration(self) -> None:
+        with patch.dict(os.environ, {"CHAT_WINDOW_TRANSITION": "125"}):
+            response = self.client.get("/wikkit")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("--chat-window-transition: 125ms", response.text)
 
     def test_authenticated_user_sees_sign_out_link(self) -> None:
         request = wikkit.Request({
@@ -176,6 +183,9 @@ class WikkitPageTests(unittest.TestCase):
         self.assertEqual(stylesheet.status_code, 200)
         self.assertIn("text/css", stylesheet.headers["content-type"])
         self.assertIn("#chatbot {", stylesheet.text)
+        self.assertIn("#chatbot.chat-hidden {", stylesheet.text)
+        self.assertIn('"hide-chat"', script.text)
+        self.assertIn('"show-chat"', script.text)
 
 
 class WikkitReplyTests(unittest.TestCase):

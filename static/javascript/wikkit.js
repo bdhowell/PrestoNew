@@ -110,6 +110,16 @@
             ["request", requestResponse],
             ["request-response", requestResponse],
             ["clear-chat", clearChat],
+            ["hide-chat", () => {
+                chatbot.classList.add("chat-hidden");
+                chatbot.inert = true;
+                chatbot.setAttribute("aria-hidden", "true");
+            }],
+            ["show-chat", () => {
+                chatbot.inert = false;
+                chatbot.removeAttribute("aria-hidden");
+                chatbot.classList.remove("chat-hidden");
+            }],
         ]);
 
         const scheme = location.protocol === "https:" ? "wss:" : "ws:";
