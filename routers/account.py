@@ -1,6 +1,7 @@
 """Account registration, confirmation, sign-in/out, password recovery, and deletion."""
 
 import html
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ import mailer
 import users
 from routers.wikkit import read_json, render_page
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/account", tags=["account"])
 
 MIN_PASSWORD_LENGTH = 8
