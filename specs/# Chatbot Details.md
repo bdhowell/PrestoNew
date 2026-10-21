@@ -118,6 +118,9 @@ AJAX replies also include a boolean `signed_in`; the account client calls
 `window.wikkit.setSignedIn(...)` before redirecting, so the menu updates even
 if the destination page cannot load. Sign out clears the server-side session
 and its page reports `data-signed-in="false"` to restore the Sign in link.
+If an already-open shell lacks `setSignedIn`, the account client posts the
+destination to `/wikkit` at the top level to refresh the shell and its menu
+without repeating the successful account request.
 A page opened directly at top level posts its path to
 `/wikkit` so it reopens inside the shell, so a top-level GET is loaded twice;
 single-use links (such as account confirmation) redirect to a token-free page
