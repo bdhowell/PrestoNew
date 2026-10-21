@@ -73,6 +73,7 @@ def _shell(request: Request, url: str | None) -> HTMLResponse:
             "url": frame_url(url),
             "socket_path": SOCKET_PATH,
             "chat_window_transition_ms": chat_window_transition_ms(),
+            "chat_input_transition_ms": chat_input_transition_ms(),
             "page_name": "wikkit",
         },
     )
@@ -82,6 +83,13 @@ def chat_window_transition_ms() -> int:
     duration = int(os.environ.get("CHAT_WINDOW_TRANSITION", "330"))
     if duration < 0:
         raise ValueError("CHAT_WINDOW_TRANSITION must be non-negative.")
+    return duration
+
+
+def chat_input_transition_ms() -> int:
+    duration = int(os.environ.get("CHAT_INPUT_TRANSITION", "500"))
+    if duration < 0:
+        raise ValueError("CHAT_INPUT_TRANSITION must be non-negative.")
     return duration
 
 

@@ -95,6 +95,33 @@
             chatlog.innerHTML = "";
         }
 
+        function hideChat() {
+            chatbot.classList.add("chat-hidden");
+            chatbot.inert = true;
+            chatbot.setAttribute("aria-hidden", "true");
+        }
+
+        function showChat() {
+            chatbot.inert = false;
+            chatbot.removeAttribute("aria-hidden");
+            chatbot.classList.remove("chat-hidden");
+        }
+
+        function closeInput() {
+            if (document.activeElement === chatinput) {
+                chatinput.blur();
+            }
+            chatinput.inert = true;
+            chatinput.setAttribute("aria-hidden", "true");
+            chatbot.classList.add("input-closed");
+        }
+
+        function openInput() {
+            chatinput.inert = false;
+            chatinput.removeAttribute("aria-hidden");
+            chatbot.classList.remove("input-closed");
+        }
+
         const intrinsicCommands = new Map([
             ["redirect", (payload) => {
                 if (typeof payload !== "string") {
@@ -110,15 +137,17 @@
             ["request", requestResponse],
             ["request-response", requestResponse],
             ["clear-chat", clearChat],
-            ["hide-chat", () => {
-                chatbot.classList.add("chat-hidden");
-                chatbot.inert = true;
-                chatbot.setAttribute("aria-hidden", "true");
+            ["hide-chat", hideChat],
+            ["show-chat", showChat],
+            ["close-input", closeInput],
+            ["open-input", openInput],
+            ["hide-close", () => {
+                hideChat();
+                closeInput();
             }],
-            ["show-chat", () => {
-                chatbot.inert = false;
-                chatbot.removeAttribute("aria-hidden");
-                chatbot.classList.remove("chat-hidden");
+            ["show-open", () => {
+                showChat();
+                openInput();
             }],
         ]);
 

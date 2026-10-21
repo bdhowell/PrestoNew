@@ -16,7 +16,7 @@
     {% include "menu.html" %}
     <iframe id="wikkit-frame" title="Wikkit page" data-src="{{ url }}"></iframe>
     <section id="chatbot" aria-label="Wikkit chatbot" data-socket="{{ socket_path }}"
-             style="--chat-window-transition: {{ chat_window_transition_ms }}ms">
+             style="--chat-window-transition: {{ chat_window_transition_ms }}ms; --chat-input-transition: {{ chat_input_transition_ms }}ms">
         <header class="chatbot-handle">Wikkit</header>
         <div id="chatlog" role="log" aria-live="polite"></div>
         <div id="chatinput" contenteditable="plaintext-only" role="textbox"
