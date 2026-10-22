@@ -1,11 +1,11 @@
 """PostgreSQL user accounts, password hashing, and signed time-limited links."""
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import os
 import secrets
-import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -98,7 +98,7 @@ def check_link(purpose: str, user: User | None, token: str, max_age: int) -> boo
 
 
 class UserStore:
-    """Synchronous store; call from a threadpool in async code."""
+    """Async PostgreSQL store for user accounts."""
 
     _COLUMNS = "uid, name, username, email, password, recovery, verified"
 
@@ -107,27 +107,31 @@ class UserStore:
         self.schema = schema
         self.table = sql.Identifier(schema, "user")
         self._initialized = False
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
-    def _connect(self) -> psycopg.Connection:
+    async def _connect(self) -> psycopg.AsyncConnection:
         dsn = os.environ.get(self.database_env)
         if not dsn:
             raise RuntimeError(f"{self.database_env} is required for user accounts")
-        connection = psycopg.connect(dsn)
-        self._ensure_table(connection)
+        connection = await psycopg.AsyncConnection.connect(dsn)
+        try:
+            await self._ensure_table(connection)
+        except Exception:
+            await connection.close()
+            raise
         return connection
 
-    def _ensure_table(self, connection: psycopg.Connection) -> None:
-        with self._lock:
+    async def _ensure_table(self, connection: psycopg.AsyncConnection) -> None:
+        async with self._lock:
             if self._initialized:
                 return
-            with connection.transaction():
-                connection.execute(
+            async with connection.transaction():
+                await connection.execute(
                     "SELECT pg_advisory_xact_lock(hashtext(%s))",
                     (f"presto:{self.schema}.user",),
                 )
                 # Mirrors the "user" table in schema/schema.sql.
-                connection.execute(sql.SQL(
+                await connection.execute(sql.SQL(
                     """
                     CREATE TABLE IF NOT EXISTS {} (
                         uid         SERIAL PRIMARY KEY,
@@ -146,9 +150,11 @@ class UserStore:
                 ).format(self.table))
             self._initialized = True
 
-    def _one(self, query: sql.Composable, params: tuple[object, ...]) -> User | None:
-        with self._connect() as connection:
-            row = connection.execute(query, params).fetchone()
+    async def _one(self, query: sql.Composable, params: tuple[object, ...]) -> User | None:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(query, params)
+            row = await cursor.fetchone()
         return User(*row) if row is not None else None
 
     def _select(self, where: str) -> sql.Composed:
@@ -162,19 +168,21 @@ class UserStore:
             + " RETURNING {}"
         ).format(self.table, sql.SQL(self._COLUMNS))
 
-    def get(self, uid: int) -> User | None:
-        return self._one(self._select("uid = %s"), (uid,))
+    async def get(self, uid: int) -> User | None:
+        return await self._one(self._select("uid = %s"), (uid,))
 
-    def get_by_email(self, email: str) -> User | None:
-        return self._one(self._select("lower(email) = lower(%s)"), (email,))
+    async def get_by_email(self, email: str) -> User | None:
+        return await self._one(self._select("lower(email) = lower(%s)"), (email,))
 
-    def conflicts(self, username: str, email: str) -> set[str]:
+    async def conflicts(self, username: str, email: str) -> set[str]:
         query = sql.SQL(
             "SELECT lower(username) = lower(%s), lower(email) = lower(%s) FROM {} "
             "WHERE lower(username) = lower(%s) OR lower(email) = lower(%s)"
         ).format(self.table)
-        with self._connect() as connection:
-            rows = connection.execute(query, (username, email, username, email)).fetchall()
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(query, (username, email, username, email))
+            rows = await cursor.fetchall()
         fields = set()
         for username_taken, email_taken in rows:
             if username_taken:
@@ -183,7 +191,7 @@ class UserStore:
                 fields.add("email")
         return fields
 
-    def create(self, name: str, username: str, email: str, password_hash: str) -> User:
+    async def create(self, name: str, username: str, email: str, password_hash: str) -> User:
         """Create an unverified user with a pending confirmation timestamp."""
         query = sql.SQL(
             "INSERT INTO {} (name, username, email, password, pwd_updated, recovery, "
@@ -191,19 +199,21 @@ class UserStore:
             "RETURNING {}"
         ).format(self.table, sql.SQL(self._COLUMNS))
         try:
-            user = self._one(query, (name, username, email, password_hash))
+            user = await self._one(query, (name, username, email, password_hash))
         except psycopg.errors.UniqueViolation:
-            raise DuplicateUserError(self.conflicts(username, email) or {"username"}) from None
+            raise DuplicateUserError(
+                await self.conflicts(username, email) or {"username"}
+            ) from None
         assert user is not None
         return user
 
-    def start_recovery(self, uid: int) -> User | None:
+    async def start_recovery(self, uid: int) -> User | None:
         """Stamp a new confirmation/recovery time, superseding older links."""
-        return self._one(self._update("recovery = now()", "uid = %s"), (uid,))
+        return await self._one(self._update("recovery = now()", "uid = %s"), (uid,))
 
-    def verify(self, uid: int, recovery: datetime) -> User | None:
+    async def verify(self, uid: int, recovery: datetime) -> User | None:
         """Consume a confirmation link once; returns None if already consumed."""
-        return self._one(
+        return await self._one(
             self._update(
                 "verified = COALESCE(verified, now()), recovery = NULL",
                 "uid = %s AND recovery = %s",
@@ -211,7 +221,7 @@ class UserStore:
             (uid, recovery),
         )
 
-    def set_password(
+    async def set_password(
         self, uid: int, password_hash: str, recovery: datetime | None = None
     ) -> User | None:
         """Change a password; with `recovery`, consume that recovery link once.
@@ -222,28 +232,31 @@ class UserStore:
             query = self._update(
                 "password = %s, pwd_updated = now(), recovery = NULL", "uid = %s"
             )
-            return self._one(query, (password_hash, uid))
+            return await self._one(query, (password_hash, uid))
         query = self._update(
             "password = %s, pwd_updated = now(), recovery = NULL, "
             "verified = COALESCE(verified, now())",
             "uid = %s AND recovery = %s",
         )
-        return self._one(query, (password_hash, uid, recovery))
+        return await self._one(query, (password_hash, uid, recovery))
 
-    def delete(self, uid: int) -> bool:
+    async def delete(self, uid: int) -> bool:
         """Delete a user and their chatbot user memory, whose foreign key doesn't cascade."""
         memory_table = sql.Identifier(self.schema, "user_memory")  # see memory.Memory
-        with self._connect() as connection, connection.transaction():
-            exists = connection.execute(
+        connection = await self._connect()
+        async with connection, connection.transaction():
+            cursor = await connection.execute(
                 "SELECT to_regclass(%s) IS NOT NULL",
                 (memory_table.as_string(connection),),
-            ).fetchone()
+            )
+            exists = await cursor.fetchone()
             if exists is not None and exists[0]:
-                connection.execute(
+                await connection.execute(
                     sql.SQL("DELETE FROM {} WHERE uid = %s").format(memory_table), (uid,)
                 )
             query = sql.SQL("DELETE FROM {} WHERE uid = %s").format(self.table)
-            return connection.execute(query, (uid,)).rowcount == 1
+            cursor = await connection.execute(query, (uid,))
+            return cursor.rowcount == 1
 
 
 _store: UserStore | None = None

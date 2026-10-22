@@ -1,5 +1,6 @@
 """Account registration, confirmation, sign-in/out, password recovery, and deletion."""
 
+import asyncio
 import html
 import logging
 import os
@@ -8,7 +9,6 @@ from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
-from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 import identity
@@ -112,7 +112,7 @@ async def _send_confirmation(request: Request, user: users.User) -> None:
         uid=user.uid, token=users.link_token(users.CONFIRMATION_PURPOSE, user),
     )
     app_name = identity.application_name()
-    await run_in_threadpool(
+    await asyncio.to_thread(
         mailer.send_email, user.email, f"Confirm your {app_name} account",
         f"Hello {user.name},\n\n"
         f"Please confirm your {app_name} account by opening this link:\n\n{link}\n\n"
@@ -160,15 +160,14 @@ async def register(request: Request) -> JSONResponse:
             False, "<p>Please correct the highlighted fields.</p>", errors=errors, status_code=422
         )
     store = users.store()
-    taken = await run_in_threadpool(store.conflicts, username, email)
+    taken = await store.conflicts(username, email)
     if not taken:
         name = identity.cookie_name(request)
         if name is None or name == identity.DEFAULT_NAME:
             name = username
         try:
-            user = await run_in_threadpool(
-                store.create, name, username, email, users.hash_password(password)
-            )
+            password_hash = await asyncio.to_thread(users.hash_password, password)
+            user = await store.create(name, username, email, password_hash)
         except users.DuplicateUserError as error:
             taken = error.fields
     if taken:
@@ -201,17 +200,17 @@ async def confirmation(request: Request, uid: int = 0, token: str = "") -> Respo
     if uid == 0 and not token:
         # Emailed links redirect here once used, so reloading never spends the link twice.
         user_id = getattr(request.state, "user_id", None)
-        user = await run_in_threadpool(store.get, user_id) if user_id is not None else None
+        user = await store.get(user_id) if user_id is not None else None
         if user is None:
             return RedirectResponse("/account/signin", status_code=303)
         return _confirmed_page(request, user)
-    user = await run_in_threadpool(store.get, uid) if uid > 0 else None
+    user = await store.get(uid) if uid > 0 else None
     confirmed = None
     if user is not None and users.check_link(
         users.CONFIRMATION_PURPOSE, user, token, confirmation_max_age()
     ):
         assert user.recovery is not None
-        confirmed = await run_in_threadpool(store.verify, user.uid, user.recovery)
+        confirmed = await store.verify(user.uid, user.recovery)
     if confirmed is None:
         says = """
 <p>
@@ -281,13 +280,13 @@ async def validate(request: Request) -> JSONResponse:
     if not _sessions_available(request):
         return _reply(False, SESSIONS_UNAVAILABLE, status_code=503)
     email, password = _text(data, "email"), _password(data)
-    user = await run_in_threadpool(users.store().get_by_email, email) if email else None
-    valid = await run_in_threadpool(
+    user = await users.store().get_by_email(email) if email else None
+    valid = await asyncio.to_thread(
         users.verify_password, password[:MAX_PASSWORD_LENGTH],
         user.password if user is not None else None,
     )
     if user is not None and valid and user.verified is None:
-        pending = await run_in_threadpool(users.store().start_recovery, user.uid)
+        pending = await users.store().start_recovery(user.uid)
         if pending is not None:
             await _send_confirmation(request, pending)
         says = f"""
@@ -375,16 +374,16 @@ async def recover(request: Request) -> JSONResponse:
             errors={"email": "Please enter a valid email address."},
         )
     store = users.store()
-    user = await run_in_threadpool(store.get_by_email, email)
+    user = await store.get_by_email(email)
     if user is not None:
-        user = await run_in_threadpool(store.start_recovery, user.uid)
+        user = await store.start_recovery(user.uid)
     if user is not None:
         link = _link(
             request, "/account/recovered",
             uid=user.uid, token=users.link_token(users.RECOVERY_PURPOSE, user),
         )
         app_name = identity.application_name()
-        await run_in_threadpool(
+        await asyncio.to_thread(
             mailer.send_email, user.email, f"Reset your {app_name} password",
             f"Hello {user.name},\n\n"
             f"Open this link to choose a new {app_name} password:\n\n{link}\n\n"
@@ -404,7 +403,7 @@ Please check your email.
 
 @router.get("/recovered", response_class=HTMLResponse)
 async def recovered(request: Request, uid: int = 0, token: str = "") -> Response:
-    user = await run_in_threadpool(users.store().get, uid) if uid > 0 else None
+    user = await users.store().get(uid) if uid > 0 else None
     data = identity.session(request)
     if (
         data is not None and user is not None and user.recovery is not None
@@ -462,9 +461,8 @@ async def change_password(request: Request) -> JSONResponse:
     grant = _recovery_grant(request)
     if grant is not None:
         uid, recovery = grant
-        user = await run_in_threadpool(
-            store.set_password, uid, users.hash_password(password), recovery
-        )
+        password_hash = await asyncio.to_thread(users.hash_password, password)
+        user = await store.set_password(uid, password_hash, recovery)
         session = identity.session(request)
         assert session is not None
         session.pop(RECOVERY_GRANT, None)
@@ -478,8 +476,8 @@ Please <a href="/account/recover">request a new one</a>.
             return _reply(False, says, status_code=409)
         identity.sign_in(request, user)
     elif _signed_in(request):
-        current = await run_in_threadpool(store.get, request.state.user_id)
-        if current is None or not await run_in_threadpool(
+        current = await store.get(request.state.user_id)
+        if current is None or not await asyncio.to_thread(
             users.verify_password, _password(data, "current_password")[:MAX_PASSWORD_LENGTH],
             current.password,
         ):
@@ -488,7 +486,8 @@ Please <a href="/account/recover">request a new one</a>.
                 False, f"<p>I&rsquo;m sorry, {identity.display_name(request)}. {message}</p>",
                 errors={"current_password": message}, status_code=403,
             )
-        await run_in_threadpool(store.set_password, current.uid, users.hash_password(password))
+        password_hash = await asyncio.to_thread(users.hash_password, password)
+        await store.set_password(current.uid, password_hash)
     else:
         return _reply(
             False, '<p>Please <a href="/account/signin">sign in</a> first.</p>', status_code=401
@@ -525,10 +524,10 @@ async def delete(request: Request) -> JSONResponse:
             False, '<p>Please <a href="/account/signin">sign in</a> first.</p>', status_code=401
         )
     store = users.store()
-    user = await run_in_threadpool(store.get, request.state.user_id)
+    user = await store.get(request.state.user_id)
     if (
         user is None or _text(data, "email").lower() != user.email.lower()
-        or not await run_in_threadpool(
+        or not await asyncio.to_thread(
             users.verify_password, _password(data)[:MAX_PASSWORD_LENGTH], user.password
         )
     ):
@@ -539,7 +538,7 @@ async def delete(request: Request) -> JSONResponse:
             status_code=403,
         )
     name = identity.display_name(request)
-    await run_in_threadpool(store.delete, user.uid)
+    await store.delete(user.uid)
     identity.sign_out(request)
     says = f"""
 <p>

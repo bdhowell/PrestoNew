@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import sys
@@ -35,6 +36,9 @@ NO_CACHE = "-n" in sys.argv or "--no-cache" in sys.argv
 CLEAR_CACHE = "-c" in sys.argv or "--clear-cache" in sys.argv
 NO_DELAY = "-d" in sys.argv or "--no-delay" in sys.argv 
 
+_cache_init_lock = asyncio.Lock()
+_cache_initialized = False
+
 
 def _cache_key(request: dict[str, Any]) -> str:
     payload = json.dumps(request, sort_keys=True, default=str)
@@ -67,10 +71,18 @@ def _init_cache() -> None:
         clear_cache()
     prune_expired_cache()
 
-_init_cache()
+
+async def _initialize_cache() -> None:
+    global _cache_initialized
+    if _cache_initialized:
+        return
+    async with _cache_init_lock:
+        if not _cache_initialized:
+            await asyncio.to_thread(_init_cache)
+            _cache_initialized = True
 
 
-def interact_with_openai(
+async def interact_with_openai(
     prompt: str,
     schema: dict[str, object] | None = None,
     model: str = "gpt-5.6-terra",
@@ -98,14 +110,21 @@ def interact_with_openai(
     cache_key = _cache_key(request)
     cache_file = _cache_path(cache_key)
 
-    if not NO_CACHE and cache_file.exists():
-        return json.loads(cache_file.read_text(encoding="utf-8"))["output_text"]
+    await _initialize_cache()
+    if not NO_CACHE:
+        try:
+            cached = await asyncio.to_thread(cache_file.read_text, encoding="utf-8")
+        except FileNotFoundError:
+            pass
+        else:
+            return json.loads(cached)["output_text"]
 
-    client = openai.OpenAI()
-    response = client.responses.create(**request)
-    output_text = response.output_text.strip()
+    async with openai.AsyncOpenAI() as client:
+        response = await client.responses.create(**request)
+        output_text = response.output_text.strip()
 
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_file.write_text(json.dumps({"output_text": output_text}), encoding="utf-8")
+    await asyncio.to_thread(
+        cache_file.write_text, json.dumps({"output_text": output_text}), encoding="utf-8"
+    )
 
     return output_text

@@ -1,12 +1,12 @@
 import json
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import intents
 import llm
 
 
-class IntentStackTests(unittest.TestCase):
+class IntentStackTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.stack = intents.IntentStack()
 
@@ -79,12 +79,12 @@ class IntentStackTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.stack.push({}, examples)
 
-    def test_handler_lookup_falls_through_and_passes_arguments(self) -> None:
+    async def test_handler_lookup_falls_through_and_passes_arguments(self) -> None:
         handler = Mock(return_value={"done": True})
         self.stack.push({"help": handler})
         self.stack.push({"undo": None})
         classification = intents.IntentClassification("help", ["Ada"], "help Ada")
-        result = self.stack.handle_intent(classification)
+        result = await self.stack.handle_intent(classification)
         self.assertIsNotNone(result)
         assert result is not None
         self.assertEqual(result.intent, "help")
@@ -92,38 +92,49 @@ class IntentStackTests(unittest.TestCase):
         self.assertEqual(result.handler_result, {"done": True})
         handler.assert_called_once_with(["Ada"], "help Ada")
 
-    def test_none_handler_blocks_lower_handler(self) -> None:
+    async def test_none_handler_blocks_lower_handler(self) -> None:
         handler = Mock()
         self.stack.push({"help": handler})
         self.stack.push({"help": None})
         self.assertIsNone(
-            self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
+            await self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
         )
         handler.assert_not_called()
 
-    def test_callable_returning_none_still_returns_dispatch_result(self) -> None:
+    async def test_callable_returning_none_still_returns_dispatch_result(self) -> None:
         self.stack.push({"help": lambda entities, message: None})
-        result = self.stack.handle_intent(
+        result = await self.stack.handle_intent(
             intents.IntentClassification("help", [], "help")
         )
         self.assertIsNotNone(result)
         assert result is not None
         self.assertIsNone(result.handler_result)
 
-    def test_missing_handler_raises(self) -> None:
+    async def test_async_handler_is_awaited(self) -> None:
+        async def handler(entities: list[str], message: str) -> str:
+            return f"{entities[0]}: {message}"
+
+        self.stack.push({"help": handler})
+        result = await self.stack.handle_intent(
+            intents.IntentClassification("help", ["Ada"], "help Ada")
+        )
+        assert result is not None
+        self.assertEqual(result.handler_result, "Ada: help Ada")
+
+    async def test_missing_handler_raises(self) -> None:
         self.stack.push({}, {"custom": ["custom"]})
         with self.assertRaisesRegex(intents.MissingIntentHandlerError, "custom"):
-            self.stack.handle_intent(
+            await self.stack.handle_intent(
                 intents.IntentClassification("custom", [], "custom")
             )
 
-    def test_handler_errors_propagate(self) -> None:
+    async def test_handler_errors_propagate(self) -> None:
         self.stack.push({"help": Mock(side_effect=RuntimeError("handler failed"))})
         with self.assertRaisesRegex(RuntimeError, "handler failed"):
-            self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
+            await self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
 
-    @patch("intents.interact_with_openai")
-    def test_autopop_uses_examples_and_handler_before_removing_pair(
+    @patch("intents.interact_with_openai", new_callable=AsyncMock)
+    async def test_autopop_uses_examples_and_handler_before_removing_pair(
         self, classify: Mock
     ) -> None:
         classify.return_value = '{"intent": "custom", "entities": ["Ada"]}'
@@ -131,7 +142,7 @@ class IntentStackTests(unittest.TestCase):
         self.stack.push(
             {"custom": handler}, {"custom": ["temporary example"]}, autopop=True
         )
-        result = self.stack.dispatch("custom Ada")
+        result = await self.stack.dispatch("custom Ada")
         assert result is not None
         self.assertEqual(result.handler_result, "done")
         handler.assert_called_once_with(["Ada"], "custom Ada")
@@ -139,97 +150,101 @@ class IntentStackTests(unittest.TestCase):
         self.assertEqual(len(self.stack.handlers_stack), 1)
         self.assertNotIn("custom", self.stack.accumulated_examples())
 
-    def test_autopop_handles_none_and_fallthrough(self) -> None:
+    async def test_autopop_handles_none_and_fallthrough(self) -> None:
         for handlers in ({"help": None}, {}):
             with self.subTest(handlers=handlers):
                 self.stack.push(handlers, autopop=True)
-                result = self.stack.handle_intent(
+                result = await self.stack.handle_intent(
                     intents.IntentClassification("help", [], "help")
                 )
                 self.assertEqual(result is None, "help" in handlers)
                 self.assertEqual(len(self.stack.handlers_stack), 1)
                 self.assertEqual(len(self.stack.examples_stack), 1)
 
-    def test_autopop_consumes_only_original_top_layer(self) -> None:
+    async def test_autopop_consumes_only_original_top_layer(self) -> None:
         self.stack.push({"help": None}, autopop=True)
         self.stack.push({"undo": None}, autopop=True)
         classification = intents.IntentClassification("help", [], "help")
-        self.stack.handle_intent(classification)
+        await self.stack.handle_intent(classification)
         self.assertEqual(len(self.stack.handlers_stack), 2)
-        self.stack.handle_intent(classification)
+        await self.stack.handle_intent(classification)
         self.assertEqual(len(self.stack.handlers_stack), 1)
-        self.stack.handle_intent(classification)
+        await self.stack.handle_intent(classification)
         self.assertEqual(len(self.stack.handlers_stack), 1)
 
-    def test_non_autopop_top_preserves_lower_autopop_layer(self) -> None:
+    async def test_non_autopop_top_preserves_lower_autopop_layer(self) -> None:
         self.stack.push({"help": None}, autopop=True)
         self.stack.push({"undo": None})
-        self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
+        await self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
         self.assertEqual(len(self.stack.handlers_stack), 3)
         self.stack.pop()
-        self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
+        await self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
         self.assertEqual(len(self.stack.handlers_stack), 1)
 
-    def test_autopop_on_handler_error_and_missing_handler(self) -> None:
+    async def test_autopop_on_handler_error_and_missing_handler(self) -> None:
         self.stack.push(
             {"help": Mock(side_effect=RuntimeError("handler failed"))}, autopop=True
         )
         with self.assertRaisesRegex(RuntimeError, "handler failed"):
-            self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
+            await self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
         self.assertEqual(len(self.stack.handlers_stack), 1)
         self.stack.push({}, {"custom": ["custom"]}, autopop=True)
         with self.assertRaises(intents.MissingIntentHandlerError):
-            self.stack.handle_intent(
+            await self.stack.handle_intent(
                 intents.IntentClassification("custom", [], "custom")
             )
         self.assertEqual(len(self.stack.handlers_stack), 1)
         self.assertNotIn("custom", self.stack.accumulated_examples())
 
-    @patch("intents.interact_with_openai", side_effect=RuntimeError("LLM failed"))
-    def test_autopop_on_classifier_error(self, classify: Mock) -> None:
+    @patch(
+        "intents.interact_with_openai",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("LLM failed"),
+    )
+    async def test_autopop_on_classifier_error(self, classify: Mock) -> None:
         self.stack.push({"help": None}, autopop=True)
         with self.assertRaisesRegex(RuntimeError, "LLM failed"):
-            self.stack.dispatch("help")
+            await self.stack.dispatch("help")
         self.assertEqual(len(self.stack.handlers_stack), 1)
 
-    @patch("intents.interact_with_openai")
-    def test_separate_classification_preserves_handler_until_handled(
+    @patch("intents.interact_with_openai", new_callable=AsyncMock)
+    async def test_separate_classification_preserves_handler_until_handled(
         self, classify: Mock
     ) -> None:
         classify.return_value = '{"intent": "help", "entities": []}'
         self.stack.push({"help": None}, autopop=True)
-        classification = self.stack.identify_intent("help")
+        classification = await self.stack.identify_intent("help")
         self.assertEqual(len(self.stack.handlers_stack), 2)
-        self.assertIsNone(self.stack.handle_intent(classification))
+        self.assertIsNone(await self.stack.handle_intent(classification))
         self.assertEqual(len(self.stack.handlers_stack), 1)
 
-    def test_autopop_preserves_layer_pushed_by_handler(self) -> None:
+    async def test_autopop_preserves_layer_pushed_by_handler(self) -> None:
         def handler(entities: list[str], message: str) -> str:
             self.assertEqual(len(self.stack.handlers_stack), 2)
             self.stack.push({"undo": None}, autopop=True)
             return "done"
 
         self.stack.push({"help": handler}, {"help": ["temporary"]}, autopop=True)
-        self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
+        await self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
         self.assertEqual(len(self.stack.handlers_stack), 2)
         self.assertEqual(self.stack.handlers_stack[-1], {"undo": None})
         self.assertEqual(
             self.stack.accumulated_examples()["help"], intents.GENERAL_EXAMPLES["help"]
         )
-        self.stack.handle_intent(intents.IntentClassification("undo", [], "undo"))
+        await self.stack.handle_intent(intents.IntentClassification("undo", [], "undo"))
         self.assertEqual(len(self.stack.handlers_stack), 1)
 
-    def test_handler_can_manually_pop_without_consuming_another_layer(self) -> None:
+    async def test_handler_can_manually_pop_without_consuming_another_layer(self) -> None:
         self.stack.push({"help": None}, autopop=True)
 
         def handler(entities: list[str], message: str) -> None:
             self.stack.pop()
 
         self.stack.push({"help": handler}, autopop=True)
-        self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
+        await self.stack.handle_intent(intents.IntentClassification("help", [], "help"))
         self.assertEqual(len(self.stack.handlers_stack), 2)
 
-    def test_autopop_rejects_orphaning_new_handlers(self) -> None:
+    async def test_autopop_rejects_orphaning_new_handlers(self) -> None:
         def handler(entities: list[str], message: str) -> None:
             self.stack.push({"custom": None})
 
@@ -237,13 +252,13 @@ class IntentStackTests(unittest.TestCase):
             {"custom": handler}, {"custom": ["custom"]}, autopop=True
         )
         with self.assertRaisesRegex(ValueError, "custom"):
-            self.stack.handle_intent(
+            await self.stack.handle_intent(
                 intents.IntentClassification("custom", [], "custom")
             )
         self.assertEqual(len(self.stack.handlers_stack), 3)
         self.assertIn("custom", self.stack.accumulated_examples())
 
-    def test_default_redirects_and_null_handlers(self) -> None:
+    async def test_default_redirects_and_null_handlers(self) -> None:
         urls = {
             "sign-up": "/account/register",
             "sign-in": "/account/signin",
@@ -255,7 +270,7 @@ class IntentStackTests(unittest.TestCase):
         }
         for intent in intents.GENERAL_EXAMPLES:
             with self.subTest(intent=intent):
-                result = self.stack.handle_intent(
+                result = await self.stack.handle_intent(
                     intents.IntentClassification(intent, [], intent)
                 )
                 if intent in urls:
@@ -272,11 +287,11 @@ class IntentStackTests(unittest.TestCase):
             "intent": "help", "entities": ["Ada"], "message": 'help "Ada"',
         })
 
-    @patch("intents.interact_with_openai")
-    def test_classifier_uses_accumulated_examples_and_schema(self, classify: Mock) -> None:
+    @patch("intents.interact_with_openai", new_callable=AsyncMock)
+    async def test_classifier_uses_accumulated_examples_and_schema(self, classify: Mock) -> None:
         classify.return_value = '{"intent": "help", "entities": ["Ada"]}'
         self.stack.push({}, {"help": ["page assistance"]})
-        result = self.stack.dispatch("help Ada")
+        result = await self.stack.dispatch("help Ada")
         assert result is not None
         self.assertEqual(result.entities, ["Ada"])
         prompt = classify.call_args.args[0]
@@ -289,8 +304,8 @@ class IntentStackTests(unittest.TestCase):
             list(self.stack.accumulated_examples()),
         )
 
-    @patch("intents.interact_with_openai")
-    def test_invalid_classifier_responses_raise(self, classify: Mock) -> None:
+    @patch("intents.interact_with_openai", new_callable=AsyncMock)
+    async def test_invalid_classifier_responses_raise(self, classify: Mock) -> None:
         for response in (
             "[]", "null", "not json",
             '{"intent": "unknown", "entities": []}',
@@ -302,42 +317,45 @@ class IntentStackTests(unittest.TestCase):
                 classify.return_value = response
                 error = TypeError if response in ("[]", "null") else ValueError
                 with self.assertRaises(error):
-                    self.stack.dispatch("help")
+                    await self.stack.dispatch("help")
 
-    @patch("intents.interact_with_openai")
-    def test_blank_message_rejected_before_llm(self, classify: Mock) -> None:
+    @patch("intents.interact_with_openai", new_callable=AsyncMock)
+    async def test_blank_message_rejected_before_llm(self, classify: Mock) -> None:
         with self.assertRaisesRegex(ValueError, "message"):
-            self.stack.dispatch(" \n")
+            await self.stack.dispatch(" \n")
         classify.assert_not_called()
 
-    @patch("intents.interact_with_openai")
-    def test_single_map_api(self, classify: Mock) -> None:
+    @patch("intents.interact_with_openai", new_callable=AsyncMock)
+    async def test_single_map_api(self, classify: Mock) -> None:
         classify.return_value = '{"intent": "custom", "entities": ["Ada"]}'
         handler = Mock(return_value="done")
-        result = intents.identify_intent(
+        result = await intents.identify_intent(
             {"custom": ["custom"]}, {"custom": handler}, "custom Ada"
         )
         assert result is not None
         self.assertEqual(result.handler_result, "done")
         handler.assert_called_once_with(["Ada"], "custom Ada")
-        self.assertIsNone(intents.identify_intent(
+        self.assertIsNone(await intents.identify_intent(
             {"custom": ["custom"]}, {"custom": None}, "custom"
         ))
         with self.assertRaises(intents.MissingIntentHandlerError):
-            intents.identify_intent({"custom": ["custom"]}, {}, "custom")
+            await intents.identify_intent({"custom": ["custom"]}, {}, "custom")
         with self.assertRaisesRegex(ValueError, "at least one"):
-            intents.identify_intent({}, {}, "custom")
+            await intents.identify_intent({}, {}, "custom")
 
 
-class LLMClientTests(unittest.TestCase):
+class LLMClientTests(unittest.IsolatedAsyncioTestCase):
     @patch("llm.CACHE_DIR")
     @patch("llm.NO_CACHE", True)
-    @patch("llm.openai.OpenAI")
-    def test_classification_can_construct_openai_client(
+    @patch("llm.openai.AsyncOpenAI")
+    async def test_classification_can_construct_openai_client(
         self, client: Mock, cache_dir: Mock
     ) -> None:
-        client.return_value.responses.create.return_value.output_text = " response "
-        self.assertEqual(llm.interact_with_openai("test prompt"), "response")
+        client.return_value.__aenter__.return_value = client.return_value
+        client.return_value.responses.create = AsyncMock(
+            return_value=Mock(output_text=" response ")
+        )
+        self.assertEqual(await llm.interact_with_openai("test prompt"), "response")
         client.assert_called_once_with()
         cache_dir.mkdir.assert_called_once()
 

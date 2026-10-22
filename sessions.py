@@ -1,19 +1,18 @@
 """PostgreSQL server-side sessions; cookies contain only a random identifier."""
 
+import asyncio
 import hmac
 import logging
 import os
 import pickle
 import re
 import secrets
-import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 
 import psycopg
 from anyio import CancelScope
-from fastapi.concurrency import run_in_threadpool
 from starlette.datastructures import MutableHeaders
 from starlette.requests import HTTPConnection
 from starlette.responses import JSONResponse
@@ -49,23 +48,29 @@ class PostgresSessionStore:
         self.max_age = max_age
         self.database_env = database_env
         self._initialized = False
-        self._initialize_lock = threading.Lock()
+        self._initialize_lock = asyncio.Lock()
 
-    def _connect(self) -> psycopg.Connection:
+    async def _connect(self) -> psycopg.AsyncConnection:
         dsn = os.environ.get(self.database_env)
         if not dsn:
             raise RuntimeError(f"{self.database_env} is required for PostgreSQL sessions")
-        return psycopg.connect(dsn)
+        connection = await psycopg.AsyncConnection.connect(dsn)
+        try:
+            await self._ensure_table(connection)
+        except Exception:
+            await connection.close()
+            raise
+        return connection
 
-    def _ensure_table(self) -> None:
-        with self._initialize_lock:
+    async def _ensure_table(self, connection: psycopg.AsyncConnection) -> None:
+        async with self._initialize_lock:
             if self._initialized:
                 return
-            with self._connect() as connection:
-                connection.execute(
+            async with connection.transaction():
+                await connection.execute(
                     "SELECT pg_advisory_xact_lock(hashtext('presto:public.chatbot_session'))"
                 )
-                connection.execute(
+                await connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS public.chatbot_session (
                         session_id TEXT PRIMARY KEY,
@@ -75,7 +80,7 @@ class PostgresSessionStore:
                     )
                     """
                 )
-                connection.execute(
+                await connection.execute(
                     "CREATE INDEX IF NOT EXISTS chatbot_session_expires_at "
                     "ON public.chatbot_session (expires_at)"
                 )
@@ -95,16 +100,17 @@ class PostgresSessionStore:
             raise TypeError("persisted session must be a dictionary with string keys")
         return data, payload
 
-    def load(self, identifier: str | None) -> Session:
-        self._ensure_table()
-        with self._connect() as connection:
-            connection.execute("DELETE FROM public.chatbot_session WHERE expires_at <= now()")
+    async def load(self, identifier: str | None) -> Session:
+        connection = await self._connect()
+        async with connection:
+            await connection.execute("DELETE FROM public.chatbot_session WHERE expires_at <= now()")
             if identifier is not None and _SESSION_ID.fullmatch(identifier):
-                row = connection.execute(
+                cursor = await connection.execute(
                     "SELECT data, version, expires_at FROM public.chatbot_session "
                     "WHERE session_id = %s AND expires_at > now()",
                     (identifier,),
-                ).fetchone()
+                )
+                row = await cursor.fetchone()
                 if row is not None:
                     data, original = self._decode(identifier, bytes(row[0]))
                     return Session(identifier, data, row[1], row[2], original)
@@ -114,25 +120,27 @@ class PostgresSessionStore:
             pickle.dumps({}, protocol=pickle.HIGHEST_PROTOCOL),
         )
 
-    def save(self, session: Session) -> None:
+    async def save(self, session: Session) -> None:
         payload = pickle.dumps(session.data, protocol=pickle.HIGHEST_PROTOCOL)
         if session.version and payload == session.original:
             return
         encoded = self._encode(session.identifier, payload)
-        with self._connect() as connection:
+        connection = await self._connect()
+        async with connection:
             if session.version == 0:
-                row = connection.execute(
+                cursor = await connection.execute(
                     "INSERT INTO public.chatbot_session (session_id, data, version, expires_at) "
                     "VALUES (%s, %s, 1, %s) RETURNING version",
                     (session.identifier, encoded, session.expires_at),
-                ).fetchone()
+                )
             else:
-                row = connection.execute(
+                cursor = await connection.execute(
                     "UPDATE public.chatbot_session SET data = %s, version = version + 1 "
                     "WHERE session_id = %s AND version = %s AND expires_at > now() "
                     "RETURNING version",
                     (encoded, session.identifier, session.version),
-                ).fetchone()
+                )
+            row = await cursor.fetchone()
             if row is None:
                 raise SessionConflictError("session changed or expired; retry with a fresh request")
         session.version = row[0]
@@ -207,9 +215,7 @@ class PostgresSessionMiddleware:
             if origins and origins != [expected_origin]:
                 await send({"type": "websocket.close", "code": 1008, "reason": "Invalid origin"})
                 return
-        session = await run_in_threadpool(
-            store.load, connection.cookies.get(self.cookie_name)
-        )
+        session = await store.load(connection.cookies.get(self.cookie_name))
         if scope["type"] == "websocket" and session.version == 0:
             await send({
                 "type": "websocket.close", "code": 1008,
@@ -220,7 +226,7 @@ class PostgresSessionMiddleware:
 
         async def send_with_session(message: Message) -> None:
             if message["type"] == "http.response.start":
-                await run_in_threadpool(store.save, session)
+                await store.save(session)
                 headers = MutableHeaders(scope=message)
                 headers.append("set-cookie", self._cookie(session))
                 headers["cache-control"] = "no-store"
@@ -232,7 +238,7 @@ class PostgresSessionMiddleware:
                 await self.app(scope, receive, send_with_session)
             finally:
                 with CancelScope(shield=True):
-                    await run_in_threadpool(store.save, session)
+                    await store.save(session)
         else:
             try:
                 await self.app(scope, receive, send_with_session)

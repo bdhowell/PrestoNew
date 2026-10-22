@@ -2,7 +2,7 @@ import copy
 import datetime
 import json
 from common import add_the, pluralize
-from openai import interact_with_openai, SYSTEM_PROMPT
+from llm import interact_with_openai, SYSTEM_PROMPT
 from num2words import num2words
 from dateutil.parser import parse as date_parse
 
@@ -154,7 +154,7 @@ poster_criteria = {
     "units": "in",
 }
 
-def get_conference_info(criteria) -> list|None:
+async def get_conference_info(criteria) -> list|None:
         conferences_prompt = f"""
 ## INSTRUCTIONS
 Act as an agentic web researcher. Search the web, iteratively follow promising results, and cross-check details against authoritative conference or fair websites. 
@@ -185,7 +185,7 @@ Do not invent information. Use null when a poster requirement is not specified o
             },
         }
 
-        response = interact_with_openai(conferences_prompt, schema=conferences_response)
+        response = await interact_with_openai(conferences_prompt, schema=conferences_response)
         conferences = json.loads(response)["conferences"]
 
         past_conferences = []
@@ -236,7 +236,7 @@ Do not invent information. Use null when a poster requirement is not specified o
 
         return None
 
-def get_important_details(conference_info):
+async def get_important_details(conference_info):
     if conference_info['special_poster_attributes']:
         intersection_prompt = f"""
 {SYSTEM_PROMPT}
@@ -279,4 +279,6 @@ Here is an example:
             },
         }
 
-        return json.loads(interact_with_openai(intersection_prompt, schema=intersection_schema))
+        return json.loads(
+            await interact_with_openai(intersection_prompt, schema=intersection_schema)
+        )

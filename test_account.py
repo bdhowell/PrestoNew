@@ -1,9 +1,10 @@
+import asyncio
 import os
 import re
 import unittest
 from datetime import datetime, timedelta, timezone
 from html import unescape
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlsplit
 
 import psycopg
@@ -124,8 +125,9 @@ class AccountMenuTests(unittest.TestCase):
             7, "Ada", "ada", "ada@example.com", users.hash_password("analytical"),
             None, datetime.now(timezone.utc),
         )
-        store = patch.object(users, "store")
-        self.store = store.start().return_value
+        self.store = AsyncMock()
+        store = patch.object(users, "store", return_value=self.store)
+        store.start()
         self.addCleanup(store.stop)
         self.store.get.return_value = self.user
         self.store.get_by_email.return_value = self.user
@@ -215,7 +217,7 @@ class AccountFlowTests(unittest.TestCase):
         store = patch.object(users, "_store", users.UserStore())
         store.start()
         self.addCleanup(store.stop)
-        users.store()._connect().close()
+        asyncio.run(users.store().get(-1))
         with psycopg.connect(dsn) as connection:
             connection.execute('TRUNCATE "user" CASCADE')
         mailer.outbox.clear()
@@ -382,10 +384,12 @@ class AccountFlowTests(unittest.TestCase):
     def test_delete_requires_matching_credentials(self) -> None:
         self.register()
         self.confirm()
-        user = users.store().get_by_email("ada@example.com")
+        user = asyncio.run(users.store().get_by_email("ada@example.com"))
         assert user is not None
         # User memory rows must not block deletion.
-        KVStore("user_memory", "user", foreign_key_value=user.uid).set("color", "gold")
+        asyncio.run(
+            KVStore("user_memory", "user", foreign_key_value=user.uid).set("color", "gold")
+        )
         response = self.client.post("/account/delete", json={
             "email": "ada@example.com", "password": "wrong",
         })
@@ -396,7 +400,7 @@ class AccountFlowTests(unittest.TestCase):
         })
         self.assertTrue(response.json()["ok"])
         self.assertIn(f'{NAME_COOKIE}=""', response.headers["set-cookie"])
-        self.assertIsNone(users.store().get_by_email("ada@example.com"))
+        self.assertIsNone(asyncio.run(users.store().get_by_email("ada@example.com")))
         self.assertEqual(
             self.client.get("/account", follow_redirects=False).headers["location"],
             "/account/signin",

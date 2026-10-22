@@ -198,7 +198,7 @@ class WikkitPageTests(unittest.TestCase):
         self.assertIn("#chatbot.input-closed #chatinput {", stylesheet.text)
 
 
-class WikkitReplyTests(unittest.TestCase):
+class WikkitReplyTests(unittest.IsolatedAsyncioTestCase):
     def test_redirect_becomes_client_command(self) -> None:
         reply = chatbot.client_reply(dispatched({"type": "redirect", "url": "/wikkit/help"}))
         self.assertEqual(reply, {"command": {"does": "redirect", "payload": "/wikkit/help"}})
@@ -240,16 +240,19 @@ class WikkitReplyTests(unittest.TestCase):
             reply = chatbot.client_reply(dispatched("<b>raw</b>"))
         self.assertEqual(reply, {"say": chatbot.UNHANDLED_MESSAGE})
 
-    def test_dispatch_failure_tells_user(self) -> None:
+    async def test_dispatch_failure_tells_user(self) -> None:
         stack = chatbot.IntentStack()
         with patch.object(stack, "dispatch", side_effect=RuntimeError("down")):
             with self.assertLogs("wikkit", "ERROR"):
-                self.assertEqual(chatbot.respond(stack, "help"), {"say": chatbot.FAILURE_MESSAGE})
+                self.assertEqual(
+                    await chatbot.respond(stack, "help"),
+                    {"say": chatbot.FAILURE_MESSAGE},
+                )
 
-    def test_overlong_message_is_not_dispatched(self) -> None:
+    async def test_overlong_message_is_not_dispatched(self) -> None:
         stack = chatbot.IntentStack()
         with patch.object(stack, "dispatch") as dispatch:
-            reply = chatbot.respond(stack, "x" * (chatbot.MAX_MESSAGE_LENGTH + 1))
+            reply = await chatbot.respond(stack, "x" * (chatbot.MAX_MESSAGE_LENGTH + 1))
         dispatch.assert_not_called()
         self.assertEqual(reply, {"say": chatbot.TOO_LONG_MESSAGE})
 
@@ -262,7 +265,7 @@ class WikkitSocketTests(unittest.TestCase):
         stacks: list[chatbot.IntentStack] = []
         original_dispatch = chatbot.IntentStack.dispatch
 
-        def fake_dispatch(stack: chatbot.IntentStack, message: str):
+        async def fake_dispatch(stack: chatbot.IntentStack, message: str):
             stacks.append(stack)
             if message == "help me":
                 return dispatched({"type": "redirect", "url": "/wikkit/help"})

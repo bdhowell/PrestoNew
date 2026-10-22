@@ -1,16 +1,16 @@
 """Conversation-local intent classification and layered handler dispatch."""
 
+import asyncio
+import inspect
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TypeVar
 
 from llm import IntentDispatchResult, interact_with_openai
 
-Result = TypeVar("Result")
 type Examples = Mapping[str, Sequence[str]]
-type Handler = Callable[[list[str], str], object]
+type Handler = Callable[[list[str], str], object | Awaitable[object]]
 type Handlers = Mapping[str, Handler | None]
 
 GENERAL_EXAMPLES: Examples = MappingProxyType({
@@ -32,7 +32,10 @@ GENERAL_EXAMPLES: Examples = MappingProxyType({
 
 
 def _redirect(url: str) -> Handler:
-    return lambda _entities, _message: {"type": "redirect", "url": url}
+    async def redirect(_entities: list[str], _message: str) -> object:
+        return {"type": "redirect", "url": url}
+
+    return redirect
 
 
 GENERAL_HANDLERS: Handlers = MappingProxyType({
@@ -96,7 +99,7 @@ def _validate_handlers(intent_map: Handlers, examples: Examples) -> None:
             raise TypeError(f"handler for {intent!r} must be callable or None")
 
 
-def _classify(intents: Examples, message: str) -> IntentClassification:
+async def _classify(intents: Examples, message: str) -> IntentClassification:
     if not intents:
         raise ValueError("intents must contain at least one intent")
     if not message.strip():
@@ -130,16 +133,15 @@ def _classify(intents: Examples, message: str) -> IntentClassification:
         "required": ["intent", "entities"],
         "additionalProperties": False,
     }
-    result: object = json.loads(
-        interact_with_openai(
-            prompt,
-            schema=schema,
-            system_prompt=(
-                "You classify user messages by intent and extract named "
-                "entities. Follow the provided schema exactly."
-            ),
-        )
+    response = await interact_with_openai(
+        prompt,
+        schema=schema,
+        system_prompt=(
+            "You classify user messages by intent and extract named "
+            "entities. Follow the provided schema exactly."
+        ),
     )
+    result: object = json.loads(response)
     if not isinstance(result, dict):
         raise TypeError(f"classifier returned an invalid response: {result!r}")
     intent = result.get("intent")
@@ -153,17 +155,24 @@ def _classify(intents: Examples, message: str) -> IntentClassification:
     return IntentClassification(intent, entities, message)
 
 
-def _dispatch(
+async def _dispatch(
     classification: IntentClassification,
-    handler_maps: Sequence[Mapping[str, Callable[[list[str], str], Result] | None]],
-) -> IntentDispatchResult[Result] | None:
+    handler_maps: Sequence[Mapping[str, Handler | None]],
+) -> IntentDispatchResult[object] | None:
     for handlers in reversed(handler_maps):
         if classification.intent not in handlers:
             continue
         handler = handlers[classification.intent]
         if handler is None:
             return None
-        result = handler(classification.entities, classification.message)
+        if inspect.iscoroutinefunction(handler):
+            result = await handler(classification.entities, classification.message)
+        else:
+            result = await asyncio.to_thread(
+                handler, classification.entities, classification.message
+            )
+            if inspect.isawaitable(result):
+                result = await result
         return IntentDispatchResult(
             intent=classification.intent,
             entities=classification.entities,
@@ -174,15 +183,15 @@ def _dispatch(
     )
 
 
-def identify_intent(
+async def identify_intent(
     intents: Examples,
-    intent_map: Mapping[str, Callable[[list[str], str], Result] | None],
+    intent_map: Mapping[str, Handler | None],
     message: str,
-) -> IntentDispatchResult[Result] | None:
+) -> IntentDispatchResult[object] | None:
     """Classify and dispatch with one examples map and one handlers map."""
     examples = _copy_examples(intents)
     _validate_handlers(intent_map, examples)
-    return _dispatch(_classify(examples, message), [intent_map])
+    return await _dispatch(await _classify(examples, message), [intent_map])
 
 
 @dataclass(frozen=True, eq=False)
@@ -245,22 +254,22 @@ class IntentStack:
             _validate_handlers(entry.handlers, available)
         self._layers.remove(layer)
 
-    def identify_intent(self, message: str) -> IntentClassification:
-        return _classify(self.accumulated_examples(), message)
+    async def identify_intent(self, message: str) -> IntentClassification:
+        return await _classify(self.accumulated_examples(), message)
 
-    def handle_intent(
+    async def handle_intent(
         self, classification: IntentClassification
     ) -> IntentDispatchResult[object] | None:
         layer = self._layers[-1]
         try:
-            return _dispatch(classification, self.handlers_stack)
+            return await _dispatch(classification, self.handlers_stack)
         finally:
             self._autopop(layer)
 
-    def dispatch(self, message: str) -> IntentDispatchResult[object] | None:
+    async def dispatch(self, message: str) -> IntentDispatchResult[object] | None:
         layer = self._layers[-1]
         try:
-            classification = self.identify_intent(message)
-            return _dispatch(classification, self.handlers_stack)
+            classification = await self.identify_intent(message)
+            return await _dispatch(classification, self.handlers_stack)
         finally:
             self._autopop(layer)

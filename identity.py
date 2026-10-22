@@ -9,7 +9,6 @@ import os
 from collections.abc import MutableMapping
 from urllib.parse import quote, unquote
 
-from fastapi.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
 from starlette.responses import Response
 
@@ -90,7 +89,7 @@ async def identity_context(connection: HTTPConnection) -> None:
     user = None
     uid = data.get(SESSION_USER_ID) if data is not None else None
     if type(uid) is int and uid > 0:
-        user = await run_in_threadpool(users.store().get, uid)
+        user = await users.store().get(uid)
         if user is None:  # account deleted elsewhere
             data.pop(SESSION_USER_ID, None)
     _install(connection, user)

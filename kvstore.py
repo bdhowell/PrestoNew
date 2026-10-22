@@ -1,5 +1,6 @@
 """PostgreSQL JSON memory with pickleable, connection-free store handles."""
 
+import asyncio
 import hashlib
 import os
 
@@ -11,6 +12,8 @@ from psycopg.types.json import Jsonb
 class KVStore:
     """Keys are unique within an owner, or within the unowned scope.
 
+    Database operations are asynchronous. Schema metadata is loaded by
+    `initialize()` and automatically before the first `get()` or `set()`.
     Missing keys raise KeyError. Values must be JSON serializable. Only the
     database environment-variable name, never a connection or DSN, is retained.
     """
@@ -26,20 +29,43 @@ class KVStore:
     ) -> None:
         self.table = table
         self.schema = schema
+        self.parent_table = parent_table
         self.database_env = database_env
         self.foreign_key_name: str | None = None
         self.foreign_key_type: str | None = None
         self.foreign_key_value = foreign_key_value
+        self._initialized = False
+        self._initialize_lock = asyncio.Lock()
+
+    async def initialize(self) -> None:
+        async with self._initialize_lock:
+            if self._initialized:
+                return
+            await self._initialize()
+            self._initialized = True
+
+    def __getstate__(self) -> dict[str, object]:
+        state = self.__dict__.copy()
+        state.pop("_initialize_lock")
+        return state
+
+    def __setstate__(self, state: dict[str, object]) -> None:
+        self.__dict__.update(state)
+        self._initialize_lock = asyncio.Lock()
+
+    async def _initialize(self) -> None:
+        schema, table, parent_table = self.schema, self.table, self.parent_table
         target = sql.Identifier(schema, table)
-        with self._connect() as connection, connection.cursor() as cursor:
+        connection = await self._connect()
+        async with connection, connection.cursor() as cursor:
             # Serialize discovery/creation for this table across worker processes.
-            cursor.execute(
+            await cursor.execute(
                 "SELECT pg_advisory_xact_lock(hashtext(%s))", (f"{schema}.{table}",)
             )
             parent_key = None
             parent_type = None
             if parent_table is not None:
-                cursor.execute(
+                await cursor.execute(
                     """
                     SELECT a.attname, format_type(a.atttypid, a.atttypmod)
                     FROM pg_constraint c
@@ -51,13 +77,13 @@ class KVStore:
                     """,
                     (schema, parent_table),
                 )
-                columns = cursor.fetchall()
+                columns = await cursor.fetchall()
                 if len(columns) != 1:
                     raise ValueError("parent table must have a single-column primary key")
                 parent_key, parent_type = columns[0]
                 if parent_key in ("key", "value"):
                     raise ValueError("parent primary key conflicts with KV columns")
-            cursor.execute(
+            await cursor.execute(
                 """
                 SELECT t.oid FROM pg_class t
                 JOIN pg_namespace n ON n.oid = t.relnamespace
@@ -65,7 +91,7 @@ class KVStore:
                 """,
                 (schema, table),
             )
-            if cursor.fetchone() is None:
+            if await cursor.fetchone() is None:
                 owner_column = sql.SQL("")
                 if parent_table is not None:
                     owner_column = sql.SQL(", {} {} REFERENCES {} ({})").format(
@@ -74,11 +100,11 @@ class KVStore:
                         sql.Identifier(schema, parent_table),
                         sql.Identifier(parent_key),
                     )
-                cursor.execute(
+                await cursor.execute(
                     sql.SQL("CREATE TABLE {} (key TEXT NOT NULL, value JSONB NOT NULL {})")
                     .format(target, owner_column)
                 )
-            cursor.execute(
+            await cursor.execute(
                 """
                 SELECT a.attname, format_type(a.atttypid, a.atttypmod),
                        pn.nspname, pt.relname, pa.attname,
@@ -102,7 +128,7 @@ class KVStore:
                 """,
                 (schema, table),
             )
-            foreign_keys = cursor.fetchall()
+            foreign_keys = await cursor.fetchall()
             if len(foreign_keys) > 1 or any(
                 row[5:7] != (1, 1) for row in foreign_keys
             ):
@@ -124,9 +150,9 @@ class KVStore:
                 self.foreign_key_type = dtype
             elif parent_table is not None:
                 raise ValueError("existing KV table has no foreign key to the parent")
-            if foreign_key_value is not None and self.foreign_key_name is None:
+            if self.foreign_key_value is not None and self.foreign_key_name is None:
                 raise ValueError("cannot bind an owner without a foreign key")
-            cursor.execute(
+            await cursor.execute(
                 """
                 SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull
                 FROM pg_attribute a
@@ -137,34 +163,37 @@ class KVStore:
                 """,
                 (schema, table),
             )
-            columns = {name: (dtype, required) for name, dtype, required in cursor}
+            columns = {
+                name: (dtype, required)
+                async for name, dtype, required in cursor
+            }
             if columns.get("key") != ("text", True) or columns.get("value") != ("jsonb", True):
                 raise ValueError("KV table requires non-null key TEXT and value JSONB columns")
             suffix = hashlib.sha256(f"{schema}.{table}".encode()).hexdigest()[:16]
             if self.foreign_key_name is None:
-                cursor.execute(
+                await cursor.execute(
                     sql.SQL("CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} (key)").format(
                         sql.Identifier(f"kv_{suffix}_key"), target
                     )
                 )
             else:
                 owner = sql.Identifier(self.foreign_key_name)
-                cursor.execute(
+                await cursor.execute(
                     sql.SQL("CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} (key, {})").format(
                         sql.Identifier(f"kv_{suffix}_owner"), target, owner
                     )
                 )
-                cursor.execute(
+                await cursor.execute(
                     sql.SQL(
                         "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} (key) WHERE {} IS NULL"
                     ).format(sql.Identifier(f"kv_{suffix}_unowned"), target, owner)
                 )
 
-    def _connect(self) -> psycopg.Connection:
+    async def _connect(self) -> psycopg.AsyncConnection:
         dsn = os.environ.get(self.database_env)
         if not dsn:
             raise RuntimeError(f"{self.database_env} must be set to use persistent memory")
-        return psycopg.connect(dsn)
+        return await psycopg.AsyncConnection.connect(dsn)
 
     def _owner(self, args: tuple[object, ...], kwargs: dict[str, object]) -> object:
         if len(args) > 1 or len(kwargs) > 1 or (args and kwargs):
@@ -179,7 +208,8 @@ class KVStore:
             raise ValueError("cannot access a different owner through a bound store")
         return owner
 
-    def set(self, key: str, value: object, *args: object, **kwargs: object) -> None:
+    async def set(self, key: str, value: object, *args: object, **kwargs: object) -> None:
+        await self.initialize()
         owner_value = self._owner(args, kwargs)
         if not isinstance(key, str):
             raise TypeError("key must be a string")
@@ -201,10 +231,12 @@ class KVStore:
                 "ON CONFLICT {} DO UPDATE SET value = EXCLUDED.value"
             ).format(target, owner, conflict)
             values += (owner_value,)
-        with self._connect() as connection:
-            connection.execute(query, values)
+        connection = await self._connect()
+        async with connection:
+            await connection.execute(query, values)
 
-    def get(self, key: str, *args: object, **kwargs: object) -> tuple[object, object]:
+    async def get(self, key: str, *args: object, **kwargs: object) -> tuple[object, object]:
+        await self.initialize()
         owner_value = self._owner(args, kwargs)
         if not isinstance(key, str):
             raise TypeError("key must be a string")
@@ -219,8 +251,10 @@ class KVStore:
         if self.foreign_key_name is not None:
             query += sql.SQL(" AND {} IS NOT DISTINCT FROM %s").format(owner)
             values += (owner_value,)
-        with self._connect() as connection:
-            row = connection.execute(query, values).fetchone()
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(query, values)
+            row = await cursor.fetchone()
         if row is None:
             raise KeyError(key)
         return row[0], row[1]

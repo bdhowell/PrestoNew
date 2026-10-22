@@ -4,7 +4,6 @@ from collections.abc import AsyncIterator, MutableMapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-from fastapi.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
 
 from kvstore import KVStore
@@ -66,7 +65,7 @@ async def memory_context(connection: HTTPConnection) -> AsyncIterator[Memory]:
     if memory is not None and not isinstance(memory, Memory):
         raise TypeError("session chatbot_memory must be a Memory instance")
     if memory is None or (memory.poster_id, memory.user_id) != (poster_id, user_id):
-        memory = await run_in_threadpool(Memory.for_identity, poster_id, user_id)
+        memory = Memory.for_identity(poster_id, user_id)
     if session is not None:
         session["chatbot_memory"] = memory
     connection.state.short_term_memory = memory.short_term_memory

@@ -10,7 +10,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 
 from fastapi import WebSocket, WebSocketDisconnect, responses
-from fastapi.concurrency import run_in_threadpool
 
 from intents import IntentStack
 from llm import IntentDispatchResult
@@ -87,11 +86,11 @@ def page_event(message: str) -> str | None:
     return None
 
 
-def respond(stack: IntentStack, message: str) -> ClientReply:
+async def respond(stack: IntentStack, message: str) -> ClientReply:
     if len(message) > MAX_MESSAGE_LENGTH:
         return {"say": TOO_LONG_MESSAGE}
     try:
-        return client_reply(stack.dispatch(message))
+        return client_reply(await stack.dispatch(message))
     except Exception:
         logger.exception("Wikkit failed to handle a message")
         return {"say": FAILURE_MESSAGE}
@@ -172,7 +171,7 @@ class Chatbot:
 
     async def handle_message(self, message: str) -> None:
         """Override for async conversation workflows that request responses."""
-        await self.send(await run_in_threadpool(respond, self.stack, message))
+        await self.send(await respond(self.stack, message))
 
     async def open_page(self, page: str) -> None:
         """Cancel the previous page's workflow, then start this page's, if any."""

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import pickle
 import unittest
@@ -22,6 +23,10 @@ from sessions import (
 from wikkit import Chatbot
 
 SECRET = "session-test-key-not-for-production" * 2
+
+
+def run_async(awaitable):
+    return asyncio.run(awaitable)
 
 
 class SessionConfigurationTests(unittest.TestCase):
@@ -80,7 +85,7 @@ class SessionBackendTests(unittest.TestCase):
                 )
 
     def new_session(self) -> Session:
-        session = self.store.load(None)
+        session = run_async(self.store.load(None))
         self.identifiers.add(session.identifier)
         return session
 
@@ -140,8 +145,8 @@ class SessionBackendTests(unittest.TestCase):
             self.assertNotEqual(self.track_cookie(client), previous)
         session = self.new_session()
         session.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-        self.store.save(session)
-        renewed = self.store.load(session.identifier)
+        run_async(self.store.save(session))
+        renewed = run_async(self.store.load(session.identifier))
         self.assertNotEqual(renewed.identifier, session.identifier)
         self.assertEqual(renewed.data, {})
         self.assertEqual(renewed.version, 0)
@@ -150,24 +155,24 @@ class SessionBackendTests(unittest.TestCase):
         client = self.client()
         self.assertEqual(client.get("/cleanup").status_code, 200)
         identifier = self.track_cookie(client)
-        self.assertTrue(self.store.load(identifier).data["cleanup"])
+        self.assertTrue(run_async(self.store.load(identifier)).data["cleanup"])
 
     def test_concurrent_writes_are_rejected_and_read_only_requests_do_not_conflict(self) -> None:
         session = self.new_session()
-        self.store.save(session)
-        first = self.store.load(session.identifier)
-        second = self.store.load(session.identifier)
+        run_async(self.store.save(session))
+        first = run_async(self.store.load(session.identifier))
+        second = run_async(self.store.load(session.identifier))
         first.data["name"] = "Ada"
-        self.store.save(first)
-        self.store.save(second)  # An unchanged snapshot must not overwrite a writer.
+        run_async(self.store.save(first))
+        run_async(self.store.save(second))  # An unchanged snapshot must not overwrite a writer.
         second.data["name"] = "Grace"
         with self.assertRaises(SessionConflictError):
-            self.store.save(second)
-        self.assertEqual(self.store.load(session.identifier).data, {"name": "Ada"})
+            run_async(self.store.save(second))
+        self.assertEqual(run_async(self.store.load(session.identifier)).data, {"name": "Ada"})
 
     def test_expired_session_cannot_be_resurrected(self) -> None:
         session = self.new_session()
-        self.store.save(session)
+        run_async(self.store.save(session))
         with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as connection:
             connection.execute(
                 "UPDATE public.chatbot_session SET expires_at = now() - interval '1 second' "
@@ -175,18 +180,18 @@ class SessionBackendTests(unittest.TestCase):
             )
         session.data["change"] = True
         with self.assertRaises(SessionConflictError):
-            self.store.save(session)
+            run_async(self.store.save(session))
 
     def test_corrupt_database_payload_is_not_silently_replaced(self) -> None:
         session = self.new_session()
-        self.store.save(session)
+        run_async(self.store.save(session))
         with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as connection:
             connection.execute(
                 "UPDATE public.chatbot_session SET data = %s WHERE session_id = %s",
                 (b"corrupt", session.identifier),
             )
         with self.assertRaisesRegex(ValueError, "integrity"):
-            self.store.load(session.identifier)
+            run_async(self.store.load(session.identifier))
 
     def test_websocket_disconnect_persists_memory_and_reconnect_restores_it(self) -> None:
         client = self.client()
@@ -258,7 +263,7 @@ class SessionBackendTests(unittest.TestCase):
             with client.websocket_connect("wss://testserver/wikkit/ws") as socket:
                 socket.send_text("start")
                 self.assertEqual(socket.receive_json()["say"], "Waiting")
-        memory = self.store.load(identifier).data["chatbot_memory"]
+        memory = run_async(self.store.load(identifier)).data["chatbot_memory"]
         self.assertTrue(memory.short_term_memory["cancelled"])
 
     def test_websocket_save_failure_is_explicit(self) -> None:
