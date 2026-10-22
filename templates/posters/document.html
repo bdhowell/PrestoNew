@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ poster.name }}</title>
+    <link rel="stylesheet" href="/static/css/themes.css">
+    <link rel="stylesheet" href="/static/css/pages/poster-document.css">
+</head>
+<body>
+<article class="poster-document {{ theme }} {{ layout }}" style="width: {{ width }}px; height: {{ height }}px" data-width="{{ width }}" data-height="{{ height }}">
+    <header>
+        <h1>{{ poster.name }}</h1>
+        {% for name, affiliation in authors %}
+        <p class="author">{{ name }}{% if affiliation %} &mdash; {{ affiliation }}{% endif %}</p>
+        {% endfor %}
+    </header>
+    <div class="poster-sections">
+    {% for which, content in sections if which != "title" %}
+        <section>
+            <h2>{{ which | title }}</h2>
+            <div class="section-content">{{ content }}</div>
+        </section>
+    {% else %}
+        <p>{{ poster.description }}</p>
+    {% endfor %}
+    </div>
+</article>
+</body>
+</html>

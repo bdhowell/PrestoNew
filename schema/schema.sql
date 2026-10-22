@@ -383,10 +383,75 @@ FOR EACH ROW EXECUTE FUNCTION trg_conference_fts();
 
 CREATE INDEX IF NOT EXISTS idx_poster_fts ON poster USING GIN (search_vector);
 
--- TODO: poster search below uses poster.title/subtitle/authors/footnotes and the
--- content and footnote tables, none of which exist yet; rewrite it around section
--- before re-enabling. The keyterm trigger is disabled with it, so keyterm changes
--- don't refresh conference.search_vector until it returns.
+CREATE OR REPLACE FUNCTION poster_search_vector(pid_in INTEGER)
+RETURNS tsvector LANGUAGE sql STABLE AS $$
+    SELECT
+        setweight(to_tsvector('english', coalesce(p.description, '')), 'B') ||
+        setweight(to_tsvector('english', coalesce(
+            (SELECT content FROM section WHERE pid = pid_in AND which = 'title'), ''
+        )), 'A') ||
+        setweight(to_tsvector('english', coalesce(
+            (SELECT string_agg(content, ' ' ORDER BY which)
+             FROM section WHERE pid = pid_in AND which != 'title'), ''
+        )), 'D') ||
+        setweight(to_tsvector('english', coalesce(
+            (SELECT string_agg(name || ' ' || coalesce(affiliation, ''), ' ' ORDER BY aid)
+             FROM authors WHERE pid = pid_in), ''
+        )), 'B') ||
+        setweight(to_tsvector('english', coalesce(
+            (SELECT string_agg(text, ' ') FROM keyterm WHERE pid = pid_in), ''
+        )), 'A')
+    FROM poster p WHERE p.pid = pid_in;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_poster_fts()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        UPDATE poster SET search_vector = poster_search_vector(NEW.pid)
+        WHERE pid = NEW.pid;
+        RETURN NEW;
+    END IF;
+    NEW.search_vector := setweight(to_tsvector('english', coalesce(NEW.description, '')), 'B');
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_poster_child_fts()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP != 'INSERT' THEN
+        UPDATE poster SET search_vector = poster_search_vector(OLD.pid)
+        WHERE pid = OLD.pid;
+    END IF;
+    IF TG_OP != 'DELETE' THEN
+        UPDATE poster SET search_vector = poster_search_vector(NEW.pid)
+        WHERE pid = NEW.pid;
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS poster_fts_insert ON poster;
+DROP TRIGGER IF EXISTS poster_fts_update ON poster;
+DROP TRIGGER IF EXISTS section_poster_fts ON section;
+DROP TRIGGER IF EXISTS authors_poster_fts ON authors;
+DROP TRIGGER IF EXISTS keyterm_poster_fts ON keyterm;
+
+CREATE TRIGGER poster_fts_insert BEFORE INSERT ON poster
+FOR EACH ROW EXECUTE FUNCTION trg_poster_fts();
+CREATE TRIGGER poster_fts_update AFTER UPDATE OF description ON poster
+FOR EACH ROW EXECUTE FUNCTION trg_poster_fts();
+CREATE TRIGGER section_poster_fts AFTER INSERT OR UPDATE OR DELETE ON section
+FOR EACH ROW EXECUTE FUNCTION trg_poster_child_fts();
+CREATE TRIGGER authors_poster_fts AFTER INSERT OR UPDATE OR DELETE ON authors
+FOR EACH ROW EXECUTE FUNCTION trg_poster_child_fts();
+CREATE TRIGGER keyterm_poster_fts AFTER INSERT OR UPDATE OR DELETE ON keyterm
+FOR EACH ROW EXECUTE FUNCTION trg_poster_child_fts();
+
+UPDATE poster SET search_vector = poster_search_vector(pid);
+
+-- Legacy reference below uses the previous content/footnote schema and stays disabled.
 -- -- Recompute the tsvector for a single poster.
 -- -- Weights: title=A, subtitle/authors/content-titles=B,
 -- --          poster-footnotes/footnote-rows=C, content-bodies=D, keyterms=A

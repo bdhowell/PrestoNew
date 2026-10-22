@@ -113,8 +113,36 @@ The vector candidate limit is computed from the requested `limit`, then raised t
 - If the embedding service is unavailable, autocomplete degrades gracefully to FTS-only results.
 - The merged result set is deterministic because tie-breaking falls back to label and then ID.
 
+## Current FastAPI Poster List
+
+The poster list implements the `myposters` scope directly through
+`GET /posters/list?q=...`, rather than the legacy `/api/autocomplete` endpoint.
+Only posters whose `poster.uid` matches the authenticated user enter either
+candidate branch. The list accepts `sort=name|conference_date|relevance`,
+`direction=asc|desc`, and `view=list|grid`. Choose descending relevance for the
+highest-ranked search results first. Whitespace-only input shows all owned
+posters without calling the embedding service.
+
+Poster FTS now indexes the actual schema: the title section (A), description
+and author names/affiliations (B), other section content (D), and key terms (A).
+Triggers refresh it on poster description and section/author/key-term changes,
+including deletions. Apply `schema/schema.sql` to install the triggers and
+backfill existing posters; it is safe to reapply.
+
+Query embeddings use `OPENAI_API_KEY` and `EMBEDDING_MODEL` (default
+`text-embedding-3-small`), with 1536 dimensions to match the schema. Service
+failures or missing configuration produce an explicit keyword-only notice and
+a server log entry. Vector ranking uses existing `poster.embedding` values;
+generating and updating stored content embeddings remains a separate ingestion
+responsibility. Rows without embeddings can still match FTS.
+
+Each branch takes `max(100 * AUTOCOMPLETE_VECTOR_CANDIDATE_MULTIPLIER,
+AUTOCOMPLETE_VECTOR_CANDIDATE_MIN)` candidates (defaults: 4 and 100). Fusion uses
+the RRF settings above; only `AUTOCOMPLETE_MERGE_METHOD=rrf` is supported.
+Without search text, the list is not candidate-limited.
+
 ## Related Files
 
-- `blueprints/api_blueprint.py` contains the autocomplete query and rank fusion logic.
+- `posters.py` contains owner-scoped persistence, embedding requests, and rank fusion.
+- `routers/posters.py` handles the poster list and viewer routes.
 - `schema/schema.sql` defines the FTS columns, triggers, and indexes.
-- `app.py` handles embedding generation and syncing for posters and conferences.

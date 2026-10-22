@@ -1,0 +1,61 @@
+{% extends "page.html" %}
+{% block title %}My posters - {{ app_name() }}{% endblock %}
+{% block scripts %}<script src="/static/javascript/posters/router.js" defer></script>{% endblock %}
+{% block content %}
+<header class="posters-heading">
+    <h1>My posters</h1>
+    <button type="button" data-new-poster>New Poster</button>
+</header>
+<form class="poster-filters" action="/posters/list" method="get">
+    <label>Search your posters
+        <input type="search" name="q" value="{{ q }}" maxlength="500" placeholder="Name, topic, or natural-language description">
+    </label>
+    <label>Sort by
+        <select name="sort">
+            {% for value, label in [("name", "Poster name"), ("conference_date", "Conference date"), ("relevance", "Search relevance")] %}
+            <option value="{{ value }}"{% if sort == value %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>Order
+        <select name="direction">
+            <option value="asc"{% if direction == "asc" %} selected{% endif %}>Ascending</option>
+            <option value="desc"{% if direction == "desc" %} selected{% endif %}>Descending</option>
+        </select>
+    </label>
+    <label>Display
+        <select name="view">
+            <option value="list"{% if view == "list" %} selected{% endif %}>List</option>
+            <option value="grid"{% if view == "grid" %} selected{% endif %}>Large thumbnails</option>
+        </select>
+    </label>
+    <button type="submit">Apply</button>
+</form>
+{% if notice %}<p role="status">{{ notice }}</p>{% endif %}
+<p class="poster-message" role="status" aria-live="polite"></p>
+<dialog id="existing-poster">
+    <h2>Continue your current poster?</h2>
+    <p>You can work on only one unpurchased poster at a time.</p>
+    <a data-open-existing href="/posters/list">Open my poster</a>
+    <button type="button" data-close-dialog>Not now</button>
+</dialog>
+<div class="poster-items {{ view }}">
+{% for poster in items %}
+    <article class="poster-card{% if not poster.purchased %} current{% endif %}" data-poster-id="{{ poster.pid }}">
+        <a class="poster-link" href="/posters/{{ poster.pid }}/{{ 'view' if poster.purchased else 'open' }}"{% if poster.purchased %} target="_top"{% endif %}>
+            {% if view == "grid" %}
+            <div class="poster-thumbnail" aria-hidden="true">
+                <iframe src="/posters/{{ poster.pid }}/preview" title="Preview of {{ poster.name }}" loading="lazy" tabindex="-1" data-thumbnail></iframe>
+            </div>
+            {% endif %}
+            <h2>{{ poster.name }}</h2>
+            <p>{% if not poster.purchased %}<strong>Current unpurchased poster</strong>{% else %}Purchased{% endif %}</p>
+            <p>Conference: {% if poster.conference_date %}{{ poster.conference_date.strftime("%B %d, %Y") }}{% else %}Not set{% endif %}</p>
+        </a>
+        <button type="button" data-delete-poster="{{ poster.pid }}" data-poster-name="{{ poster.name }}" aria-label="Delete {{ poster.name }}">Delete</button>
+    </article>
+{% else %}
+    <p>{{ "No posters match your search." if q else "You haven't created any posters yet." }}</p>
+{% endfor %}
+</div>
+{% endblock %}

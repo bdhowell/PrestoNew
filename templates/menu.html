@@ -5,6 +5,7 @@
         <li><a href="/wikkit/pricing">Pricing</a></li>
         <li><a href="/wikkit/help">Help</a></li>
         <li><a href="/account">Account</a></li>
+        <li data-posters-menu{% if not (request.state.user_id is defined and request.state.user_id) %} hidden{% endif %}><a href="/posters/list">My posters</a></li>
         {% if request.state.user_id is defined and request.state.user_id %}
         <li><a href="/account/signout">Sign out</a></li>
         {% else %}

@@ -230,6 +230,10 @@
                 link.href = signedIn ? "/account/signout" : "/account/signin";
                 link.textContent = signedIn ? "Sign out" : "Sign in";
             }
+            const postersMenu = document.querySelector("[data-posters-menu]");
+            if (postersMenu) {
+                postersMenu.hidden = !signedIn;
+            }
         }
 
         // Menu links navigate the iframe rather than replacing the shell.

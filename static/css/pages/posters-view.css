@@ -1,0 +1,42 @@
+.wikkit-page main {
+    padding: 0;
+}
+
+.viewer-controls {
+    position: fixed;
+    z-index: 1;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    background: #fff;
+}
+
+.poster-viewport {
+    position: fixed;
+    inset: var(--viewer-toolbar-height, 4rem) 0 0;
+    overflow: auto;
+    background: #555;
+}
+
+.poster-canvas {
+    position: relative;
+    margin: auto;
+}
+
+.poster-canvas iframe {
+    position: absolute;
+    border: 0;
+    transform-origin: top left;
+}
+
+.viewer-message {
+    position: fixed;
+    z-index: 2;
+    bottom: 0;
+    background: #fff;
+}

@@ -415,6 +415,8 @@ Create a common function that checks whether the user has an existing unpurchase
 	- Redirect to `/posters/create/`
 
 
+# Posters Router
+
 **`/posters/list`**
 ### Internal Logic
 Shows a list of the posters the user has created.
@@ -432,6 +434,39 @@ Has a button, "New Poster" which when clicked checks whether the user has an exi
 	- Create a new unpurchased poster.
 	- Have Wikkit say f"I&rsquo'm creating your new poster, {request.state.user['user-name']}!"
 	- Redirect to `/posters/create`
+
+========================================
+
+### Implemented Posters Router Contract
+
+- `GET /posters/list` provides owner-only list/grid views, name/conference-date
+  sorting, and hybrid search as documented in [search.md](./search.md).
+  The conference date is the earliest start date among conferences showing the poster.
+- `POST /posters/new` atomically checks for an existing draft by locking the
+  owner's user row. Existing drafts return HTTP 409 with Wikkit's offer and an
+  Open/Not now dialog. Otherwise it creates and selects the draft, sends Wikkit's
+  creation message, and returns `/posters/create` as the AJAX redirect.
+- `GET /posters/create` initializes only unset template/theme values on the
+  selected unpurchased poster. Portrait posters use `vertical`; other posters
+  randomly use `arena` or `central`. Themes are discovered from `themes.css`.
+  Reloading does not create a poster or replace existing choices.
+- `GET /posters/{pid}/open` checks ownership, selects the draft in the server-side
+  session, and redirects to `/layout/edit`. **The layout editor is deliberately
+  deferred**; the creation page links to it but does not implement it.
+- `GET /posters/{pid}/view` opens purchased posters in a full-viewport viewer
+  outside the Wikkit shell. Fit and 100% zoom, intermediate zoom, scrolling, and
+  Close/Escape are supported. The read-only HTML preview renders stored title,
+  authors, and text sections; it is not a print/export renderer or layout editor.
+  `GET /posters/{pid}/preview` also supplies owner-only draft thumbnails.
+- `POST /posters/{pid}/delete` requires same-origin JSON with `confirmed: true`.
+  Deletion removes dependent rows and poster memory and clears the selected
+  poster when appropriate. The UI asks for confirmation before sending it.
+- Poster identity is revalidated before HTTP/websocket memory initialization.
+  Authentication, owner filtering, and confirmation are enforced on the server.
+- Apply `schema/schema.sql` before enabling poster search. Run the focused tests
+  with `bin/python -m unittest test_posters`. Set `POSTERS_TEST_DATABASE_URL` to
+  enable PostgreSQL integration tests; those use a temporary isolated schema and
+  never truncate the public schema.
 
 **`/posters/create`**
 ### Internal Logic

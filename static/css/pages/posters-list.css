@@ -1,0 +1,75 @@
+.posters-heading,
+.poster-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.poster-filters label {
+    display: grid;
+    gap: 0.25rem;
+}
+
+.poster-filters input {
+    width: min(30rem, 75vw);
+}
+
+.poster-filters input,
+.poster-filters select,
+.wikkit-page button {
+    padding: 0.5rem;
+    font: inherit;
+}
+
+.poster-items {
+    display: grid;
+    gap: 1.5rem;
+}
+
+.poster-items.grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+}
+
+.poster-card {
+    padding: 1rem;
+    border: 2px solid #bbb;
+    border-radius: 0.5rem;
+    background: #fff;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.poster-card.current {
+    border: 3px solid #7051aa;
+    background: #f7f0ff;
+}
+
+.poster-link {
+    display: block;
+    text-decoration: none;
+}
+
+.poster-thumbnail {
+    position: relative;
+    height: 20rem;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.poster-thumbnail iframe {
+    position: absolute;
+    border: 0;
+    transform-origin: top left;
+    visibility: hidden;
+}
+
+dialog {
+    max-width: min(30rem, 80vw);
+    padding: 1.5rem;
+}
+
+dialog::backdrop {
+    background: rgb(0 0 0 / 50%);
+}
