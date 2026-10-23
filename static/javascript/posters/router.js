@@ -45,18 +45,29 @@
 
     for (const button of document.querySelectorAll("[data-delete-poster]")) {
         button.addEventListener("click", async () => {
-            if (!window.confirm(`Delete "${button.dataset.posterName}"? This cannot be undone.`)) {
-                return;
-            }
-            button.disabled = true;
+            const buttons = document.querySelectorAll("[data-delete-poster]");
+            buttons.forEach((item) => { item.disabled = true; });
             message.textContent = "";
             try {
-                await post(`/posters/${button.dataset.deletePoster}/delete`, { confirmed: true });
-                location.reload();
+                const pid = Number(button.dataset.deletePoster);
+                const prompt = await post("/posters/delete", { pid });
+                if (prompt.confirmation_required) {
+                    const response = await window.wikkit.requestResponse();
+                    const reply = await post("/posters/delete", { pid, response });
+                    if (reply.deleted) {
+                        button.closest("[data-poster-id]").remove();
+                        if (!document.querySelector("[data-poster-id]")) {
+                            const empty = document.createElement("p");
+                            empty.textContent = "No posters to display.";
+                            document.querySelector(".poster-items").appendChild(empty);
+                        }
+                    }
+                }
             } catch (error) {
                 console.error("Poster deletion failed", error);
                 message.textContent = error.message;
-                button.disabled = false;
+            } finally {
+                buttons.forEach((item) => { item.disabled = false; });
             }
         });
     }

@@ -49,6 +49,7 @@
         let closed = false;
         let reminderTimer = null;
         let requestingResponse = false;
+        let pageResponse = null;
         const reminderInterval = 120000;
 
         function append(div) {
@@ -296,6 +297,10 @@
         socket.addEventListener("close", (event) => {
             closed = true;
             stopRequest();
+            if (pageResponse) {
+                pageResponse.reject(new Error("The connection to Wikkit has closed."));
+                pageResponse = null;
+            }
             pending.length = 0;
             for (const resolve of attachmentWaiters.splice(0)) {
                 resolve();
@@ -314,10 +319,21 @@
             }
             event.preventDefault();
             const text = chatinput.innerText.trim();
-            chatinput.replaceChildren();
             if (text) {
+                if (pageResponse && text.length > 2000) {
+                    sayText("That message is too long. Please keep it under 2000 characters.", "notice");
+                    return;
+                }
+                chatinput.replaceChildren();
                 sayText(text, "user");
-                send(text);
+                if (pageResponse) {
+                    const response = pageResponse;
+                    pageResponse = null;
+                    stopRequest();
+                    response.resolve(text);
+                } else {
+                    send(text);
+                }
             }
         });
 
@@ -362,6 +378,18 @@
                     setSignedIn: updateMenu,
                     // Appends text or an HTML fragment to #chatlog as <div class="chat">.
                     say: (html) => say(String(html)),
+                    requestResponse: () => {
+                        if (closed || pageResponse || requestingResponse) {
+                            return Promise.reject(new Error("Wikkit is unavailable or already waiting for a response."));
+                        }
+                        showChat();
+                        openInput();
+                        requestResponse();
+                        chatinput.focus();
+                        return new Promise((resolve, reject) => {
+                            pageResponse = { resolve, reject, win };
+                        });
+                    },
                     // Sends text to the server; with echo, also shows it via say().
                     command: (html, echo = false) => {
                         if (echo) {
@@ -383,6 +411,11 @@
                 win.addEventListener("pagehide", () => {
                     if (client === entry) {
                         client = null;
+                    }
+                    if (pageResponse?.win === win) {
+                        pageResponse.reject(new Error("The page was closed before Wikkit received a response."));
+                        pageResponse = null;
+                        stopRequest();
                     }
                 }, { once: true });
                 return apiobj;

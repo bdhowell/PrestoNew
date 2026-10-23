@@ -429,7 +429,6 @@ Posters can be optionally deleted with confirmation by clicking on a per-poster 
 Has a button, "New Poster" which when clicked checks whether the user has an existing unpurchased poster.
 - If it does: 
 	- Have Wikkit say f"I&rsquo;m sorry, {request.state.user['user-name']}, you can work on only one poster at a time. Would you like me to open it for you?"
-
 - Else:
 	- Create a new unpurchased poster.
 	- Have Wikkit say f"I&rsquo'm creating your new poster, {request.state.user['user-name']}!"
@@ -458,9 +457,15 @@ Has a button, "New Poster" which when clicked checks whether the user has an exi
   Close/Escape are supported. The read-only HTML preview renders stored title,
   authors, and text sections; it is not a print/export renderer or layout editor.
   `GET /posters/{pid}/preview` also supplies owner-only draft thumbnails.
-- `POST /posters/{pid}/delete` requires same-origin JSON with `confirmed: true`.
+- `POST /posters/delete` accepts same-origin JSON with `pid` and returns Wikkit's
+  confirmation question without rendering a template. The list waits for a chat
+  reply, then posts `pid` and `response` to the same endpoint. A server-side
+  pending poster ID binds the reply to the prompt; `common.clean_response()`
+  must recognize "yes" to delete. Other replies cancel. Both results return
+  `deleted` and Wikkit's message; the list removes the card only on deletion.
   Deletion removes dependent rows and poster memory and clears the selected
-  poster when appropriate. The UI asks for confirmation before sending it.
+  poster when appropriate. The legacy `POST /posters/{pid}/delete` endpoint
+  continues to require `confirmed: true`.
 - Poster identity is revalidated before HTTP/websocket memory initialization.
   Authentication, owner filtering, and confirmation are enforced on the server.
 - Apply `schema/schema.sql` before enabling poster search. Run the focused tests
@@ -471,10 +476,10 @@ Has a button, "New Poster" which when clicked checks whether the user has an exi
 **`/posters/create`**
 ### Internal Logic
 If the user already has an unpurchased poster:
-- Have Wikkit say f"I&rsquo'm sorry, {request.state.user['user-name']}! You already have an existing unpurchased poster. Would you "
+- Wikkit sayx f"I&rsquo'm sorry, {request.state.user['user-name']}! You already have an existing unpurchased poster. Here it is."
 - Redirect to `/layout/edit`
 
-If the poster's template has not been set:
+If the poster's dimensions have not been set from conference information:
 	- If the poster's aspect ratio is vertical, then set the template as /templates/layout/vertical.html
 		- Else randomly set the template as /templates/layout/arena.html or /templates/layout/central.html
 
@@ -483,20 +488,47 @@ If the poster's template has not been set:
 	- If the 
 
 Randomly
-**`/poster/delete`**
-### Internal Logic
-Deletes the user's designated poster
 
+**`/posters/delete`**
 ### Template Content
 (None)
 
-### Wikkit Says
-[Nothing]
+### Internal Logic
+Wikkit Says: 
+f"""
+Are you sure you want to delete "{request.state.poster['title']}?"
+<div class="centered">
+	<button class="action" data-sends="yes">Yes</button> &nbsp;
+	<button class="action" data-sends="no">No</button>
+</div>
+"""
 
+Wait for user input
+Uses common.clean_response()
+If the user confirms: 
+- proceed with deletion.
+- Wikkit says "Okay, I deleted your poster."
+- Return confirmation
+Else:
+- Wikkit says "Okay, I won&rsquo;t delete your poster."
+- Return cancellation
 
 # Conferences Router
 
 **`/conferences/find`**
+### Template Content
+
+### Internal Logic
+Wikkit says: 
+f"""
+<div>Many conferences and fairs have specific requirements for poster designs.</div>
+<div>If we can find your conference or fair, I can likely find any poster requirements for it.</div>
+<div>Please provide any information you have about your conference or fair.</div>
+<div>Besides its name, its location (some conferences and fairs occur in multiple cities), purpose, and dates are helpful.</div>
+
+Wait for user input
+
+
 Given a set of criteria describing a conference or fair, including its name, location, purpose, date or dates use conferences.get_conference_info() to find matching conferences
 
 **`/conferences/query`**

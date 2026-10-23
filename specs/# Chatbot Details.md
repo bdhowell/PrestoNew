@@ -30,6 +30,63 @@ and are discarded when that page unloads.
 Page-specific commands are registered in the `.does` files and override intrinsic commands with the same key
 Pages can also dynamically register or unregister commands at runtime using the same `window.registerWikkitCommands` API.
 
+# Chatbot Embedded Content Controls
+When chatbot output is rendered in the #chatbot container, look for any HTML controls in the output, such as buttons, selects, input fields, and textareas.
+
+## Embedded Buttons
+
+Embedded buttons are HTML `<button>`.
+Embedded buttons may have a `data-sends` or `data-does` attributes, or both.s.
+The value of the `data-does` attribute will trigger the specified client-side command when clicked.
+The value of `data-sends` is sent to the server as the user's response when the button is clicked.
+
+Example:
+
+```html
+<button class="action" data-sends="yes" data-group="confirmation">Yes</button>
+<button class="action" data-sends="no" data-group="confirmation">No</button>
+```
+
+### Data Groups
+
+A `data-group` attribute identifies a group of buttons. 
+When one is clicked, all buttons in the same group are automatically deselected.
+Once a button is clicked, no other button can be clicked again.
+Buttons are for decisions being passed to the chatbot for processing.
+
+## Embedded Input Fields
+
+Embedded input fields are HTML input fields of any type, such as text, number, or email.
+They have a little 'OK' button for submitting the input value, after which the input field is disabled.
+
+Embedded input fields can have both `data-memory` and `data-name` attributes.
+The `data-memory` attribute specifies where the input value should be stored in the chatbot's memory: `user`, `session`, or `poster`.
+The `data-name` attribute specifies the key under which the input value will be stored in the specified memory.
+It is an error if either attribute is missing when the input is rendered.
+
+If both attributes are missing, then clicking `OK` will simply send the value to the server without storing it in memory.
+
+## Embedded Textareas
+
+Embedded textareas are HTML `<textarea>` elements.
+They can have a `data-memory` and `data-name` attributes similar to input fields.
+The `data-memory` attribute specifies where the entered value should be stored in the chatbot's memory: `user`, `session`, or `poster`.
+The `data-name` attribute specifies the key under which the entered value will be stored in the specified memory.
+It is an error if either attribute is missing when the textarea is rendered.
+
+If both attributes are missing, then entering a value will simply send it to the server without storing it in memory.
+
+## Embedded Selects
+
+Embedded selects are HTML `<select>` elements.
+They are always rendered as dropdown menus..
+They can have a `data-memory` and `data-name` attributes similar to input fields.
+The `data-memory` attribute specifies where the selected value should be stored in the chatbot's memory: `user`, `session`, or `poster`.
+The `data-name` attribute specifies the key under which the selected value will be stored in the specified memory.
+It is an error if either attribute is missing when the select is rendered.
+
+If both attributes are missing, then selecting an option will simply send the value to the server without storing it in memory.
+
 ## Server replies
 
 User input is processed by the conversation's `IntentStack`. The server sends

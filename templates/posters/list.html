@@ -52,7 +52,7 @@
             <p>{% if not poster.purchased %}<strong>Current unpurchased poster</strong>{% else %}Purchased{% endif %}</p>
             <p>Conference: {% if poster.conference_date %}{{ poster.conference_date.strftime("%B %d, %Y") }}{% else %}Not set{% endif %}</p>
         </a>
-        <button type="button" data-delete-poster="{{ poster.pid }}" data-poster-name="{{ poster.name }}" aria-label="Delete {{ poster.name }}">Delete</button>
+        <button type="button" data-delete-poster="{{ poster.pid }}" aria-label="Delete {{ poster.name }}">Delete</button>
     </article>
 {% else %}
     <p>{{ "No posters match your search." if q else "You haven't created any posters yet." }}</p>

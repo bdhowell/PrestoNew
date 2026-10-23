@@ -1,5 +1,6 @@
 """Poster listing, creation, deletion, and read-only previews."""
 
+import html
 import logging
 import random
 import re
@@ -11,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 
 import identity
 import posters
+from common import clean_response
 from routers.wikkit import BASE_DIR, read_json, render_page, templates
 
 logger = logging.getLogger(__name__)
@@ -138,6 +140,47 @@ async def delete_poster(request: Request, pid: int) -> JSONResponse:
     uid = _uid(request)
     if data.get("confirmed") is not True:
         raise HTTPException(422, "Please confirm that you want to delete this poster.")
+    return await _delete_confirmed(request, uid, pid)
+
+
+@router.post("/delete")
+async def confirm_delete(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    uid = _uid(request)
+    session = identity.session(request)
+    if session is None:
+        raise HTTPException(503, "Poster deletion requires server-side sessions.")
+    pid = data.get("pid")
+    if type(pid) is not int or pid <= 0:
+        raise HTTPException(422, "A valid poster ID is required.")
+    if "response" not in data:
+        try:
+            poster = await _owned(request, pid)
+        except psycopg.Error:
+            logger.exception("Could not load poster %s for deletion", pid)
+            raise HTTPException(503, "Your poster could not be loaded. Please try again.") from None
+        session["delete_poster_id"] = pid
+        return JSONResponse({
+            "ok": True, "confirmation_required": True,
+            "say": f'<p>Are you sure you want to delete "{html.escape(poster.name)}"?</p>',
+        })
+    response = data["response"]
+    if not isinstance(response, str) or not response.strip() or len(response) > 2000:
+        raise HTTPException(422, "Please enter a response of up to 2000 characters.")
+    if session.get("delete_poster_id") != pid:
+        raise HTTPException(409, "Please request deletion again before confirming.")
+    if (clean_response(response) or {}).get("response") != "yes":
+        session.pop("delete_poster_id", None)
+        return JSONResponse({
+            "ok": True, "deleted": False,
+            "say": "<p>Okay, I won&rsquo;t delete your poster.</p>",
+        })
+    reply = await _delete_confirmed(request, uid, pid)
+    session.pop("delete_poster_id", None)
+    return reply
+
+
+async def _delete_confirmed(request: Request, uid: int, pid: int) -> JSONResponse:
     try:
         deleted = await posters.store().delete(uid, pid)
     except psycopg.Error:
@@ -148,7 +191,10 @@ async def delete_poster(request: Request, pid: int) -> JSONResponse:
     session = identity.session(request)
     if session is not None and session.get("poster_id") == pid:
         session.pop("poster_id", None)
-    return JSONResponse({"ok": True})
+    return JSONResponse({
+        "ok": True, "deleted": True,
+        "say": "<p>Okay, I deleted your poster.</p>",
+    })
 
 
 @router.get("/{pid}/view", response_class=HTMLResponse)

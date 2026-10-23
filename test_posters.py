@@ -161,11 +161,93 @@ class PosterRouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/posters/99/delete", json={"confirmed": True}).status_code, 404)
 
     def test_mutations_reject_cross_origin_and_non_json_requests(self) -> None:
-        for path in ("/posters/new", "/posters/11/delete"):
+        for path in ("/posters/new", "/posters/11/delete", "/posters/delete"):
             self.assertEqual(self.client.post(path, data={}).status_code, 415)
             self.assertEqual(self.client.post(path, json={}, headers={"Origin": "https://evil.example"}).status_code, 403)
         self.store.new_or_existing.assert_not_awaited()
         self.store.delete.assert_not_awaited()
+
+    def test_ajax_delete_prompts_with_owner_checked_escaped_title(self) -> None:
+        response = self.client.post("/posters/delete", json={"pid": 11})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "ok": True, "confirmation_required": True,
+            "say": '<p>Are you sure you want to delete "&lt;Research&gt;"?</p>',
+        })
+        self.assertEqual(self.session["delete_poster_id"], 11)
+        self.store.get.assert_awaited_once_with(7, 11)
+        self.store.delete.assert_not_awaited()
+
+    def test_ajax_delete_accepts_clean_response_affirmatives_and_clears_selection(self) -> None:
+        self.store.delete.return_value = True
+        for answer in ("yes", " Sure ", "okay", "y"):
+            with self.subTest(answer=answer):
+                self.session["poster_id"] = 11
+                self.client.post("/posters/delete", json={"pid": 11})
+                response = self.client.post("/posters/delete", json={"pid": 11, "response": answer})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), {
+                    "ok": True, "deleted": True,
+                    "say": "<p>Okay, I deleted your poster.</p>",
+                })
+                self.assertNotIn("poster_id", self.session)
+                self.assertNotIn("delete_poster_id", self.session)
+        self.store.delete.assert_awaited_with(7, 11)
+        response = self.client.post("/posters/delete", json={"pid": 11, "response": "yes"})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.store.delete.await_count, 4)
+
+    def test_ajax_delete_nonaffirmatives_cancel_without_deleting(self) -> None:
+        self.session["poster_id"] = 12
+        for answer in ("no", "nope", "maybe", "delete it", "not now"):
+            with self.subTest(answer=answer):
+                self.client.post("/posters/delete", json={"pid": 11})
+                response = self.client.post("/posters/delete", json={"pid": 11, "response": answer})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), {
+                    "ok": True, "deleted": False,
+                    "say": "<p>Okay, I won&rsquo;t delete your poster.</p>",
+                })
+                self.assertNotIn("delete_poster_id", self.session)
+                self.assertEqual(self.session["poster_id"], 12)
+        self.store.delete.assert_not_awaited()
+
+    def test_ajax_delete_rejects_missing_prompt_invalid_inputs_and_wrong_owner(self) -> None:
+        self.assertEqual(self.client.post("/posters/delete", json={
+            "pid": 11, "response": "yes",
+        }).status_code, 409)
+        for pid in (None, True, "11", 0, -1):
+            self.assertEqual(self.client.post("/posters/delete", json={"pid": pid}).status_code, 422)
+        self.client.post("/posters/delete", json={"pid": 11})
+        for answer in (None, True, "", " ", "y" * 2001):
+            self.assertEqual(self.client.post("/posters/delete", json={
+                "pid": 11, "response": answer,
+            }).status_code, 422)
+        self.assertEqual(self.client.post("/posters/delete", json={
+            "pid": 12, "response": "yes",
+        }).status_code, 409)
+        self.store.get.return_value = None
+        self.assertEqual(self.client.post("/posters/delete", json={"pid": 99}).status_code, 404)
+        self.store.delete.assert_not_awaited()
+        self.uid = None
+        self.assertEqual(self.client.post("/posters/delete", json={"pid": 11}).status_code, 401)
+
+    def test_ajax_delete_reports_database_failures_and_disappeared_posters(self) -> None:
+        self.store.get.side_effect = psycopg.OperationalError("unavailable")
+        with self.assertLogs("routers.posters", "ERROR"):
+            self.assertEqual(self.client.post("/posters/delete", json={"pid": 11}).status_code, 503)
+        self.store.get.side_effect = None
+        self.client.post("/posters/delete", json={"pid": 11})
+        self.store.delete.side_effect = psycopg.OperationalError("unavailable")
+        with self.assertLogs("routers.posters", "ERROR"):
+            self.assertEqual(self.client.post("/posters/delete", json={
+                "pid": 11, "response": "yes",
+            }).status_code, 503)
+        self.store.delete.side_effect = None
+        self.store.delete.return_value = False
+        self.assertEqual(self.client.post("/posters/delete", json={
+            "pid": 11, "response": "yes",
+        }).status_code, 404)
 
     def test_database_errors_are_visible(self) -> None:
         self.store.list.side_effect = psycopg.OperationalError("unavailable")
