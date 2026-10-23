@@ -36,7 +36,7 @@ When chatbot output is rendered in the #chatbot container, look for any HTML con
 ## Embedded Buttons
 
 Embedded buttons are HTML `<button>`.
-Embedded buttons may have a `data-sends` or `data-does` attributes, or both.s.
+Embedded buttons may have `data-sends` or `data-does` attributes, or both.
 The value of the `data-does` attribute will trigger the specified client-side command when clicked.
 The value of `data-sends` is sent to the server as the user's response when the button is clicked.
 
@@ -50,8 +50,12 @@ Example:
 ### Data Groups
 
 A `data-group` attribute identifies a group of buttons. 
-When one is clicked, all buttons in the same group are automatically deselected.
-Once a button is clicked, no other button can be clicked again.
+When one is clicked, all buttons in the same group are automatically deselected,
+the clicked button is selected, and all buttons in that group are disabled.
+Groups span the current chat log. Ungrouped buttons disable only themselves.
+Newly rendered buttons can start a new decision. If both attributes are present,
+the response is submitted first, then the client command runs through the same
+dispatcher as server commands (including page overrides and registered defaults).
 Buttons are for decisions being passed to the chatbot for processing.
 
 ## Embedded Input Fields
@@ -62,7 +66,9 @@ They have a little 'OK' button for submitting the input value, after which the i
 Embedded input fields can have both `data-memory` and `data-name` attributes.
 The `data-memory` attribute specifies where the input value should be stored in the chatbot's memory: `user`, `session`, or `poster`.
 The `data-name` attribute specifies the key under which the input value will be stored in the specified memory.
-It is an error if either attribute is missing when the input is rendered.
+It is an error if exactly one attribute is missing, the memory scope is invalid,
+or the name is empty when the input is rendered. Invalid controls are disabled
+and a notice is displayed.
 
 If both attributes are missing, then clicking `OK` will simply send the value to the server without storing it in memory.
 
@@ -72,20 +78,51 @@ Embedded textareas are HTML `<textarea>` elements.
 They can have a `data-memory` and `data-name` attributes similar to input fields.
 The `data-memory` attribute specifies where the entered value should be stored in the chatbot's memory: `user`, `session`, or `poster`.
 The `data-name` attribute specifies the key under which the entered value will be stored in the specified memory.
-It is an error if either attribute is missing when the textarea is rendered.
+It is an error if exactly one attribute is missing, the memory scope is invalid,
+or the name is empty when the textarea is rendered.
 
-If both attributes are missing, then entering a value will simply send it to the server without storing it in memory.
+Textareas have an OK button; Enter inserts a newline. If both attributes are
+missing, clicking OK sends the value without storing it in memory.
 
 ## Embedded Selects
 
 Embedded selects are HTML `<select>` elements.
-They are always rendered as dropdown menus..
+They are always rendered as single-choice dropdown menus, even if the supplied
+HTML specifies `multiple` or a larger `size`.
 They can have a `data-memory` and `data-name` attributes similar to input fields.
 The `data-memory` attribute specifies where the selected value should be stored in the chatbot's memory: `user`, `session`, or `poster`.
 The `data-name` attribute specifies the key under which the selected value will be stored in the specified memory.
-It is an error if either attribute is missing when the select is rendered.
+It is an error if exactly one attribute is missing, the memory scope is invalid,
+or the name is empty when the select is rendered.
 
 If both attributes are missing, then selecting an option will simply send the value to the server without storing it in memory.
+
+### Submission and memory
+
+Input fields submit with OK or Enter; selects submit on change. Submitted fields
+and their OK buttons are disabled to prevent duplicate responses. Values must
+pass native HTML validation, be nonblank, and be at most 2,000 characters.
+Values are sent as strings (including numeric inputs). Responses are echoed as
+plain text and use the same response-waiting flow as the main chat input,
+including iframe-local `requestResponse()` waits and inactivity reminders.
+
+Memory-backed controls first send a websocket control frame:
+
+```json
+{"memory": {"id": 1, "scope": "session", "name": "answer", "value": "Ada"}}
+```
+
+The server replies with `{"memory": {"id": 1, "ok": true}}` after storing the
+value, then the client submits the ordinary text response. A failed write
+returns `ok: false` and an `error` message; the client displays it and re-enables
+the field without submitting a response. Memory frames do not satisfy response
+waits or enter the intent stack.
+
+`session` uses the conversation's short-term memory, persisted by the existing
+server-side session lifecycle. `user` and `poster` use the conversation's
+identity-bound KV stores; unavailable scopes are errors, never unowned stores.
+The client cannot specify a user or poster ID. Both attributes absent means no
+memory write is attempted.
 
 ## Server replies
 

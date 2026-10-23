@@ -200,6 +200,52 @@ class Chatbot:
             self.short_term_memory["last_user_input"] = message
             await self.handle_message(message)
 
+    async def _remember_control(self, message: str) -> bool:
+        """Store an embedded value before the client submits it as a response."""
+        try:
+            frame = json.loads(message)
+        except ValueError:
+            return False
+        if not isinstance(frame, dict) or set(frame) != {"memory"}:
+            return False
+        data = frame["memory"]
+        request_id = data.get("id") if isinstance(data, dict) else None
+        try:
+            if (
+                not isinstance(data, dict)
+                or set(data) != {"id", "scope", "name", "value"}
+                or type(request_id) is not int or request_id <= 0
+                or data["scope"] not in ("user", "session", "poster")
+                or not isinstance(data["name"], str) or not data["name"].strip()
+                or len(data["name"]) > MAX_MESSAGE_LENGTH
+                or not isinstance(data["value"], str) or not data["value"].strip()
+                or len(data["value"]) > MAX_MESSAGE_LENGTH
+            ):
+                raise ValueError("Invalid embedded control memory attributes or value.")
+            scope, name, value = data["scope"], data["name"], data["value"]
+            store = self.user_memory if scope == "user" else self.long_term_memory
+            if scope != "session" and store is None:
+                raise ValueError(f"{scope.capitalize()} memory is unavailable for this conversation.")
+        except ValueError as error:
+            logger.warning("Rejected embedded memory submission: %s", error)
+            await self.send({"memory": {"id": request_id, "ok": False, "error": str(error)}})
+            return True
+        try:
+            if scope == "session":
+                self.short_term_memory[name] = value
+            else:
+                assert store is not None
+                await store.set(name, value)
+        except Exception:
+            logger.exception("Failed to store embedded control value")
+            await self.send({"memory": {
+                "id": request_id, "ok": False,
+                "error": "Wikkit could not store that value. Please try again.",
+            }})
+        else:
+            await self.send({"memory": {"id": request_id, "ok": True}})
+        return True
+
     async def _receive(self) -> None:
         while True:
             try:
@@ -216,6 +262,8 @@ class Chatbot:
                 return
             message = text.strip()
             if not message:
+                continue
+            if await self._remember_control(message):
                 continue
             page = page_event(message)
             if page is not None:

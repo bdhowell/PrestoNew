@@ -172,7 +172,13 @@ class PosterRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {
             "ok": True, "confirmation_required": True,
-            "say": '<p>Are you sure you want to delete "&lt;Research&gt;"?</p>',
+            "say": (
+                '<p>Are you sure you want to delete "&lt;Research&gt;?"</p>'
+                '<div class="centered">'
+                '<button class="action" data-sends="yes">Yes</button> &nbsp;'
+                '<button class="action" data-sends="no">No</button>'
+                "</div>"
+            ),
         })
         self.assertEqual(self.session["delete_poster_id"], 11)
         self.store.get.assert_awaited_once_with(7, 11)

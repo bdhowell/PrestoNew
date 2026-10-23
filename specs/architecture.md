@@ -458,14 +458,14 @@ Has a button, "New Poster" which when clicked checks whether the user has an exi
   authors, and text sections; it is not a print/export renderer or layout editor.
   `GET /posters/{pid}/preview` also supplies owner-only draft thumbnails.
 - `POST /posters/delete` accepts same-origin JSON with `pid` and returns Wikkit's
-  confirmation question without rendering a template. The list waits for a chat
-  reply, then posts `pid` and `response` to the same endpoint. A server-side
-  pending poster ID binds the reply to the prompt; `common.clean_response()`
-  must recognize "yes" to delete. Other replies cancel. Both results return
-  `deleted` and Wikkit's message; the list removes the card only on deletion.
-  Deletion removes dependent rows and poster memory and clears the selected
-  poster when appropriate. The legacy `POST /posters/{pid}/delete` endpoint
-  continues to require `confirmed: true`.
+  confirmation question with Yes/No buttons without rendering a template. The
+  list waits for a chat reply, then posts `pid` and `response` to the same
+  endpoint. A server-side pending poster ID binds the reply to the prompt;
+  `common.clean_response()` must recognize "yes" to delete. Other replies
+  cancel. Both results return `deleted` and Wikkit's message; the list removes
+  the card only on deletion. Deletion removes dependent rows and poster memory
+  and clears the selected poster when appropriate. The legacy
+  `POST /posters/{pid}/delete` endpoint continues to require `confirmed: true`.
 - Poster identity is revalidated before HTTP/websocket memory initialization.
   Authentication, owner filtering, and confirmation are enforced on the server.
 - Apply `schema/schema.sql` before enabling poster search. Run the focused tests
@@ -497,10 +497,10 @@ Randomly
 Wikkit Says: 
 f"""
 Are you sure you want to delete "{request.state.poster['title']}?"
-<div class="centered">
+<p class="centered">
 	<button class="action" data-sends="yes">Yes</button> &nbsp;
 	<button class="action" data-sends="no">No</button>
-</div>
+</p>
 """
 
 Wait for user input

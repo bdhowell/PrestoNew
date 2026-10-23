@@ -50,6 +50,8 @@
         let reminderTimer = null;
         let requestingResponse = false;
         let pageResponse = null;
+        let memoryRequestId = 0;
+        const memoryRequests = new Map();
         const reminderInterval = 120000;
 
         function append(div) {
@@ -61,6 +63,7 @@
             const div = document.createElement("div");
             div.className = "chat";
             div.innerHTML = html;
+            prepareControls(div);
             append(div);
         }
 
@@ -155,19 +158,165 @@
         const scheme = location.protocol === "https:" ? "wss:" : "ws:";
         const socket = new WebSocket(`${scheme}//${location.host}${chatbot.dataset.socket}`);
 
-        function send(text) {
+        function send(text, response = true) {
             if (socket.readyState === WebSocket.OPEN) {
-                if (text.trim()) {
+                if (response && text.trim()) {
                     stopRequest();
                 }
                 socket.send(text);
             } else if (socket.readyState === WebSocket.CONNECTING) {
-                if (text.trim()) {
+                if (response && text.trim()) {
                     stopRequest();
                 }
                 pending.push(text);
             } else {
                 sayText("Wikkit is not connected.", "notice");
+                return false;
+            }
+            return true;
+        }
+
+        function submitResponse(text) {
+            if (!text.trim() || text.length > 2000) {
+                sayText(text.trim() ? "That message is too long. Please keep it under 2000 characters."
+                    : "Please enter a response.", "notice");
+                return false;
+            }
+            if (pageResponse) {
+                const response = pageResponse;
+                pageResponse = null;
+                stopRequest();
+                response.resolve(text);
+            } else if (!send(text)) {
+                return false;
+            }
+            sayText(text, "user");
+            return true;
+        }
+
+        function remember(control) {
+            if (!control.hasAttribute("data-memory")) {
+                return Promise.resolve();
+            }
+            const id = ++memoryRequestId;
+            return new Promise((resolve, reject) => {
+                memoryRequests.set(id, { resolve, reject });
+                if (!send(JSON.stringify({ memory: {
+                    id, scope: control.dataset.memory, name: control.dataset.name,
+                    value: control.value,
+                } }), false)) {
+                    memoryRequests.delete(id);
+                    reject(new Error("Wikkit is not connected."));
+                }
+            });
+        }
+
+        function prepareControls(div) {
+            // Controls in chatbot output must not submit surrounding HTML forms.
+            div.addEventListener("submit", (event) => event.preventDefault());
+            for (const button of div.querySelectorAll("button")) {
+                button.type = "button";
+                button.addEventListener("click", async () => {
+                    if (button.disabled) {
+                        return;
+                    }
+                    const group = button.dataset.group;
+                    const buttons = group === undefined ? [button]
+                        : [...chatlog.querySelectorAll("button[data-group]")]
+                            .filter((other) => other.dataset.group === group);
+                    const enabled = buttons.filter((other) => !other.disabled);
+                    enabled.forEach((other) => { other.disabled = true; });
+                    try {
+                        if (button.hasAttribute("data-sends") && !submitResponse(button.dataset.sends)) {
+                            enabled.forEach((other) => { other.disabled = closed; });
+                            return;
+                        }
+                        if (button.hasAttribute("data-does")) {
+                            await executeCommand({ does: button.dataset.does });
+                        }
+                        buttons.forEach((other) => {
+                            other.classList.remove("selected");
+                            other.setAttribute("aria-pressed", "false");
+                        });
+                        button.classList.add("selected");
+                        button.setAttribute("aria-pressed", "true");
+                    } catch (error) {
+                        // A sent decision cannot be retracted even if its command fails.
+                        if (!button.hasAttribute("data-sends")) {
+                            enabled.forEach((other) => { other.disabled = closed; });
+                        }
+                        commandFailed(error);
+                    }
+                });
+            }
+            for (const control of div.querySelectorAll("input, textarea, select")) {
+                const hasMemory = control.hasAttribute("data-memory");
+                const hasName = control.hasAttribute("data-name");
+                if (hasMemory !== hasName || (hasMemory && (
+                    !["user", "session", "poster"].includes(control.dataset.memory)
+                    || !control.dataset.name.trim()
+                ))) {
+                    control.disabled = true;
+                    const error = new Error("Embedded controls require both a valid data-memory and a nonempty data-name, or neither.");
+                    console.error("Wikkit embedded control failed", error);
+                    sayText(error.message, "notice");
+                    continue;
+                }
+                const select = control.tagName === "SELECT";
+                let ok = null;
+                if (select) {
+                    control.multiple = false;
+                    control.size = 1;
+                } else {
+                    ok = document.createElement("button");
+                    ok.type = "button";
+                    ok.className = "embedded-ok";
+                    ok.textContent = "OK";
+                    ok.disabled = control.disabled;
+                    control.after(ok);
+                }
+                const submit = async () => {
+                    if (control.disabled || !control.reportValidity()) {
+                        return;
+                    }
+                    const value = control.value;
+                    if (!value.trim() || value.length > 2000) {
+                        sayText(value.trim() ? "That message is too long. Please keep it under 2000 characters."
+                            : "Please enter a response.", "notice");
+                        return;
+                    }
+                    control.disabled = true;
+                    if (ok) {
+                        ok.disabled = true;
+                    }
+                    try {
+                        await remember(control);
+                        if (submitResponse(value)) {
+                            return;
+                        }
+                    } catch (error) {
+                        console.error("Wikkit embedded control failed", error);
+                        sayText(error.message, "notice");
+                    }
+                    control.disabled = closed;
+                    if (ok) {
+                        ok.disabled = closed;
+                    }
+                };
+                control.addEventListener("input", resetReminder);
+                if (select) {
+                    control.addEventListener("change", submit);
+                } else {
+                    ok.addEventListener("click", submit);
+                    if (control.tagName === "INPUT") {
+                        control.addEventListener("keydown", (event) => {
+                            if (event.key === "Enter" && !event.isComposing) {
+                                event.preventDefault();
+                                submit();
+                            }
+                        });
+                    }
+                }
             }
         }
 
@@ -258,6 +407,19 @@
         let delivery = Promise.resolve();
 
         function deliver(message) {
+            if (message.memory) {
+                const result = message.memory;
+                const request = memoryRequests.get(result.id);
+                if (request) {
+                    memoryRequests.delete(result.id);
+                    if (result.ok === true) {
+                        request.resolve();
+                    } else {
+                        request.reject(new Error(result.error || "Wikkit could not store that value."));
+                    }
+                }
+                return;
+            }
             const html = message.say ?? message.user;
             if (typeof html === "string" && html) {
                 say(html);
@@ -296,6 +458,13 @@
         });
         socket.addEventListener("close", (event) => {
             closed = true;
+            for (const request of memoryRequests.values()) {
+                request.reject(new Error("The connection to Wikkit has closed."));
+            }
+            memoryRequests.clear();
+            chatlog.querySelectorAll("button, input, textarea, select").forEach((control) => {
+                control.disabled = true;
+            });
             stopRequest();
             if (pageResponse) {
                 pageResponse.reject(new Error("The connection to Wikkit has closed."));
@@ -320,19 +489,8 @@
             event.preventDefault();
             const text = chatinput.innerText.trim();
             if (text) {
-                if (pageResponse && text.length > 2000) {
-                    sayText("That message is too long. Please keep it under 2000 characters.", "notice");
-                    return;
-                }
-                chatinput.replaceChildren();
-                sayText(text, "user");
-                if (pageResponse) {
-                    const response = pageResponse;
-                    pageResponse = null;
-                    stopRequest();
-                    response.resolve(text);
-                } else {
-                    send(text);
+                if (submitResponse(text)) {
+                    chatinput.replaceChildren();
                 }
             }
         });

@@ -261,6 +261,31 @@ class WikkitSocketTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
 
+    def test_memory_frame_stores_before_response_and_accepts_length_limit(self) -> None:
+        async def workflow(session: chatbot.Chatbot, message: str) -> None:
+            response = await session.request_response("Your answer?")
+            await session.send({"say": f"{session.short_term_memory['answer']}: {response}"})
+
+        with patch.object(chatbot.Chatbot, "handle_message", workflow):
+            with self.client.websocket_connect("/wikkit/ws") as socket:
+                socket.send_text("start")
+                self.assertEqual(socket.receive_json()["say"], "Your answer?")
+                socket.send_json({"memory": {
+                    "id": 1, "scope": "session", "name": "answer", "value": "Ada",
+                }})
+                self.assertEqual(socket.receive_json(), {"memory": {"id": 1, "ok": True}})
+                socket.send_text("Ada")
+                self.assertEqual(socket.receive_json(), {"say": "Ada: Ada"})
+            with self.client.websocket_connect("/wikkit/ws") as socket:
+                socket.send_json({"memory": {
+                    "id": 2, "scope": "session", "name": "answer", "value": "x" * 2000,
+                }})
+                self.assertEqual(socket.receive_json(), {"memory": {"id": 2, "ok": True}})
+                socket.send_text("start")
+                socket.receive_json()
+                socket.send_text("Grace")
+                self.assertEqual(socket.receive_json(), {"say": f"{'x' * 2000}: Grace"})
+
     def test_socket_dispatches_messages_through_one_intent_stack(self) -> None:
         stacks: list[chatbot.IntentStack] = []
         original_dispatch = chatbot.IntentStack.dispatch
@@ -351,6 +376,74 @@ class WikkitAsyncTests(unittest.IsolatedAsyncioTestCase):
             "session": {"id": 42},
         }}, receive=AsyncMock(), send=AsyncMock())
         self.session = chatbot.Chatbot(self.websocket)
+
+    async def test_embedded_memory_scopes_and_acknowledgements(self) -> None:
+        self.session.user_memory = AsyncMock()
+        self.session.long_term_memory = AsyncMock()
+        with patch.object(self.websocket, "send_json", new_callable=AsyncMock) as send:
+            for request_id, scope in enumerate(("session", "user", "poster"), 1):
+                self.assertTrue(await self.session._remember_control(json.dumps({
+                    "memory": {"id": request_id, "scope": scope, "name": "answer", "value": "Ada"},
+                })))
+                send.assert_awaited_with({"memory": {"id": request_id, "ok": True}})
+        self.assertEqual(self.session.short_term_memory["answer"], "Ada")
+        self.session.user_memory.set.assert_awaited_once_with("answer", "Ada")
+        self.session.long_term_memory.set.assert_awaited_once_with("answer", "Ada")
+
+    async def test_embedded_memory_rejects_invalid_frames_without_writes(self) -> None:
+        valid = {"id": 1, "scope": "session", "name": "answer", "value": "Ada"}
+        invalid = [
+            None, {}, {**valid, "id": True}, {**valid, "scope": "other"},
+            {**valid, "name": ""}, {**valid, "name": "x" * 2001},
+            {**valid, "value": ""}, {**valid, "value": 42},
+            {**valid, "value": "x" * 2001}, {**valid, "user_id": 5},
+        ]
+        with patch.object(self.websocket, "send_json", new_callable=AsyncMock) as send:
+            for data in invalid:
+                with self.subTest(data=data), self.assertLogs("wikkit", "WARNING"):
+                    self.assertTrue(await self.session._remember_control(json.dumps({"memory": data})))
+                    self.assertFalse(send.await_args.args[0]["memory"]["ok"])
+        self.assertEqual(self.session.short_term_memory, {})
+
+    async def test_embedded_memory_unavailable_and_storage_failures_are_reported(self) -> None:
+        with patch.object(self.websocket, "send_json", new_callable=AsyncMock) as send:
+            for scope in ("user", "poster"):
+                frame = json.dumps({"memory": {
+                    "id": 1, "scope": scope, "name": "answer", "value": "Ada",
+                }})
+                with self.assertLogs("wikkit", "WARNING"):
+                    await self.session._remember_control(frame)
+                self.assertIn("unavailable", send.await_args.args[0]["memory"]["error"])
+            self.session.long_term_memory = AsyncMock()
+            for error in (RuntimeError("private database details"), ValueError("private schema details")):
+                self.session.long_term_memory.set.side_effect = error
+                with self.assertLogs("wikkit", "ERROR"):
+                    await self.session._remember_control(frame)
+                self.assertEqual(send.await_args.args[0]["memory"], {
+                    "id": 1, "ok": False,
+                    "error": "Wikkit could not store that value. Please try again.",
+                })
+
+    async def test_embedded_memory_does_not_consume_workflow_response(self) -> None:
+        self.websocket._receive = AsyncMock(return_value={"type": "websocket.connect"})
+        await self.websocket.accept()
+        waiting = asyncio.create_task(self.session.request_response())
+        await asyncio.sleep(0)
+        self.websocket.receive = AsyncMock(side_effect=[
+            {"type": "websocket.receive", "text": json.dumps({"memory": {
+                "id": 1, "scope": "session", "name": "answer", "value": "Ada",
+            }})},
+            {"type": "websocket.receive", "text": "Ada"},
+            {"type": "websocket.disconnect"},
+        ])
+        await self.session._receive()
+        self.assertEqual(await waiting, "Ada")
+        self.assertEqual(self.session.short_term_memory["answer"], "Ada")
+        self.assertTrue(self.session._messages.empty())
+
+    async def test_ordinary_text_and_json_are_not_memory_frames(self) -> None:
+        for text in ("Ada", '{"page":"help"}', '{"memory": {}, "other": 1}', "[]"):
+            self.assertFalse(await self.session._remember_control(text))
 
     async def test_substitute_reads_mapping_and_object_fields(self) -> None:
         self.assertEqual(

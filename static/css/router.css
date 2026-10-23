@@ -80,6 +80,89 @@ body.wikkit {
     font-size: 1rem;
 }
 
+#chatlog button,
+#chatlog input,
+#chatlog textarea,
+#chatlog select {
+    box-sizing: border-box;
+    max-width: 100%;
+    margin-block: 0.25rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid #6b62b5;
+    border-radius: 4px;
+    background: #0f0c24;
+    color: #fff;
+    font-family: system-ui, sans-serif;
+    font-size: 1rem;
+    line-height: 1.4;
+    color-scheme: dark;
+    accent-color: #f4d35e;
+}
+
+#chatlog input::placeholder,
+#chatlog textarea::placeholder {
+    color: #aaa3c9;
+    opacity: 1;
+}
+
+#chatlog textarea {
+    display: block;
+    width: 100%;
+    min-height: 4.5rem;
+    resize: vertical;
+}
+
+#chatlog button {
+    padding-inline: 0.75rem;
+    border-color: #c9a227;
+    background: #2f2766;
+    color: #f4d35e;
+    font-family: "Aladin", system-ui;
+    font-size: 1.25rem;
+    cursor: pointer;
+}
+
+#chatlog button:not(:last-child) {
+    margin-right: 0.35rem;
+}
+
+#chatlog button:hover:not(:disabled) {
+    border-color: #f4d35e;
+    background: #443784;
+}
+
+#chatlog button:active:not(:disabled),
+#chatlog button.selected {
+    border-color: #f4d35e;
+    background: #f4d35e;
+    color: #0f0c24;
+}
+
+#chatlog button:focus-visible,
+#chatlog input:focus-visible,
+#chatlog textarea:focus-visible,
+#chatlog select:focus-visible {
+    border-color: #f4d35e;
+    outline: 2px solid #f4d35e;
+    outline-offset: 2px;
+}
+
+#chatlog .embedded-ok {
+    margin-left: 0.35rem;
+}
+
+#chatlog button:disabled,
+#chatlog input:disabled,
+#chatlog textarea:disabled,
+#chatlog select:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+}
+
+#chatlog button.selected:disabled {
+    opacity: 1;
+}
+
 #chatinput {
     flex: none;
     height: 4.5rem;
@@ -113,4 +196,8 @@ body.wikkit {
 
 #chatbot.disconnected #chatinput {
     opacity: 0.5;
+}
+
+#chatbot .centered {
+    text-align: center;
 }
