@@ -175,8 +175,8 @@ class PosterRouteTests(unittest.TestCase):
             "say": (
                 '<p>Are you sure you want to delete "&lt;Research&gt;?"</p>'
                 '<div class="centered">'
-                '<button class="action" data-sends="yes">Yes</button> &nbsp;'
-                '<button class="action" data-sends="no">No</button>'
+                '<button class="action" data-sends="yes" data-group="confirmation">Yes</button> &nbsp;'
+                '<button class="action" data-sends="no" data-group="confirmation">No</button>'
                 "</div>"
             ),
         })

@@ -165,8 +165,8 @@ async def confirm_delete(request: Request) -> JSONResponse:
             "say": (
                 f'<p>Are you sure you want to delete "{html.escape(poster.name)}?"</p>'
                 '<p class="centered">'
-                '<button class="action" data-sends="yes">Yes</button> &nbsp;'
-                '<button class="action" data-sends="no">No</button>'
+                '<button class="action" data-sends="yes" data-group="confirmation">Yes</button> &nbsp;'
+                '<button class="action" data-sends="no" data-group="confirmation">No</button>'
                 "</p>"
             ),
         })

@@ -284,7 +284,7 @@
             return true;
         }
 
-        function submitResponse(text) {
+        function submitResponse(text, echo = true) {
             if (!text.trim() || text.length > 2000) {
                 sayText(text.trim() ? "That message is too long. Please keep it under 2000 characters."
                     : "Please enter a response.", "notice");
@@ -298,7 +298,9 @@
             } else if (!send(text)) {
                 return false;
             }
-            sayText(text, "user");
+            if (echo) {
+                sayText(text, "user");
+            }
             return true;
         }
 
@@ -335,7 +337,8 @@
                     const enabled = buttons.filter((other) => !other.disabled);
                     enabled.forEach((other) => { other.disabled = true; });
                     try {
-                        if (button.hasAttribute("data-sends") && !submitResponse(button.dataset.sends)) {
+                        if (button.hasAttribute("data-sends")
+                            && !submitResponse(button.dataset.sends, false)) {
                             enabled.forEach((other) => { other.disabled = closed; });
                             return;
                         }
@@ -400,7 +403,7 @@
                     }
                     try {
                         await remember(control);
-                        if (submitResponse(value)) {
+                        if (submitResponse(value, false)) {
                             return;
                         }
                     } catch (error) {
