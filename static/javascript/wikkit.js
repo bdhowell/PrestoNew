@@ -1,9 +1,8 @@
 /*
  * Wikkit chatbot client.
  *
- * Loaded by /wikkit, where it runs the #chatbot overlay and its websocket, and
- * by every page shown in the /wikkit iframe, where connect(listen) binds the
- * page to that overlay and returns the apiobj singleton.
+ * Loaded on every page. Owns the in-page overlay and websocket, restoring
+ * the overlay's content and geometry from this tab's sessionStorage.
  */
 (() => {
     "use strict";
@@ -39,9 +38,117 @@
         return true;
     }
 
-    function createHost(chatbot, frame) {
+    const storageKey = "wikkit.chatbot";
+    let host = null;
+
+    function createChatbot() {
+        const chatbot = document.createElement("section");
+        chatbot.id = "chatbot";
+        chatbot.setAttribute("aria-label", "Wikkit chatbot");
+        chatbot.dataset.socket = document.body.dataset.socket || "/wikkit/ws";
+        chatbot.style.setProperty("--chat-window-transition", `${document.body.dataset.chatWindowTransition || 330}ms`);
+        chatbot.style.setProperty("--chat-input-transition", `${document.body.dataset.chatInputTransition || 500}ms`);
+        chatbot.innerHTML = '<header class="chatbot-handle">Wikkit</header>'
+            + '<div id="chatlog" role="log" aria-live="polite"></div>'
+            + '<div id="chatinput" contenteditable="plaintext-only" role="textbox"'
+            + ' aria-label="Message Wikkit" aria-multiline="true"></div>';
+        try {
+            const saved = JSON.parse(sessionStorage.getItem(storageKey) || "null");
+            if (saved) {
+                if (typeof saved.content !== "string" || !saved.geometry
+                    || !["left", "top", "width", "height"].every((key) => Number.isFinite(saved.geometry[key]))
+                    || saved.geometry.width <= 0 || saved.geometry.height <= 0) {
+                    throw new Error("Invalid saved chatbot state.");
+                }
+                const content = document.createElement("template");
+                content.innerHTML = saved.content;
+                if (!content.content.querySelector(".chatbot-handle")
+                    || !content.content.querySelector("#chatlog")
+                    || !content.content.querySelector("#chatinput")) {
+                    throw new Error("Saved chatbot content is missing required elements.");
+                }
+                chatbot.replaceChildren(content.content.cloneNode(true));
+                for (const key of ["left", "top", "width", "height"]) {
+                    chatbot.style[key] = `${saved.geometry[key]}px`;
+                }
+                chatbot.style.right = "auto";
+                chatbot.style.bottom = "auto";
+                for (const name of ["chat-hidden", "input-closed"]) {
+                    chatbot.classList.toggle(name, saved[name] === true);
+                }
+                chatbot.inert = chatbot.classList.contains("chat-hidden");
+                if (chatbot.inert) {
+                    chatbot.setAttribute("aria-hidden", "true");
+                }
+            }
+        } catch (error) {
+            console.error("Wikkit could not restore its saved state", error);
+        }
+        if (document.body.dataset.clearChat === "true") {
+            chatbot.querySelector("#chatlog").replaceChildren();
+        }
+        document.body.appendChild(chatbot);
+        function keepInView() {
+            const rect = chatbot.getBoundingClientRect();
+            if (chatbot.style.left || rect.left < 0 || rect.top < 0) {
+                chatbot.style.left = `${Math.max(0, Math.min(rect.left, innerWidth - rect.width))}px`;
+                chatbot.style.top = `${Math.max(0, Math.min(rect.top, innerHeight - rect.height))}px`;
+                chatbot.style.right = "auto";
+                chatbot.style.bottom = "auto";
+            }
+        }
+        keepInView();
+        window.addEventListener("resize", keepInView);
+        return chatbot;
+    }
+
+    function persistChatbot(chatbot) {
+        function save() {
+            const clone = chatbot.cloneNode(true);
+            // Live form values are properties, not necessarily serialized attributes.
+            const controls = chatbot.querySelectorAll("input, textarea, select");
+            clone.querySelectorAll("input, textarea, select").forEach((copy, index) => {
+                const control = controls[index];
+                if (control.tagName === "TEXTAREA") {
+                    copy.textContent = control.value;
+                } else if (control.tagName === "SELECT") {
+                    [...copy.options].forEach((option, i) => {
+                        option.toggleAttribute("selected", control.options[i].selected);
+                    });
+                } else {
+                    if (control.type !== "file") {
+                        copy.setAttribute("value", control.value);
+                    }
+                    copy.toggleAttribute("checked", control.checked);
+                }
+            });
+            const rect = chatbot.getBoundingClientRect();
+            try {
+                sessionStorage.setItem(storageKey, JSON.stringify({
+                    content: clone.innerHTML,
+                    geometry: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+                    "chat-hidden": chatbot.classList.contains("chat-hidden"),
+                    "input-closed": chatbot.classList.contains("input-closed"),
+                }));
+            } catch (error) {
+                console.error("Wikkit could not save its state", error);
+            }
+        }
+        const mutations = new MutationObserver(save);
+        mutations.observe(chatbot, { subtree: true, childList: true, characterData: true, attributes: true });
+        const resize = new ResizeObserver(save);
+        resize.observe(chatbot);
+        chatbot.addEventListener("input", save);
+        chatbot.addEventListener("change", save);
+        window.addEventListener("resize", save);
+        save();
+        return save;
+    }
+
+    function createHost(chatbot) {
         const chatlog = chatbot.querySelector("#chatlog");
         const chatinput = chatbot.querySelector("#chatinput");
+        chatinput.contentEditable = "plaintext-only";
         const handle = chatbot.querySelector(".chatbot-handle");
         const pending = [];
         const attachmentWaiters = [];
@@ -51,6 +158,7 @@
         let requestingResponse = false;
         let pageResponse = null;
         let memoryRequestId = 0;
+        let leaving = false;
         const memoryRequests = new Map();
         const reminderInterval = 120000;
 
@@ -135,8 +243,8 @@
                 if (url.origin !== location.origin || !["http:", "https:"].includes(url.protocol)) {
                     throw new Error("Wikkit can only redirect to same-origin pages.");
                 }
-                client = null;
-                frame.src = url.href;
+                save();
+                location.assign(url.href);
             }],
             ["request", requestResponse],
             ["request-response", requestResponse],
@@ -214,7 +322,7 @@
         function prepareControls(div) {
             // Controls in chatbot output must not submit surrounding HTML forms.
             div.addEventListener("submit", (event) => event.preventDefault());
-            for (const button of div.querySelectorAll("button")) {
+            for (const button of div.querySelectorAll("button:not(.embedded-ok)")) {
                 button.type = "button";
                 button.addEventListener("click", async () => {
                     if (button.disabled) {
@@ -268,7 +376,8 @@
                     control.multiple = false;
                     control.size = 1;
                 } else {
-                    ok = document.createElement("button");
+                    ok = control.nextElementSibling?.matches("button.embedded-ok")
+                        ? control.nextElementSibling : document.createElement("button");
                     ok.type = "button";
                     ok.className = "embedded-ok";
                     ok.textContent = "OK";
@@ -370,7 +479,6 @@
             }
         }
 
-        // The shell is rendered once, so iframe pages report sign-in changes.
         function updateMenu(signedIn) {
             if (typeof signedIn !== "boolean") {
                 throw new TypeError("Sign-in state must be a boolean.");
@@ -385,19 +493,6 @@
                 postersMenu.hidden = !signedIn;
             }
         }
-
-        // Menu links navigate the iframe rather than replacing the shell.
-        document.querySelector(".basic-menu")?.addEventListener("click", (event) => {
-            const link = event.target.closest("a[href]");
-            if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
-                return;
-            }
-            const url = new URL(link.href, location.href);
-            if (url.origin === location.origin) {
-                event.preventDefault();
-                frame.src = url.href;
-            }
-        });
 
         function commandFailed(error) {
             console.error("Wikkit command failed", error);
@@ -457,6 +552,9 @@
             }
         });
         socket.addEventListener("close", (event) => {
+            if (leaving) {
+                return;
+            }
             closed = true;
             for (const request of memoryRequests.values()) {
                 request.reject(new Error("The connection to Wikkit has closed."));
@@ -480,7 +578,17 @@
         });
 
         chatinput.addEventListener("input", resetReminder);
-        window.addEventListener("pagehide", stopRequest, { once: true });
+        window.addEventListener("pagehide", () => {
+            leaving = true;
+            stopRequest();
+            save();
+            socket.close();
+        }, { once: true });
+        window.addEventListener("pageshow", (event) => {
+            if (event.persisted) {
+                location.reload();
+            }
+        });
 
         chatinput.addEventListener("keydown", (event) => {
             if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
@@ -519,14 +627,14 @@
             event.preventDefault();
         });
 
-        // Loading the iframe only after the host exists guarantees connect() finds it.
-        frame.src = frame.dataset.src;
+        for (const message of [...chatlog.children]) {
+            prepareControls(message);
+        }
+        chatlog.scrollTop = chatlog.scrollHeight;
+        const save = persistChatbot(chatbot);
 
         return Object.freeze({
             attach(win, listen, dispatch, ready) {
-                if (win.frameElement !== frame) {
-                    throw new Error("connect() must be called from the Wikkit iframe.");
-                }
                 if (client && client.win === win) {
                     client.listen = listen;
                     return client.apiobj;
@@ -582,49 +690,18 @@
     }
 
     function initHost() {
-        const chatbot = document.getElementById("chatbot");
-        const frame = document.getElementById("wikkit-frame");
-        if (chatbot && frame) {
-            window.Wikkit = createHost(chatbot, frame);
+        if (!host) {
+            host = createHost(createChatbot());
+            window.Wikkit = host;
         }
+        return host;
     }
-
-    function findHost() {
-        try {
-            return window.parent !== window ? window.parent.Wikkit ?? null : null;
-        } catch {
-            return null;  // cross-origin parent
-        }
-    }
-
-    // Reopens a page opened outside the shell (e.g. from an email link) inside it.
-    function openInShell() {
-        const form = document.createElement("form");
-        form.method = "post";
-        form.action = "/wikkit";
-        const url = document.createElement("input");
-        url.type = "hidden";
-        url.name = "url";
-        url.value = location.pathname + location.search + location.hash;
-        form.appendChild(url);
-        document.documentElement.appendChild(form);
-        form.submit();
-    }
-
-    const inert = Object.freeze({ say: () => {}, command: () => {} });
 
     window.connect = function connect(listen) {
         if (typeof listen !== "function") {
             throw new TypeError("connect(listen) requires a callback function.");
         }
-        const host = findHost();
-        if (!host && window.top === window && !document.getElementById("chatbot")) {
-            openInShell();
-            return inert;
-        }
-        if (!host) {
-            throw new Error("connect() must be called from a page loaded in the /wikkit iframe.");
-        }
+        const host = initHost();
         return host.attach(window, listen, dispatchPageCommand, pageReady);
     };
 

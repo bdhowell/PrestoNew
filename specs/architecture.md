@@ -55,19 +55,25 @@ Place any page-specific CSS in /static/css/pages/{page}.css
 # Router: Wikkit the Wizard
 
 **`/wikkit`**
-Provides the basic structural chatbot interface HTML.
-The chatbot name is "Wikkit".
-Contains a draggable, resizable, framed div (#chatbot) with an adjustable scrollable region to record the chat and a fixed-height, basic contentEditable region at the bottom of #chat for user input.
-Underneath the chatbot div is a viewport-sized iframe (100% width, 100% height).
+Redirects to `/wikkit/magic`, or to the same-origin URL supplied as a POST parameter.
+Every page loads Wikkit's code and stylesheet through the shared page template.
+Wikkit creates a draggable, resizable in-page element (#chatbot) with z-index 9999,
+a scrollable chat log, and a fixed-height contentEditable input region.
+There is no iframe.
 
 User input messages are moved from the contentEditable region to the bottom of the scrollable region before being sent to the server over the websocket.
-The page also supports a websocket connection to the chatbot.
-Accepts a URL as a post parameter to load; if no URL is provided then loads `/wikkit/magic` by default.
+Each page opens its own websocket connection to the chatbot and announces its page name.
+Navigation closes that connection; the destination page opens a new one.
 
-Write any client-side code for managing the chatbot into /status/javascript/wikkit.js
-Each page loaded into the iframe must load wikkit.js. 
+Client-side code lives in `/static/javascript/wikkit.js`.
+Whenever the chatbot's content changes, the client clones and serializes its content
+into the tab's `sessionStorage` under `wikkit.chatbot`, including live form values.
+Position and dimensions are saved initially and on moves, resizes, and page exit.
+On each new page, Wikkit restores that content and geometry (or uses an empty log/input
+and default geometry). Restored controls have their event handlers reattached.
+Hidden-chat and closed-input state are restored too. Storage failures are logged.
 
-When a page is loaded into the iframe, the page must call a wikkit.js function, `connect(listen)`, which is bound to the iframe.
+When a page loads, it calls `connect(listen)` to initialize its local Wikkit instance.
 The listen parameter is a callback that delivers chatbot messages to the client page.
 `connect(listen)` returns a JavaScript object, `apiobj`, which should probably be a singleton, that exposes two methods to the client:
 

@@ -2,8 +2,8 @@
  * Account router: submits .account-form forms as same-origin JSON (AJAX).
  *
  * Replies are {ok, say?, command?, signed_in?, redirect?, errors?}.
- * `signed_in` updates the shell menu before navigating. Wikkit says `say`; `errors` maps
- * field names to plain-text messages; `redirect` navigates this iframe page.
+ * `signed_in` updates the menu before navigating. Wikkit says `say`; `errors` maps
+ * field names to plain-text messages; `redirect` navigates the page.
  * Forms with data-done="hide" are hidden after a successful submission.
  */
 (() => {
@@ -51,22 +51,6 @@
                 return;
             }
             if (typeof reply.signed_in === "boolean") {
-                // An already-open shell may still expose the previous client API.
-                if (typeof window.wikkit?.setSignedIn !== "function") {
-                    console.info("Refreshing the Wikkit shell after an account state change.");
-                    const navigation = document.createElement("form");
-                    navigation.method = "post";
-                    navigation.action = "/wikkit";
-                    navigation.target = "_top";
-                    const destination = document.createElement("input");
-                    destination.type = "hidden";
-                    destination.name = "url";
-                    destination.value = reply.redirect ?? location.pathname + location.search;
-                    navigation.appendChild(destination);
-                    document.body.appendChild(navigation);
-                    navigation.submit();
-                    return;
-                }
                 window.wikkit.setSignedIn(reply.signed_in);
             }
             if (reply.command) {

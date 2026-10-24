@@ -8,13 +8,18 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Aladin&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="/static/css/router.css">
     {% block styles %}{% endblock %}
     <script src="/static/javascript/wikkit.js"></script>
     {% block scripts %}{% endblock %}
     {% include "page_assets.html" %}
 </head>
 {% set signed_in = request.state.user_id is defined and request.state.user_id %}
-<body class="wikkit-page" data-page="{{ page_name }}" data-signed-in="{{ 'true' if signed_in else 'false' }}">
+<body class="wikkit-page" data-page="{{ page_name }}" data-signed-in="{{ 'true' if signed_in else 'false' }}"
+      data-socket="{{ socket_path }}" data-chat-window-transition="{{ chat_window_transition_ms }}"
+      data-chat-input-transition="{{ chat_input_transition_ms }}"
+      data-clear-chat="{{ 'true' if clear_chat|default(false) else 'false' }}">
+    {% include "menu.html" %}
     <main>
         {% block content %}{% endblock %}
     </main>

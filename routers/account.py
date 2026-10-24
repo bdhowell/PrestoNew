@@ -270,7 +270,7 @@ Please sign in and we&rsquo;ll continue working on your poster.
 """
     return render_page(
         request, "account/signin.html", "account-signin", says,
-        returning_name=name, email=email,
+        returning_name=name, email=email, clear_chat=True,
     )
 
 

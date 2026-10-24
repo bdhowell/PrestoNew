@@ -33,19 +33,21 @@ class WikkitPageTests(unittest.TestCase):
         self.assertEqual(response.status_code, 307)
         self.assertEqual(response.headers["location"], "/wikkit/magic")
 
-    def test_get_loads_default_page_in_iframe(self) -> None:
+    def test_get_redirects_to_default_page_without_iframe(self) -> None:
+        redirect = self.client.get("/wikkit", follow_redirects=False)
+        self.assertEqual(redirect.status_code, 303)
+        self.assertEqual(redirect.headers["location"], "/wikkit/magic")
         response = self.client.get("/wikkit")
         self.assertEqual(response.status_code, 200)
         self.assertIn('<nav class="basic-menu" aria-label="Main navigation">', response.text)
         self.assertIn('href="/wikkit/pricing">Pricing</a>', response.text)
         self.assertIn('href="/account/signin">Sign in</a>', response.text)
         self.assertNotIn('href="/account/signout">Sign out</a>', response.text)
-        self.assertIn('id="chatbot"', response.text)
-        self.assertIn('id="chatinput" contenteditable="plaintext-only"', response.text)
-        self.assertIn('data-src="/wikkit/magic"', response.text)
+        self.assertNotIn("<iframe", response.text)
+        self.assertNotIn('id="chatbot"', response.text)  # Created by the client.
         self.assertIn('data-socket="/wikkit/ws"', response.text)
-        self.assertIn("--chat-window-transition: 330ms", response.text)
-        self.assertIn("--chat-input-transition: 500ms", response.text)
+        self.assertIn('data-chat-window-transition="330"', response.text)
+        self.assertIn('data-chat-input-transition="500"', response.text)
         self.assertIn('src="/static/javascript/wikkit.js"', response.text)
         self.assertIn('href="/static/css/router.css"', response.text)
 
@@ -53,13 +55,13 @@ class WikkitPageTests(unittest.TestCase):
         with patch.dict(os.environ, {"CHAT_WINDOW_TRANSITION": "125"}):
             response = self.client.get("/wikkit")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("--chat-window-transition: 125ms", response.text)
+        self.assertIn('data-chat-window-transition="125"', response.text)
 
     def test_chat_input_transition_uses_configured_duration(self) -> None:
         with patch.dict(os.environ, {"CHAT_INPUT_TRANSITION": "250"}):
             response = self.client.get("/wikkit")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("--chat-input-transition: 250ms", response.text)
+        self.assertIn('data-chat-input-transition="250"', response.text)
 
     def test_authenticated_user_sees_sign_out_link(self) -> None:
         request = wikkit.Request({
@@ -71,16 +73,18 @@ class WikkitPageTests(unittest.TestCase):
             "state": {"user_id": 1},
         })
 
-        response = wikkit._shell(request, None)
+        response = wikkit.render_page(request, "wikkit/magic.html", "wikkit-magic")
         rendered = response.body.decode()
 
         self.assertIn('href="/account/signout">Sign out</a>', rendered)
         self.assertNotIn('href="/account/signin">Sign in</a>', rendered)
 
-    def test_post_loads_requested_url_in_iframe(self) -> None:
-        response = self.client.post("/wikkit", data={"url": "/poster/create?step=1&a=b"})
-        self.assertEqual(response.status_code, 200)
-        self.assertIn('data-src="/poster/create?step=1&amp;a=b"', response.text)
+    def test_post_redirects_to_requested_url(self) -> None:
+        response = self.client.post(
+            "/wikkit", data={"url": "/poster/create?step=1&a=b"}, follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/poster/create?step=1&a=b")
 
     def test_chatbot_loads_aladin_font(self) -> None:
         response = self.client.get("/wikkit")
@@ -91,22 +95,27 @@ class WikkitPageTests(unittest.TestCase):
         self.assertNotIn("family=Henny+Penny", response.text)
 
     def test_post_without_url_loads_default_page(self) -> None:
-        response = self.client.post("/wikkit")
-        self.assertIn('data-src="/wikkit/magic"', response.text)
+        response = self.client.post("/wikkit", follow_redirects=False)
+        self.assertEqual(response.headers["location"], "/wikkit/magic")
 
-    def test_frame_url_rejects_non_same_origin_urls(self) -> None:
+    def test_navigation_url_rejects_non_same_origin_urls(self) -> None:
         for url in [
             "", "https://evil.example", "//evil.example", "/\\evil.example",
             "/\t/evil.example", "javascript:alert(1)", "relative/path",
         ]:
             with self.subTest(url=url):
-                self.assertEqual(wikkit.frame_url(url), wikkit.DEFAULT_URL)
-        self.assertEqual(wikkit.frame_url(" /wikkit/help "), "/wikkit/help")
+                self.assertEqual(wikkit.navigation_url(url), wikkit.DEFAULT_URL)
+                response = self.client.post("/wikkit", data={"url": url}, follow_redirects=False)
+                self.assertEqual(response.headers["location"], wikkit.DEFAULT_URL)
+        self.assertEqual(wikkit.navigation_url(" /wikkit/help "), "/wikkit/help")
 
-    def test_post_escapes_url_attribute(self) -> None:
-        response = self.client.post("/wikkit", data={"url": '/x"><script>alert(1)</script>'})
+    def test_post_does_not_render_url_as_html(self) -> None:
+        response = self.client.post(
+            "/wikkit", data={"url": '/x"><script>alert(1)</script>'}, follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 303)
         self.assertNotIn("<script>alert(1)", response.text)
-        self.assertIn("&#34;&gt;&lt;script&gt;", response.text)
+        self.assertNotIn("<script>", response.headers["location"])
 
     def test_magic_page_loads_wikkit_and_connects(self) -> None:
         response = self.client.get("/wikkit/magic")
@@ -131,7 +140,6 @@ class WikkitPageTests(unittest.TestCase):
 
             with patch.object(wikkit, "STATIC_DIR", static_dir):
                 response = self.client.get("/wikkit/magic")
-                shell = self.client.get("/wikkit")
             asset_app = FastAPI()
             asset_app.mount("/static", StaticFiles(directory=static_dir))
             asset_response = TestClient(asset_app).get(
@@ -154,7 +162,6 @@ class WikkitPageTests(unittest.TestCase):
             response.text.index('src="/static/javascript/wikkit.js"'),
             response.text.index('src="/static/javascript/pages/wikkit-magic.does"'),
         )
-        self.assertNotIn("wikkit-magic.does", shell.text)
         self.assertEqual(asset_response.status_code, 200)
         self.assertTrue(asset_response.headers["content-type"].startswith("text/javascript"))
 
@@ -166,14 +173,14 @@ class WikkitPageTests(unittest.TestCase):
         ):
             with self.subTest(extension=extension), TemporaryDirectory() as directory:
                 static_dir = Path(directory)
-                asset = static_dir / asset_type / "pages" / f"wikkit.{extension}"
+                asset = static_dir / asset_type / "pages" / f"wikkit-magic.{extension}"
                 asset.parent.mkdir(parents=True)
                 asset.touch()
                 with patch.object(wikkit, "STATIC_DIR", static_dir):
-                    assets = wikkit.page_assets("wikkit")
+                    assets = wikkit.page_assets("wikkit-magic")
                     for method in (self.client.get, self.client.post):
                         response = method("/wikkit")
-                        self.assertIn(f"/static/{asset_type}/pages/wikkit.{extension}", response.text)
+                        self.assertIn(f"/static/{asset_type}/pages/wikkit-magic.{extension}", response.text)
                 self.assertEqual(
                     {name for name, url in assets.items() if url is not None}, {key}
                 )
@@ -190,12 +197,26 @@ class WikkitPageTests(unittest.TestCase):
         self.assertEqual(stylesheet.status_code, 200)
         self.assertIn("text/css", stylesheet.headers["content-type"])
         self.assertIn("#chatbot {", stylesheet.text)
+        self.assertIn("z-index: 9999;", stylesheet.text)
+        self.assertNotIn("#wikkit-frame", stylesheet.text)
         self.assertIn("#chatbot.chat-hidden {", stylesheet.text)
         self.assertIn('"hide-chat"', script.text)
         self.assertIn('"show-chat"', script.text)
         self.assertIn('"close-input"', script.text)
         self.assertIn('"open-input"', script.text)
         self.assertIn("#chatbot.input-closed #chatinput {", stylesheet.text)
+
+    def test_public_pages_include_overlay_assets_and_menu(self) -> None:
+        for path in ("/wikkit/magic", "/wikkit/help", "/wikkit/pricing", "/account/signin"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertNotIn("<iframe", response.text)
+                self.assertIn('src="/static/javascript/wikkit.js"', response.text)
+                self.assertIn('href="/static/css/router.css"', response.text)
+                self.assertIn('<nav class="basic-menu"', response.text)
+                self.assertIn('data-socket="/wikkit/ws"', response.text)
+                self.assertIn("window.wikkit = connect(", response.text)
 
 
 class WikkitReplyTests(unittest.IsolatedAsyncioTestCase):

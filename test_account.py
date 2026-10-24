@@ -107,6 +107,10 @@ class AccountWithoutDatabaseTests(unittest.TestCase):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 200)
                 self.assertIn(f'data-page="{page}"', response.text)
+                self.assertIn(
+                    f'data-clear-chat="{"true" if page == "account-signin" else "false"}"',
+                    response.text,
+                )
                 self.assertIn('src="/static/javascript/account/router.js"', response.text)
                 self.assertIn("window.wikkit.say(", response.text)
         self.assertIn('value="a@b.co"', self.client.get("/account/recover?email=a%40b.co").text)

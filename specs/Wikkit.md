@@ -2,10 +2,14 @@
 
 We are going to build a chatbot that will help users create print-ready conference posters adding on to the code, logic, and data structures we already have in the repository.
 
-The chatbot utilizes the /wikkit endpoint to load /wikkit/welcome into the endpoint's iframe and provide access to /wikkit's overlayed #wikkit div, which is for chatbot interactions with the user while overlaying the active page in the iframe.
+Every page loads Wikkit's client code, which creates the in-page #chatbot overlay
+at z-index 9999. Its content and geometry persist in the tab's sessionStorage
+and are restored on each page load. `/wikkit` redirects to `/wikkit/magic` by
+default, or to a same-origin URL supplied by POST.
 
 The chatbot will be built using LangChain and LangGraph interacting with the main application's webserver, app.py.
-Each chat node has its own webpage associated with it, which is loaded into the iframe, underneath the chatbot div, whenever the node is accessed.
+Each chat node has its own webpage associated with it, reached by ordinary
+navigation whenever the node is accessed. The chatbot overlays that page.
 
 Modify getConferenceInfo.p in wikkit.py y to accept or use the main application server's openAI connection information, rather than requiring settings in .
 
@@ -38,7 +42,7 @@ JSON responses are commands to the client. For now, the only server-to-client co
 ## Chatbot Nodes or Steps
 
 The chatbot must guide the user through seven steps or nodes to successfully produce a poster.
-Each node has its own page which is loaded into the /wikkit iframe. Each node must load the next node.
+Each node has its own page. Each node must navigate to the next node's page.
 Some nodes may be visited multiple times, based on conditional edges, before the chat concludes.
 
 Here are the nodes:
@@ -329,4 +333,3 @@ New endpoint layoutPoster
 New endpoint addContent
 
 New endpoint storyboard
-

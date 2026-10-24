@@ -47,7 +47,7 @@
   text-decoration: underline;
 }
 
-.wikkit .basic-menu {
+.wikkit-page .basic-menu {
   position: fixed;
   inset: 0 0 auto;
 }
@@ -79,7 +79,7 @@
   font-style: normal;
 }
 
-/* Pages shown in the Wikkit iframe */
+/* Pages with the Wikkit overlay */
 .wikkit-page {
   margin: 0;
   min-height: 100vh;
@@ -90,7 +90,7 @@
 }
 
 .wikkit-page main {
-  /* clears the shell's fixed menu */
+  /* clears the fixed menu */
   padding: 4.5rem 1.5rem 2rem;
 }
 

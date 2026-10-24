@@ -1,4 +1,4 @@
-"""Wikkit the Wizard: chatbot shell, landing/pricing/help pages, and websocket."""
+"""Wikkit the Wizard: landing/pricing/help pages and websocket."""
 
 import html
 import logging
@@ -48,12 +48,8 @@ templates.env.globals["page_assets"] = page_assets
 templates.env.globals["app_name"] = identity.application_name
 
 
-def frame_url(url: str | None) -> str:
-    """Return a same-origin path for the iframe, or the default page.
-
-    Iframe pages call connect(), which reaches into the parent window, so only
-    same-origin paths can work; anything else would also allow framing other sites.
-    """
+def navigation_url(url: str | None) -> str:
+    """Return a same-origin navigation path, or the default page."""
     if url is None:
         return DEFAULT_URL
     url = url.strip()
@@ -65,20 +61,6 @@ def frame_url(url: str | None) -> str:
     if parts.scheme or parts.netloc:
         return DEFAULT_URL
     return url
-
-
-def _shell(request: Request, url: str | None) -> HTMLResponse:
-    return templates.TemplateResponse(
-        request,
-        "wikkit/wikkit.html",
-        {
-            "url": frame_url(url),
-            "socket_path": SOCKET_PATH,
-            "chat_window_transition_ms": chat_window_transition_ms(),
-            "chat_input_transition_ms": chat_input_transition_ms(),
-            "page_name": "wikkit",
-        },
-    )
 
 
 def chat_window_transition_ms() -> int:
@@ -95,26 +77,32 @@ def chat_input_transition_ms() -> int:
     return duration
 
 
-@router.get("", response_class=HTMLResponse)
-async def wikkit(request: Request) -> HTMLResponse:
-    return _shell(request, None)
+@router.get("")
+async def wikkit(request: Request) -> RedirectResponse:
+    return RedirectResponse(DEFAULT_URL, status_code=303)
 
 
-@router.post("", response_class=HTMLResponse)
+@router.post("")
 async def wikkit_with_url(
     request: Request, url: Annotated[str | None, Form()] = None
-) -> HTMLResponse:
-    return _shell(request, url)
+) -> RedirectResponse:
+    return RedirectResponse(navigation_url(url), status_code=303)
 
 
 def render_page(
     request: Request, template: str, page_name: str, says: str | None = None,
     status_code: int = 200, **context: object,
 ) -> HTMLResponse:
-    """Render a page for the Wikkit iframe; `says` is trusted HTML Wikkit says on load."""
+    """Render a page with Wikkit; `says` is trusted HTML Wikkit says on load."""
     return templates.TemplateResponse(
         request, template,
-        {"page_name": page_name, "wikkit_says": says, **context},
+        {
+            "page_name": page_name, "wikkit_says": says,
+            "socket_path": SOCKET_PATH,
+            "chat_window_transition_ms": chat_window_transition_ms(),
+            "chat_input_transition_ms": chat_input_transition_ms(),
+            **context,
+        },
         status_code=status_code,
     )
 

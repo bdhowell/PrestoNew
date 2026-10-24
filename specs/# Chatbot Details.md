@@ -1,6 +1,6 @@
 # Chatbot Details
 
-Like page-specific CSS and JavaScript, each webpage loaded into the iframe can
+Like page-specific CSS and JavaScript, each webpage can
 load `/static/javascript/pages/{page}.does`, using the same route-supplied page
 slug. The file is included only if it exists, after the core client and the
 page's ordinary JavaScript.
@@ -24,7 +24,7 @@ window.registerWikkitCommands({
 The handler receives one argument: an object, an array of objects, or null.
 An array is passed intact, not spread into multiple arguments. A command's
 `payload` overrides the registered `data`; omitted payload uses that default,
-and explicit null is passed through. Registrations belong to the iframe page
+and explicit null is passed through. Registrations belong to the current page
 and are discarded when that page unloads.
 
 Page-specific commands are registered in the `.does` files and override intrinsic commands with the same key
@@ -104,7 +104,7 @@ and their OK buttons are disabled to prevent duplicate responses. Values must
 pass native HTML validation, be nonblank, and be at most 2,000 characters.
 Values are sent as strings (including numeric inputs). Responses are echoed as
 plain text and use the same response-waiting flow as the main chat input,
-including iframe-local `requestResponse()` waits and inactivity reminders.
+including page-local `requestResponse()` waits and inactivity reminders.
 
 Memory-backed controls first send a websocket control frame:
 
@@ -149,7 +149,7 @@ accompany those responses.
 
 Page-specific (extrinsic) commands override intrinsic commands with the same
 key. Handlers can be async, and commands execute in arrival order. Commands
-received before the iframe connects wait for it and its scripts to load.
+received before the page connects wait for it and its scripts to load.
 Unknown commands and execution errors are logged and shown as a chatbot notice.
 
 ## Intrinsic commands
@@ -157,7 +157,7 @@ Unknown commands and execution errors are logged and shown as a chatbot notice.
 - `clear-chat`: clear the visible chat log.
   Account AJAX replies can include `command`; the page awaits
   `window.wikkit.execute(command)` before displaying `say` or redirecting.
-- `redirect`: navigate the iframe to the same-origin URL in the string payload.
+- `redirect`: save the chatbot state and navigate the page to the same-origin URL in the string payload.
 - `request-response`: start waiting for user input on the client.
   `request` is an alias for the example's original command key.
 
@@ -189,7 +189,7 @@ pending response waits and the message-processing task.
 
 ## Page workflows
 
-Pages rendered in the iframe extend `templates/page.html`, which sets
+Pages extend `templates/page.html`, which loads Wikkit's script and stylesheet and sets
 `<body data-page="slug" data-signed-in="true|false">`. When a page attaches,
 the client sends the control frame `{"page": "slug"}`; `wikkit.page_event`
 recognizes only that exact shape. `Chatbot.open_page(slug)` cancels and awaits
@@ -206,19 +206,19 @@ magic workflow sends the `remember-name` command from
 `static/javascript/pages/wikkit-magic.does`, which posts JSON to
 `POST /wikkit/name` to set the name cookie.
 
-`data-signed-in` updates the shell menu's Sign in/Sign out link. Menu clicks
-navigate the iframe. Successful sign-in, password recovery, and account deletion
+`data-signed-in` updates the page menu's Sign in/Sign out link. Menu clicks
+use normal page navigation. Successful sign-in, password recovery, and account deletion
 AJAX replies also include a boolean `signed_in`; the account client calls
 `window.wikkit.setSignedIn(...)` before redirecting, so the menu updates even
 if the destination page cannot load. Sign out clears the server-side session
 and its page reports `data-signed-in="false"` to restore the Sign in link.
-If an already-open shell lacks `setSignedIn`, the account client posts the
-destination to `/wikkit` at the top level to refresh the shell and its menu
-without repeating the successful account request.
-A page opened directly at top level posts its path to
-`/wikkit` so it reopens inside the shell, so a top-level GET is loaded twice;
-single-use links (such as account confirmation) redirect to a token-free page
-after use.
+Direct links initialize Wikkit on that page without reloading it inside a shell.
+Single-use links (such as account confirmation) redirect to a token-free page
+after use. Each navigation saves the cloned chatbot content, including live form
+values and draft input, plus its position and dimensions in sessionStorage.
+The next page creates a new chatbot and websocket, restores the saved state,
+and reattaches control handlers. Browser back/forward cache restores reload the
+page to establish a fresh connection.
 
 
 # Chatbot memory:
