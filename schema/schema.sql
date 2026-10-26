@@ -145,13 +145,15 @@ CREATE TABLE IF NOT EXISTS source (
     sid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
     kind        TEXT NOT NULL CHECK (kind IN ('text', 'svg','mixed','image','chart','table','logo','moreinfo', 'qrcode')),
-    parent      INTEGER NOT NULL REFERENCES source(sid) ON DELETE CASCADE,
+    parent      INTEGER REFERENCES source(sid) ON DELETE CASCADE,
     text        TEXT,
     description TEXT,
+    summary     TEXT,
     size        INTEGER NOT NULL,
     height      INTEGER,
     width       INTEGER,
     fileid      UUID,
+    storage_uri TEXT, -- absolute local path or gs://bucket/key for an original upload
     hash        TEXT, -- prevents repeatedly extracted the same item
     filename    TEXT, -- original filename of the uploaded file without the path
     mimetype    TEXT NOT NULL,
@@ -166,7 +168,12 @@ CREATE INDEX IF NOT EXISTS idx_source_fileid ON source (fileid);
 CREATE INDEX IF NOT EXISTS idx_source_parent ON source (parent);
 
 -- Allow at most one source of each special kind per poster.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_source_pid_kind_unique ON source (pid, kind);
+ALTER TABLE source ALTER COLUMN parent DROP NOT NULL;
+ALTER TABLE source ADD COLUMN IF NOT EXISTS storage_uri TEXT;
+ALTER TABLE source ADD COLUMN IF NOT EXISTS summary TEXT;
+DROP INDEX IF EXISTS idx_source_pid_kind_unique;
+CREATE UNIQUE INDEX idx_source_pid_kind_unique ON source (pid, kind)
+WHERE kind IN ('logo', 'moreinfo', 'qrcode');
 
 CREATE INDEX IF NOT EXISTS idx_source_embedding_ivfflat ON source
 USING ivfflat (embedding vector_cosine_ops)
@@ -179,16 +186,21 @@ CREATE TABLE IF NOT EXISTS authors (
     name        TEXT NOT NULL,
     affiliation TEXT,
     email       TEXT,
+    errata      TEXT,
     UNIQUE (pid, name)
 );
+
+ALTER TABLE authors ADD COLUMN IF NOT EXISTS errata TEXT;
 
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'section_which') THEN
-        CREATE TYPE section_which AS ENUM('title','abstract','introduction','materials and methods','results','conclusion', 'future plans', 'literature cited', 'additional information');
+        CREATE TYPE section_which AS ENUM('title','abstract','introduction','materials and methods','results','conclusion', 'future plans', 'literature cited', 'additional information', 'acknowledgements');
     END IF;
 END
 $$;
+
+ALTER TYPE section_which ADD VALUE IF NOT EXISTS 'acknowledgements';
 
 CREATE TABLE IF NOT EXISTS section (
     xid         SERIAL PRIMARY KEY,
@@ -363,10 +375,17 @@ RETURNS tsvector LANGUAGE sql STABLE AS $$
 $$;
 
 -- Fired before insert/update of text columns; keeps search_vector current.
+-- Uses NEW so inserted rows are indexed before they are visible to queries.
 CREATE OR REPLACE FUNCTION trg_conference_fts()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    NEW.search_vector := conference_search_vector(NEW.cid);
+    NEW.search_vector :=
+        setweight(to_tsvector('english', coalesce(NEW.name,        '')), 'A') ||
+        setweight(to_tsvector('english', coalesce(NEW.location,    '')), 'B') ||
+        setweight(to_tsvector('english', coalesce(NEW.description, '')), 'C') ||
+        setweight(to_tsvector('english', coalesce(
+            (SELECT string_agg(text, ' ') FROM keyterm WHERE cid = NEW.cid), ''
+        )), 'A');
     RETURN NEW;
 END;
 $$;

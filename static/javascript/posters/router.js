@@ -2,7 +2,6 @@
     "use strict";
 
     const message = document.querySelector(".poster-message");
-    const existing = document.querySelector("#existing-poster");
 
     async function post(url, body) {
         const response = await fetch(url, {
@@ -26,11 +25,15 @@
         button.disabled = true;
         message.textContent = "";
         try {
-            const reply = await post("/posters/new", {});
+            let reply = await post("/posters/check", {});
+            if (reply.ok && reply.redirect === "/posters/create") {
+                reply = await post(reply.redirect, {});
+            }
             if (reply.existing_poster) {
-                existing.querySelector("[data-open-existing]").href = `/posters/${reply.existing_poster}/open`;
-                existing.showModal();
-            } else if (reply.ok && reply.redirect) {
+                const response = await window.wikkit.requestResponse();
+                reply = await post("/posters/open", { response });
+            }
+            if (reply.ok && reply.redirect) {
                 location.assign(reply.redirect);
             }
         } catch (error) {
@@ -40,8 +43,6 @@
             button.disabled = false;
         }
     });
-
-    existing.querySelector("[data-close-dialog]").addEventListener("click", () => existing.close());
 
     for (const button of document.querySelectorAll("[data-delete-poster]")) {
         button.addEventListener("click", async () => {

@@ -2,7 +2,6 @@
 
 import html
 import logging
-import random
 import re
 from typing import Literal
 
@@ -12,6 +11,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 
 import identity
 import posters
+import elucidation
+from markupsafe import Markup
 from common import clean_response
 from routers.wikkit import BASE_DIR, read_json, render_page, templates
 
@@ -74,8 +75,79 @@ async def poster_list(
     )
 
 
-@router.post("/new")
-async def new_poster(request: Request) -> JSONResponse:
+@router.post("/check")
+async def check_poster(request: Request) -> JSONResponse:
+    await read_json(request)
+    uid = _uid(request)
+    try:
+        pid = await posters.store().unpurchased(uid)
+    except psycopg.Error:
+        logger.exception("Could not check for an unpurchased poster")
+        raise HTTPException(503, "Your posters could not be checked. Please try again.") from None
+    if pid is not None:
+        return JSONResponse({
+            "ok": False,
+            "say": f"<p>I&rsquo;m sorry, {identity.display_name(request)}, "
+                   "you can work on only one poster at a time. "
+                   "Would you like me to open it for you?</p>"
+                   '<p class="centered">'
+                   '<button class="action" data-sends="yes" data-group="confirmation">Yes</button> &nbsp;'
+                   '<button class="action" data-sends="no" data-group="confirmation">Not now</button></p>',
+            "existing_poster": pid,
+        }, status_code=409)
+    return JSONResponse({"ok": True, "redirect": "/posters/create"})
+
+
+@router.post("/open")
+async def open_current_poster(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    uid = _uid(request)
+    answer = data.get("response")
+    if "response" in data:
+        if not isinstance(answer, str) or not answer.strip() or len(answer) > 2000:
+            raise HTTPException(422, "Please enter a response of up to 2000 characters.")
+        if (clean_response(answer) or {}).get("response") != "yes":
+            return JSONResponse({"ok": True, "opened": False})
+    pid = await _open_current(request, uid)
+    return JSONResponse({
+        "ok": True, "opened": True, "redirect": f"/layout/edit?pid={pid}",
+        "say": _current_poster_message(request),
+    })
+
+
+def _current_poster_message(request: Request) -> str:
+    return f"<p>Here is your current unpurchased poster, {identity.display_name(request)}.</p>"
+
+
+@router.get("/open")
+async def open_current_page(request: Request) -> Response:
+    if getattr(request.state, "user_id", None) is None:
+        return RedirectResponse("/account/signin", status_code=303)
+    pid = await _open_current(request, _uid(request))
+    session = identity.session(request)
+    assert session is not None
+    session["wikkit_says"] = _current_poster_message(request)
+    return RedirectResponse(f"/layout/edit?pid={pid}", status_code=303)
+
+
+async def _open_current(request: Request, uid: int) -> int:
+    if identity.session(request) is None:
+        raise HTTPException(503, "Poster editing requires server-side sessions.")
+    try:
+        pid = await posters.store().unpurchased(uid)
+    except psycopg.Error:
+        logger.exception("Could not open the current poster")
+        raise HTTPException(503, "Your poster could not be opened. Please try again.") from None
+    if pid is None:
+        raise HTTPException(404, "You do not have an unpurchased poster.")
+    _select(request, pid)
+    request.state.poster_id = pid
+    request.state.poster = {"pid": pid}
+    return pid
+
+
+@router.post("/create")
+async def create_poster(request: Request) -> JSONResponse:
     await read_json(request)
     uid = _uid(request)
     if identity.session(request) is None:
@@ -86,41 +158,17 @@ async def new_poster(request: Request) -> JSONResponse:
         logger.exception("Could not create poster")
         raise HTTPException(503, "Your poster could not be created. Please try again.") from None
     name = identity.display_name(request)
+    _select(request, pid)
+    request.state.poster_id = pid
+    request.state.poster = {"pid": pid}
     if not created:
         return JSONResponse({
-            "ok": False,
-            "say": f"<p>I&rsquo;m sorry, {name}, you can work on only one poster at a time. "
-                   "Would you like me to open it for you?</p>",
-            "existing_poster": pid,
-        }, status_code=409)
-    _select(request, pid)
-    return JSONResponse({
-        "ok": True, "redirect": "/conferences/find",
-        "say": f"<p>I&rsquo;m creating your new poster, {name}!</p>",
-    })
-
-
-@router.get("/create", response_class=HTMLResponse)
-async def create_page(request: Request) -> Response:
-    if getattr(request.state, "user_id", None) is None:
-        return RedirectResponse("/account/signin", status_code=303)
-    session = identity.session(request)
-    pid = session.get("poster_id") if session is not None else None
-    if type(pid) is not int:
-        return RedirectResponse("/posters/list", status_code=303)
-    poster = await _owned(request, pid)
-    if poster.purchased:
-        return RedirectResponse("/posters/list", status_code=303)
-    width, height = poster.inches
-    await posters.store().initialize(
-        _uid(request), pid,
-        "vertical" if height > width else random.choice(("arena", "central")),
-        random.choice(installed_themes()),
-    )
-    poster = await _owned(request, pid)
-    return render_page(
-        request, "posters/create.html", "posters-create", poster=poster,
-    )
+            "ok": True,
+            "say": f"<p>I&rsquo;m sorry, {name}! You already have an existing "
+                   "unpurchased poster. Here it is.</p>",
+            "redirect": f"/layout/edit?pid={pid}",
+        })
+    return JSONResponse({"ok": True, "redirect": "/content/upload"})
 
 
 @router.get("/{pid}/open")
@@ -216,7 +264,13 @@ async def view_poster(request: Request, pid: int) -> Response:
 @router.get("/{pid}/preview", response_class=HTMLResponse)
 async def preview(request: Request, pid: int) -> Response:
     poster = await _owned(request, pid)
+    if poster.dimensions is None:
+        return HTMLResponse(
+            "<p>Preview unavailable: poster dimensions have not been set.</p>",
+            headers={"Cache-Control": "private, no-store"},
+        )
     sections, authors = await posters.store().content(_uid(request), pid)
+    sections = [(which, Markup(elucidation.clean_html(text))) for which, text in sections]
     width, height = poster.inches
     return templates.TemplateResponse(
         request, "posters/document.html",

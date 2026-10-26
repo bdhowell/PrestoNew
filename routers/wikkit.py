@@ -94,6 +94,10 @@ def render_page(
     status_code: int = 200, **context: object,
 ) -> HTMLResponse:
     """Render a page with Wikkit; `says` is trusted HTML Wikkit says on load."""
+    session = identity.session(request)
+    pending = session.pop("wikkit_says", None) if session is not None else None
+    if isinstance(pending, str):
+        says = pending + (says or "")
     return templates.TemplateResponse(
         request, template,
         {
@@ -107,6 +111,12 @@ def render_page(
     )
 
 
+def check_origin(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if origin is not None and urlsplit(origin).netloc != request.headers.get("host"):
+        raise HTTPException(403, "Cross-origin request rejected")
+
+
 async def read_json(request: Request) -> dict[str, object]:
     """Read a same-origin JSON object body.
 
@@ -116,9 +126,7 @@ async def read_json(request: Request) -> dict[str, object]:
     content_type = request.headers.get("content-type", "").split(";")[0].strip()
     if content_type != "application/json":
         raise HTTPException(415, "Expected application/json")
-    origin = request.headers.get("origin")
-    if origin is not None and urlsplit(origin).netloc != request.headers.get("host"):
-        raise HTTPException(403, "Cross-origin request rejected")
+    check_origin(request)
     try:
         data = await request.json()
     except ValueError:
@@ -213,9 +221,26 @@ Sure, what else would you like to know?
     await bot.handle_message(response)
 
 
+FINISHED_RESPONSES = ["finished", "imfinished", "done", "imdone", "alldone"]
+
+
+def finished_uploading(response: str) -> bool:
+    return (clean_response(response, FINISHED_RESPONSES) or {}).get("type") == "caller"
+
+
+async def upload_workflow(bot: Chatbot) -> None:
+    while True:
+        response = await bot.request_response(remind=False)
+        if finished_uploading(response):
+            await bot.send({"command": {"does": "finished-uploading"}})
+        else:
+            await bot.handle_message(response)
+
+
 WORKFLOWS: dict[str, Workflow] = {
     "wikkit-magic": magic_workflow,
     "wikkit-pricing": pricing_workflow,
+    "content-upload": upload_workflow,
 }
 
 

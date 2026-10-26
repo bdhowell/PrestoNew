@@ -33,12 +33,6 @@
 </form>
 {% if notice %}<p role="status">{{ notice }}</p>{% endif %}
 <p class="poster-message" role="status" aria-live="polite"></p>
-<dialog id="existing-poster">
-    <h2>Continue your current poster?</h2>
-    <p>You can work on only one unpurchased poster at a time.</p>
-    <a data-open-existing href="/posters/list">Open my poster</a>
-    <button type="button" data-close-dialog>Not now</button>
-</dialog>
 <div class="poster-items {{ view }}">
 {% for poster in items %}
     <article class="poster-card{% if not poster.purchased %} current{% endif %}" data-poster-id="{{ poster.pid }}">

@@ -25,8 +25,8 @@ TEMPLATES = ("arena", "central", "vertical")
 class Poster:
     pid: int
     name: str
-    description: str
-    dimensions: str
+    description: str | None
+    dimensions: str | None
     template: str | None
     theme: str | None
     purchased: bool
@@ -34,6 +34,8 @@ class Poster:
 
     @property
     def inches(self) -> tuple[float, float]:
+        if self.dimensions is None:
+            raise ValueError(f"Poster {self.pid} dimensions have not been set")
         match = re.fullmatch(r"(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)", self.dimensions)
         if match is None:
             raise ValueError(f"Poster {self.pid} has invalid dimensions")
@@ -168,6 +170,22 @@ class PosterStore:
             rows = await cursor.fetchall()
         return [Poster(*row) for row in rows]
 
+    async def unpurchased(
+        self, uid: int, connection: psycopg.AsyncConnection | None = None,
+    ) -> int | None:
+        """Find the owner's draft, optionally within the creation transaction."""
+        if connection is None:
+            connection = await self._connect()
+            async with connection:
+                return await self.unpurchased(uid, connection)
+        cursor = await connection.execute(
+            "SELECT pid FROM poster p WHERE uid = %s AND NOT EXISTS "
+            "(SELECT 1 FROM purchase b WHERE b.pid = p.pid) ORDER BY pid LIMIT 1",
+            (uid,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
     async def new_or_existing(self, uid: int) -> tuple[int, bool]:
         """Lock the owner so concurrent New Poster clicks cannot create two drafts."""
         connection = await self._connect()
@@ -175,17 +193,12 @@ class PosterStore:
             cursor = await connection.execute('SELECT uid FROM "user" WHERE uid = %s FOR UPDATE', (uid,))
             if await cursor.fetchone() is None:
                 raise ValueError("Poster owner no longer exists")
+            pid = await self.unpurchased(uid, connection)
+            if pid is not None:
+                return pid, False
             cursor = await connection.execute(
-                "SELECT pid FROM poster p WHERE uid = %s AND NOT EXISTS "
-                "(SELECT 1 FROM purchase b WHERE b.pid = p.pid) ORDER BY pid LIMIT 1",
+                "INSERT INTO poster (uid, dimensions, created) VALUES (%s, NULL, now()) RETURNING pid",
                 (uid,),
-            )
-            row = await cursor.fetchone()
-            if row:
-                return row[0], False
-            cursor = await connection.execute(
-                "INSERT INTO poster (uid, description, created) VALUES (%s, %s, now()) RETURNING pid",
-                (uid, "Untitled poster"),
             )
             row = await cursor.fetchone()
             assert row is not None

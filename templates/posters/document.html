@@ -17,7 +17,7 @@
     <div class="poster-sections">
     {% for which, content in sections if which != "title" %}
         <section>
-            <h2>{{ which | title }}</h2>
+            {% if not content.startswith('<h2>') and not content.startswith('<h3>') %}<h2>{{ which | title }}</h2>{% endif %}
             <div class="section-content">{{ content }}</div>
         </section>
     {% else %}

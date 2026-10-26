@@ -1,0 +1,12 @@
+{% extends "page.html" %}
+{% block title %}Find your conference - {{ app_name() }}{% endblock %}
+{% block content %}
+<h1>Find your conference or fair</h1>
+<p id="conferences-status" role="status" aria-live="polite"></p>
+<table id="conferences-list" hidden>
+    <caption>Matching conferences and fairs</caption>
+    <thead><tr><th scope="col">#</th><th scope="col">Name</th><th scope="col">Location</th><th scope="col">Purpose</th><th scope="col">Dates</th></tr></thead>
+    <tbody></tbody>
+</table>
+<p><a href="/content/upload">Continue without conference information</a></p>
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "page.html" %}
+{% block title %}Reviewing content - {{ app_name() }}{% endblock %}
+{% block content %}
+<h1>Reviewing your source content</h1>
+<p id="elucidation-status" role="status" aria-live="polite">Wikkit is preparing your poster content.</p>
+<p>Keep this page open while the review is running.</p>
+<button id="retry-elucidation" type="button" hidden>Try again</button>
+<p><a href="/content/upload">Back to source uploads</a></p>
+<script id="elucidation-messages" type="application/json">{{ progress_messages | tojson }}</script>
+{% endblock %}

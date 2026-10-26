@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-from routers import account, posters, wikkit  # noqa: E402  (loaded after .env so routers see its settings)
+from routers import account, conferences, content, posters, wikkit  # noqa: E402  (loaded after .env so routers see its settings)
 from identity import identity_context  # noqa: E402
 from posters import poster_context  # noqa: E402
 from memory import memory_context  # noqa: E402
@@ -39,6 +39,8 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.include_router(wikkit.router)
 app.include_router(account.router)
 app.include_router(posters.router)
+app.include_router(content.router)
+app.include_router(conferences.router)
 
 
 @app.get("/", include_in_schema=False)

@@ -1,0 +1,34 @@
+#conferences-list {
+    width: 100%;
+    text-align: left;
+}
+
+#conferences-list td {
+    padding: 0.5rem;
+    vertical-align: top;
+}
+
+#conferences-list tbody tr {
+    cursor: pointer;
+}
+
+#conferences-list tbody tr:hover,
+#conferences-list tbody tr.selected {
+    background: rgba(0, 0, 0, 0.08);
+}
+
+#conferences-list[aria-busy="true"] tbody tr {
+    cursor: progress;
+    opacity: 0.6;
+}
+
+.conference-choice {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: inherit;
+    font: inherit;
+    padding: 0;
+    text-align: left;
+    text-decoration: underline;
+}

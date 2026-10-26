@@ -152,17 +152,21 @@ class Chatbot:
         await self.send({"say": random.choice(options)}) if options else None
 
 
-    async def request_response(self, say: str | None = None) -> str:
-        """Pause this workflow until the next nonempty, valid user message."""
+    async def request_response(self, say: str | None = None, remind: bool = True) -> str:
+        """Pause this workflow until the next nonempty, valid user message.
+
+        With remind=False the client is not asked to prompt or remind the user.
+        """
         if self._response is not None:
             raise RuntimeError("Wikkit is already waiting for a response")
         response = asyncio.get_running_loop().create_future()
         self._response = response
-        reply: ClientReply = {"command": {"does": "request-response"}}
+        reply: ClientReply = {"command": {"does": "request-response"}} if remind else {}
         if say is not None:
             reply["say"] = say
         try:
-            await self.send(reply)
+            if reply:
+                await self.send(reply)
             return await response
         finally:
             self._response = None

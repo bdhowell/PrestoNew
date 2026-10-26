@@ -28,6 +28,7 @@ class PosterRouteTests(unittest.TestCase):
         self.store = AsyncMock()
         self.store.list.return_value = [DRAFT, replace(DRAFT, pid=12, purchased=True)]
         self.store.get.return_value = DRAFT
+        self.store.unpurchased.return_value = None
         self.store.content.return_value = (
             [("title", "<Research>"), ("results", "<script>alert(1)</script>")],
             [("Ada", "Institute")],
@@ -37,6 +38,7 @@ class PosterRouteTests(unittest.TestCase):
         self.addCleanup(mocked.stop)
 
         async def identity(connection: HTTPConnection) -> None:
+            self.request_state = connection.state
             connection.state.user_id = self.uid
             connection.state.user = {"user-name": "<Ada>"}
             connection.scope["session"] = self.session
@@ -59,11 +61,12 @@ class PosterRouteTests(unittest.TestCase):
 
     def test_signed_out_pages_redirect_and_mutations_require_identity(self) -> None:
         self.uid = None
-        for path in ("/posters/list", "/posters/create", "/posters/11/open", "/posters/11/view"):
+        for path in ("/posters/list", "/posters/open", "/posters/11/open", "/posters/11/view"):
             response = self.client.get(path, follow_redirects=False)
             self.assertEqual(response.status_code, 303)
             self.assertEqual(response.headers["location"], "/account/signin")
-        self.assertEqual(self.client.post("/posters/new", json={}).status_code, 401)
+        for path in ("/posters/check", "/posters/create"):
+            self.assertEqual(self.client.post(path, json={}).status_code, 401)
         self.assertEqual(self.client.post("/posters/11/delete", json={"confirmed": True}).status_code, 401)
         self.assertEqual(self.client.get("/posters/11/preview").status_code, 401)
         self.store.list.assert_not_awaited()
@@ -88,32 +91,103 @@ class PosterRouteTests(unittest.TestCase):
             response = self.client.get("/posters/list?q=research")
         self.assertIn("Keyword search only", response.text)
 
-    def test_new_poster_selects_draft_and_returns_wikkit_redirect(self) -> None:
+    def test_create_poster_selects_draft_and_returns_upload_redirect(self) -> None:
         self.store.new_or_existing.return_value = (11, True)
-        response = self.client.post("/posters/new", json={})
+        response = self.client.post("/posters/create", json={})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["redirect"], "/conferences/find")
-        self.assertIn("&lt;Ada&gt;", response.json()["say"])
+        self.assertEqual(response.json(), {"ok": True, "redirect": "/content/upload"})
         self.assertEqual(self.session["poster_id"], 11)
+        self.assertEqual(self.request_state.poster, {"pid": 11})
+        self.assertEqual(self.request_state.poster_id, 11)
         self.store.new_or_existing.assert_awaited_once_with(7)
+        self.store.initialize.assert_not_awaited()
 
     def test_existing_draft_offers_to_open_without_changing_selection(self) -> None:
-        self.store.new_or_existing.return_value = (11, False)
-        response = self.client.post("/posters/new", json={})
+        self.store.unpurchased.return_value = 11
+        response = self.client.post("/posters/check", json={})
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["existing_poster"], 11)
         self.assertIn("Would you like me to open it for you?", response.json()["say"])
         self.assertNotIn("redirect", response.json())
         self.assertNotIn("poster_id", self.session)
+        self.assertIn("I&rsquo;m sorry, &lt;Ada&gt;, you can work on only one poster at a time.", response.json()["say"])
+        self.store.unpurchased.assert_awaited_once_with(7)
+        self.store.new_or_existing.assert_not_awaited()
 
-    def test_create_initializes_vertical_layout_and_installed_theme(self) -> None:
-        self.session["poster_id"] = 11
-        response = self.client.get("/posters/create")
+    def test_check_without_draft_redirects_to_creation_without_creating(self) -> None:
+        response = self.client.post("/posters/check", json={})
+        self.assertEqual(response.json(), {"ok": True, "redirect": "/posters/create"})
+        self.store.new_or_existing.assert_not_awaited()
+
+    def test_open_current_draft_accepts_cleaned_affirmatives_and_sets_state(self) -> None:
+        self.store.unpurchased.return_value = 11
+        for answer in ("yes", " Sure ", "okay", "y"):
+            response = self.client.post("/posters/open", json={"response": answer})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {
+                "ok": True, "opened": True, "redirect": "/layout/edit?pid=11",
+                "say": "<p>Here is your current unpurchased poster, &lt;Ada&gt;.</p>",
+            })
+            self.assertEqual(self.session["poster_id"], 11)
+            self.assertEqual(self.request_state.poster, {"pid": 11})
+        self.store.unpurchased.assert_awaited_with(7)
+
+    def test_open_current_draft_cancels_nonaffirmatives_without_changing_selection(self) -> None:
+        self.session["poster_id"] = 99
+        for answer in ("no", "Not now", "maybe", "delete it"):
+            response = self.client.post("/posters/open", json={"response": answer})
+            self.assertEqual(response.json(), {"ok": True, "opened": False})
+            self.assertEqual(self.session["poster_id"], 99)
+        self.store.unpurchased.assert_not_awaited()
+
+    def test_open_current_draft_rejects_invalid_replies_and_missing_draft(self) -> None:
+        for answer in (None, True, "", " ", "y" * 2001):
+            self.assertEqual(self.client.post("/posters/open", json={"response": answer}).status_code, 422)
+        self.assertEqual(self.client.post("/posters/open", json={}).status_code, 404)
+        with patch("identity.session", return_value=None):
+            self.assertEqual(self.client.post("/posters/open", json={}).status_code, 503)
+        self.uid = None
+        self.assertEqual(self.client.post("/posters/open", json={}).status_code, 401)
+
+    def test_get_open_current_redirects_with_id_and_flashes_message_once(self) -> None:
+        self.store.unpurchased.return_value = 11
+        response = self.client.get("/posters/open", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/layout/edit?pid=11")
+        self.assertEqual(self.session["poster_id"], 11)
+        self.assertEqual(self.request_state.poster, {"pid": 11})
+        self.assertIn("Here is your current unpurchased poster", self.session["wikkit_says"])
+        page = self.client.get("/posters/list")
+        self.assertIn("Here is your current unpurchased poster", page.text)
+        self.assertNotIn("wikkit_says", self.session)
+        self.assertNotIn("Here is your current unpurchased poster", self.client.get("/posters/list").text)
+
+    def test_create_existing_draft_selects_it_and_redirects_to_editor(self) -> None:
+        self.store.new_or_existing.return_value = (11, False)
+        self.session["poster_id"] = 99
+        response = self.client.post("/posters/create", json={})
         self.assertEqual(response.status_code, 200)
-        self.store.initialize.assert_awaited_once_with(7, 11, "vertical", "basic")
-        self.assertIn("/posters/11/open", response.text)
-        self.session.clear()
-        self.assertEqual(self.client.get("/posters/create", follow_redirects=False).headers["location"], "/posters/list")
+        self.assertEqual(response.json()["redirect"], "/layout/edit?pid=11")
+        self.assertEqual(response.json()["say"], "<p>I&rsquo;m sorry, &lt;Ada&gt;! You already have an existing unpurchased poster. Here it is.</p>")
+        self.assertEqual(self.session["poster_id"], 11)
+        self.assertEqual(self.request_state.poster, {"pid": 11})
+        self.assertEqual(self.request_state.poster_id, 11)
+        self.store.initialize.assert_not_awaited()
+
+    def test_creation_requires_sessions_and_old_new_endpoint_is_removed(self) -> None:
+        with patch("identity.session", return_value=None):
+            self.assertEqual(self.client.post("/posters/create", json={}).status_code, 503)
+        self.store.new_or_existing.assert_not_awaited()
+        self.assertEqual(self.client.post("/posters/new", json={}).status_code, 404)
+        self.assertEqual(self.client.get("/posters/create").status_code, 405)
+
+    def test_new_draft_without_dimensions_has_explicit_preview_placeholder(self) -> None:
+        self.store.get.return_value = replace(DRAFT, dimensions=None, description=None)
+        response = self.client.get("/posters/11/preview")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("poster dimensions have not been set", response.text)
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+        self.store.content.assert_not_awaited()
 
     def test_draft_open_selects_owner_checked_poster_and_redirects_to_editor(self) -> None:
         response = self.client.get("/posters/11/open", follow_redirects=False)
@@ -161,10 +235,11 @@ class PosterRouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/posters/99/delete", json={"confirmed": True}).status_code, 404)
 
     def test_mutations_reject_cross_origin_and_non_json_requests(self) -> None:
-        for path in ("/posters/new", "/posters/11/delete", "/posters/delete"):
+        for path in ("/posters/check", "/posters/create", "/posters/open", "/posters/11/delete", "/posters/delete"):
             self.assertEqual(self.client.post(path, data={}).status_code, 415)
             self.assertEqual(self.client.post(path, json={}, headers={"Origin": "https://evil.example"}).status_code, 403)
         self.store.new_or_existing.assert_not_awaited()
+        self.store.unpurchased.assert_not_awaited()
         self.store.delete.assert_not_awaited()
 
     def test_ajax_delete_prompts_with_owner_checked_escaped_title(self) -> None:
@@ -174,10 +249,10 @@ class PosterRouteTests(unittest.TestCase):
             "ok": True, "confirmation_required": True,
             "say": (
                 '<p>Are you sure you want to delete "&lt;Research&gt;?"</p>'
-                '<div class="centered">'
+                '<p class="centered">'
                 '<button class="action" data-sends="yes" data-group="confirmation">Yes</button> &nbsp;'
                 '<button class="action" data-sends="no" data-group="confirmation">No</button>'
-                "</div>"
+                "</p>"
             ),
         })
         self.assertEqual(self.session["delete_poster_id"], 11)
@@ -258,16 +333,61 @@ class PosterRouteTests(unittest.TestCase):
     def test_database_errors_are_visible(self) -> None:
         self.store.list.side_effect = psycopg.OperationalError("unavailable")
         self.store.new_or_existing.side_effect = psycopg.OperationalError("unavailable")
+        self.store.unpurchased.side_effect = psycopg.OperationalError("unavailable")
         self.store.delete.side_effect = psycopg.OperationalError("unavailable")
         with self.assertLogs("routers.posters", "ERROR"):
             response = self.client.get("/posters/list")
             self.assertEqual(response.status_code, 503)
             self.assertIn("could not be loaded", response.text)
-            self.assertEqual(self.client.post("/posters/new", json={}).status_code, 503)
+            self.assertEqual(self.client.post("/posters/check", json={}).status_code, 503)
+            self.assertEqual(self.client.post("/posters/create", json={}).status_code, 503)
+            self.assertEqual(self.client.post("/posters/open", json={}).status_code, 503)
             self.assertEqual(self.client.post("/posters/11/delete", json={"confirmed": True}).status_code, 503)
 
 
 class PosterValueTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shared_draft_check_uses_owner_and_does_not_write(self) -> None:
+        store = posters.PosterStore()
+        connection = AsyncMock()
+        connection.execute.return_value.fetchone.return_value = (11,)
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            self.assertEqual(await store.unpurchased(7), 11)
+        statement, params = connection.execute.call_args.args
+        self.assertIn("uid = %s", statement)
+        self.assertIn("NOT EXISTS", statement)
+        self.assertEqual(params, (7,))
+        connection.execute.assert_awaited_once()
+
+    async def test_creation_rechecks_draft_under_owner_lock_and_inserts_null_dimensions(self) -> None:
+        store = posters.PosterStore()
+        connection = AsyncMock()
+        owner, draft, inserted = AsyncMock(), AsyncMock(), AsyncMock()
+        owner.fetchone.return_value = (7,)
+        draft.fetchone.return_value = None
+        inserted.fetchone.return_value = (11,)
+        connection.execute.side_effect = [owner, draft, inserted]
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            self.assertEqual(await store.new_or_existing(7), (11, True))
+        calls = connection.execute.await_args_list
+        self.assertIn("FOR UPDATE", calls[0].args[0])
+        self.assertIn("NOT EXISTS", calls[1].args[0])
+        self.assertEqual(calls[1].args[1], (7,))
+        self.assertEqual(calls[2].args, (
+            "INSERT INTO poster (uid, dimensions, created) VALUES (%s, NULL, now()) RETURNING pid",
+            (7,),
+        ))
+
+    async def test_creation_reuses_existing_draft_without_inserting(self) -> None:
+        store = posters.PosterStore()
+        connection = AsyncMock()
+        owner, draft = AsyncMock(), AsyncMock()
+        owner.fetchone.return_value = (7,)
+        draft.fetchone.return_value = (11,)
+        connection.execute.side_effect = [owner, draft]
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            self.assertEqual(await store.new_or_existing(7), (11, False))
+        self.assertEqual(connection.execute.await_count, 2)
+
     async def test_embedding_fallback_is_explicit(self) -> None:
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
             embedding, notice = await posters.query_embedding("research")
@@ -285,7 +405,7 @@ class PosterValueTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_dimensions_reject_unsafe_values(self) -> None:
         self.assertEqual(DRAFT.inches, (36, 48))
-        for value in ("0x48", "36x99999", "-1x48", "36;DROP TABLE", "NaNx48"):
+        for value in (None, "0x48", "36x99999", "-1x48", "36;DROP TABLE", "NaNx48"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 replace(DRAFT, dimensions=value).inches
 
@@ -351,6 +471,23 @@ class PosterDatabaseTests(unittest.TestCase):
         new_pid, created = asyncio.run(self.store.new_or_existing(7))
         self.assertTrue(created)
         self.assertNotEqual(new_pid, results[0][0])
+
+    def test_basic_draft_has_null_nullable_content_and_owner_scoped_check(self) -> None:
+        self.assertIsNone(asyncio.run(self.store.unpurchased(7)))
+        pid, created = asyncio.run(self.store.new_or_existing(7))
+        self.assertTrue(created)
+        self.assertEqual(asyncio.run(self.store.unpurchased(7)), pid)
+        self.assertIsNone(asyncio.run(self.store.unpurchased(8)))
+        row = self.connection.execute(
+            "SELECT cid, logo, logotype, dimensions, description, moreinfo, moreinfopng, "
+            "template, theme, fonts, updated, embedding FROM poster WHERE pid = %s", (pid,),
+        ).fetchone()
+        self.assertEqual(row, (None,) * 12)
+        poster = asyncio.run(self.store.get(7, pid))
+        self.assertEqual(poster.name, "Untitled poster")
+        self.assertIsNone(poster.dimensions)
+        self.purchase(pid)
+        self.assertIsNone(asyncio.run(self.store.unpurchased(7)))
 
     def test_list_owner_scope_sort_and_purchase_state(self) -> None:
         z = self.create("Zoology")

@@ -20,7 +20,7 @@ SEEKING_OPTIONS = {
     ("iam", r"i\.?am\.?")
 }
 
-PUNCTUATION_TRANSLATION_TABLE = str.maketrans('', '', string.punctuation)
+PUNCTUATION_TRANSLATION_TABLE = str.maketrans('', '', string.punctuation + "‘’“”")
 
 AGENT_NAME = "Wikkit"
 AGENT_THE_NAME = f"{AGENT_NAME}, the PrestoPresentations Wizard"
@@ -74,7 +74,8 @@ def check_seeking(str: str, keywords: list[str]) -> dict|None:
     return None
 
 def clean_string(s: str, spaces="") -> str:
-    return  (s.replace(" ", spaces).translate(PUNCTUATION_TRANSLATION_TABLE) if spaces else s).lower().strip()
+    """Lowercase, remove punctuation, and replace spaces (removed by default)."""
+    return " ".join(s.split()).replace(" ", spaces).translate(PUNCTUATION_TRANSLATION_TABLE).lower().strip()
 
 def clean_response(response: str, other: list[str]|None = None) -> dict|None:
     if not response:
@@ -104,6 +105,6 @@ def clean_response(response: str, other: list[str]|None = None) -> dict|None:
         best_match = None
 
     if best_match:
-        return {"type": "caller", " match": best_match, "ratio": highest_ratio, "cleaned": response}
+        return {"type": "caller", "match": best_match, "ratio": highest_ratio, "cleaned": response}
     
     return {"type": "unknown", "response": response}

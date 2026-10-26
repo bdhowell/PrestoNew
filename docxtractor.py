@@ -19,14 +19,12 @@ a separate run directory. Element IDs are Docling JSON pointers scoped to that
 run. The full document retains original text, hierarchy, provenance, annotations,
 chart data and native references.
 
-iWork: export to PDF using installed Pages/Numbers/Keynote on macOS by default.
-The applications must have Automation permission. Else supply pdf_exporter:
+iWork files are submitted directly to the configured Docling service.
+Service support depends on its version; unsupported conversions fail explicitly.
+Supply a pdf_exporter callback with render_office=True to render DOCX/PPTX/XLSX:
     def exporter(source: Path, destination: Path) -> Path: ...
-The callback must return a real PDF. Supply it with render_office=True to render
-DOCX/PPTX/XLSX too: recommended when vector charts/figures and visual math matter.
+The callback must return a real PDF; this is useful when visual math matters.
 Native Office conversion preserves structure but may omit rendered drawings.
-Use native_iwork=True only if your service supports your particular iWork input;
-Pages and Keynote support depends on service version; Numbers needs PDF export.
 
 Extraction is best effort. A rendered chart is a picture; chart data remains in
 annotations if Docling recognizes it. Formula text/LaTeX is model output, not a
@@ -45,16 +43,14 @@ import hashlib
 import json
 import os
 import re
-import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
 from uuid import uuid4
 
-SUPPORTED = {'.pdf', '.docx', '.pptx', '.xlsx', '.pages', '.numbers', '.key'}
+SUPPORTED = {'.pdf', '.docx', '.pptx', '.xlsx', '.xlsm', '.md', '.pages', '.numbers', '.key'}
 IWORK = {'.pages': 'Pages', '.numbers': 'Numbers', '.key': 'Keynote'}
-OFFICE = {'.docx', '.pptx', '.xlsx'}
+OFFICE = {'.docx', '.pptx', '.xlsx', '.xlsm'}
 # Single numbered references; ranges/lists and bare parenthetical equation
 # numbers deliberately aren't inferred.
 MENTION = re.compile(
@@ -65,36 +61,6 @@ MENTION = re.compile(
 
 class ExtractionError(RuntimeError):
     """Conversion, export, or output failure."""
-
-
-def export_iwork_pdf(source: Path, destination: Path, timeout: float = 180) -> Path:
-    """Export through Apple's installed application; never modify the source."""
-    app = IWORK.get(source.suffix.lower())
-    if not app or sys.platform != 'darwin':
-        raise ExtractionError('iWork PDF export requires macOS and the matching '
-                              'Apple app, or supply a pdf_exporter callback.')
-    # Paths are passed as argv, never interpolated into AppleScript source.
-    script = '''on run argv
-        set inputFile to POSIX file (item 1 of argv)
-        set outputFile to POSIX file (item 2 of argv)
-        tell application "APP_NAME"
-            set openedDocument to open inputFile
-            try
-                export openedDocument to outputFile as PDF
-            on error errorMessage number errorNumber
-                close openedDocument saving no
-                error errorMessage number errorNumber
-            end try
-            close openedDocument saving no
-        end tell
-    end run'''.replace('APP_NAME', app)
-    try:
-        subprocess.run(['osascript', '-e', script, str(source), str(destination)],
-                       check=True, capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ExtractionError(f'{app} PDF export failed; check the app and '
-                              'macOS Automation permission.') from exc
-    return destination
 
 
 def _value(value: Any) -> str:
@@ -229,7 +195,7 @@ def extract_document(
     api_key: str | None = None,
     pdf_exporter: Callable[[Path, Path], Path] | None = None,
     render_office: bool = False,
-    native_iwork: bool = False,
+    native_iwork: bool = True,
     describe_pictures: bool = True,
     extract_chart_data: bool = True,
     enrich_formulas: bool = True,
@@ -295,12 +261,12 @@ def extract_document(
                 raise TypeError('source must be bytes or a binary stream')
             original.write_bytes(content)
         prepared = original
-        needs_pdf = (suffix in IWORK and (not native_iwork or suffix == '.numbers')) or (
+        needs_pdf = (suffix in IWORK and not native_iwork) or (
             suffix in OFFICE and render_office)
         if needs_pdf:
-            exporter = pdf_exporter or (export_iwork_pdf if suffix in IWORK else None)
+            exporter = pdf_exporter
             if exporter is None:
-                raise ValueError('render_office=True requires a pdf_exporter callback')
+                raise ValueError('PDF conversion requires a pdf_exporter callback')
             prepared = Path(exporter(original, temp / 'export.pdf')).resolve()
             if not prepared.is_file() or prepared.suffix.lower() != '.pdf':
                 raise ExtractionError('pdf_exporter must return an existing PDF path')
@@ -354,11 +320,9 @@ if __name__ == '__main__':
     parser.add_argument('source', type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--service-url')
-    parser.add_argument('--native-iwork', action='store_true')
     parser.add_argument('--allow-partial', action='store_true')
     args = parser.parse_args()
     result = extract_document(args.source, output_dir=args.output,
                               service_url=args.service_url,
-                              native_iwork=args.native_iwork,
                               allow_partial=args.allow_partial)
     print(Path(result['output_directory']) / 'extraction.json')

@@ -411,15 +411,15 @@ f"""
 <p>
 {request.state.user['user-name']}, please provide your email address to reset your password.
 </p>
+
 # Posters Router
-Create a common function that checks whether the user has an existing unpurchased poster.
+
+`PosterStore.unpurchased()` is the common owner-scoped draft check.
+`POST /posters/check` uses it before the New Poster button proceeds.
 - If it does: 
 	- Have Wikkit say f"I&rsquo;m sorry, {request.state.user['user-name']}, you can work on only one poster at a time.
 - Else:
-	- Create a new unpurchased poster.
-	- Have Wikkit say f"I&rsquo'm creating your new poster, {request.state.user['user-name']}!"
-	- Redirect to `/conferences/find`
-
+	- return `/posters/create` as the AJAX redirect; the client posts to it to create a new unpurchased poster
 
 # Posters Router
 
@@ -434,11 +434,24 @@ Clicking on purchased posters displays them completely filling the viewport, scr
 Posters can be optionally deleted with confirmation by clicking on a per-poster deletion affordance.
 Has a button, "New Poster" which when clicked checks whether the user has an existing unpurchased poster.
 - If it does: 
-	- Have Wikkit say f"I&rsquo;m sorry, {request.state.user['user-name']}, you can work on only one poster at a time. Would you like me to open it for you?"
+	- Wikkit says:
+f"""
+I&rsquo;m sorry, {request.state.user['user-name']}, you can work on only one poster at a time.
+Would you like me to open it for you?
+<button data-sends="yes">Yes</button>
+&nbsp;
+<button data-sends="no">Not now</button>
+
+"""
+	- wait for user input
+	- clean the user response with common.clean_response()
+	- if "Yes":
+		- redirect to `/posters/open`
+	- if "No":
+		- do nothing
 - Else:
-	- Create a new unpurchased poster.
-	- Have Wikkit say f"I&rsquo'm creating your new poster, {request.state.user['user-name']}!"
-	- Redirect to `/conferences/find`
+	- Post to `/posters/create`, which atomically rechecks and creates the draft.
+	- Follow its AJAX redirect to `/content/upload`.
 
 ========================================
 
@@ -447,19 +460,35 @@ Has a button, "New Poster" which when clicked checks whether the user has an exi
 - `GET /posters/list` provides owner-only list/grid views, name/conference-date
   sorting, and hybrid search as documented in [search.md](./search.md).
   The conference date is the earliest start date among conferences showing the poster.
-- `POST /posters/new` atomically checks for an existing draft by locking the
-  owner's user row. Existing drafts return HTTP 409 with Wikkit's offer and an
-  Open/Not now dialog. Otherwise it creates and selects the draft, sends Wikkit's
-  creation message, and returns `/conferences/find` as the AJAX redirect.
-  The conference-finding page is planned separately; this redirect does not
-  initialize the poster's template or theme.
-- `GET /posters/create` initializes only unset template/theme values on the
-  selected unpurchased poster. Portrait posters use `vertical`; other posters
-  randomly use `arena` or `central`. Themes are discovered from `themes.css`.
-  Reloading does not create a poster or replace existing choices.
+- `POST /posters/check` checks for an existing unpurchased poster using
+  `PosterStore.unpurchased()`. Existing drafts return HTTP 409 with Wikkit's
+  one-poster-at-a-time message and Yes/Not now chat buttons without changing the
+  selection. The list waits for a chat reply and posts it to `/posters/open`.
+  Otherwise it posts to `/posters/create` and follows its AJAX redirect.
+- `POST /posters/open` uses `common.clean_response()` on the optional `response`.
+  Affirmative replies (or a direct request without a response) select the user's
+  current draft, set `request.state.poster['pid']` and `poster_id`, and return
+  Wikkit's "Here is your current unpurchased poster" message and the AJAX redirect
+  `/layout/edit?pid={pid}`. Nonaffirmative replies leave the selection unchanged.
+  `GET /posters/open` selects the same owner-scoped draft, sends an HTTP 303
+  redirect, and queues the message for the next Wikkit-rendered page.
+- `POST /posters/create` replaces `POST /posters/new` and the old
+  `GET /posters/create` initialization page. It locks the owner's user row and
+  reuses the draft check in that transaction so concurrent requests cannot
+  create multiple drafts. An existing draft is selected, Wikkit says
+  "I'm sorry, {name}! You already have an existing unpurchased poster. Here it is.",
+  and the AJAX redirect is `/layout/edit?pid={pid}`.
+  Otherwise it creates a basic poster with nullable content fields set to NULL
+  (including dimensions, overriding the schema default), selects it in the
+  server-side session and request state, and returns `/content/upload`.
+  Search vectors remain trigger-maintained. Layout and theme are not initialized.
+  Drafts without dimensions show an explicit preview-unavailable placeholder.
+  Both creation and checking use same-origin JSON POST requests, not GET navigation.
+  The content-upload destination is implemented below. **The layout editor
+  remains deferred**.
 - `GET /posters/{pid}/open` checks ownership, selects the draft in the server-side
   session, and redirects to `/layout/edit`. **The layout editor is deliberately
-  deferred**; the creation page links to it but does not implement it.
+  deferred**.
 - `GET /posters/{pid}/view` opens purchased posters in a full-viewport viewer
   outside the Wikkit shell. Fit and 100% zoom, intermediate zoom, scrolling, and
   Close/Escape are supported. The read-only HTML preview renders stored title,
@@ -481,15 +510,23 @@ Has a button, "New Poster" which when clicked checks whether the user has an exi
   enable PostgreSQL integration tests; those use a temporary isolated schema and
   never truncate the public schema.
 
-**`/posters/create`**
+**`/posters/open`**
+### Internal Logic
+Get the pid of the user's current unpurchased poster,
+Set request.state.poster['pid'] to the retrieved poster ID
+Wikkit says:
+f"Here is your current unpurchased poster, {request.state.user['user-name']}."
+Redirect to `/layout/edit` with the poster ID as a query parameter, e.g., `/layout/edit?pid={request.state.poster['pid']}`
+
+**`POST /posters/create`**
 ### Internal Logic
 If the user already has an unpurchased poster:
-- Wikkit sayx f"I&rsquo'm sorry, {request.state.user['user-name']}! You already have an existing unpurchased poster. Here it is."
+- Wikkit says f"I&rsquo;m sorry, {request.state.user['user-name']}! You already have an existing unpurchased poster. Here it is."
 - Redirect to `/layout/edit` with the poster ID as a query parameter, e.g., `/layout/edit?pid={request.state.poster['pid']}`
 
-Create a basic poster entry with null values for optional fields such as logo, moreinfo, and moreinfopng.
-
-Randomly
+Create a basic poster entry with null values for all nullable fields.
+Set request.state.poster['pid'] to the newly created poster ID
+Redirect to `/content/upload`
 
 **`/posters/delete`**
 ### Template Content
@@ -516,6 +553,36 @@ Else:
 - Return cancellation
 
 # Conferences Router
+
+### Implemented Conferences Router Contract
+
+- `conferences.get_conference_info(criteria)` runs a web-search structured
+  OpenAI request and returns only conferences or fairs with a parseable start
+  date on or after today (or `None`). A missing end date uses the start date.
+  Poster requirements are unified into `dimensions`, `width`, `height` and
+  `units` using the first specified value; results include `event_type`
+  (`conference` or `fair`). No shared module state is mutated per request.
+- `POST /conferences/find` accepts same-origin JSON `{"criteria": "..."}` (up to
+  2000 characters) from a signed-in user and returns the matching conferences.
+  Search failures return HTTP 503. `GET /conferences/find` (the post-sign-in
+  destination when no poster is selected) redirects to `/conferences/query`.
+- `GET /conferences/query` requires a signed-in user with a selected,
+  owner-checked, unpurchased draft; otherwise it redirects to sign-in or
+  `/posters/list`. Its `conferences-query` Wikkit workflow follows the logic
+  below. Stored conferences are found with full-text search matching any of
+  the user's terms. Web results are then added to the same enumerated table
+  without duplicates. Rows can be clicked, or chosen by number or name.
+  A failed database or web search is logged and reported in chat; the
+  workflow then continues with any results it has.
+- Selecting a conference stores a web result in `conference` unless a
+  conference with the same normalized name and start date already exists.
+  New rows use an empty administrator and password, `notify='never'`,
+  `hideafter=0` and a NULL `verified`, and requirements go in `details`. The
+  owner's unpurchased poster gets `poster.cid`, the conference is stored in
+  poster memory as `conference`, and Wikkit redirects to `/content/upload`.
+- Apply `schema/schema.sql` so conference search vectors are computed on
+  insert. Run `bin/python -m unittest test_conferences`; set
+  `POSTERS_TEST_DATABASE_URL` for isolated PostgreSQL integration tests.
 
 **`/conferences/find`**
 ### Template Content
@@ -614,22 +681,166 @@ If none of these are correct, just let me to continue without conference informa
 Enter the number or the name of the {scope}
 """
 
-If @@@@@
-
-### Intents
-@@@@
+# Note removed: The previous section about intents and intent mapping has been removed as it is now handled elsewhere.
 
 
 # Content Router
 
 Write a local function that takes a Python text or binary object and produces a hash from it.
 
+### Implemented upload and processing contract
+
+- `GET /content/upload` lists source files for the selected, owner-checked,
+  unpurchased poster, with roots ordered chronologically and extracted children
+  indented immediately below their parent. An empty list triggers the initial
+  upload greeting; all visits show the supported-format and completion guidance.
+- The page supports file selection and whole-page drag and drop. Each file is
+  sent separately to `POST /content/upload` as `application/octet-stream`, with
+  a percent-encoded basename in `X-Filename`. Each response refreshes the table
+  with the original and all extracted children as soon as processing completes.
+  Failures are displayed per file without hiding other results.
+- Supported extensions: PDF, DOCX, PPTX, XLSX, XLSM, PNG, TIF/TIFF, JPG/JPEG,
+  Pages, Numbers, Keynote (`.key`), and Markdown (`.md`). RTF is not supported.
+  iWork files must be
+  single-file archives, not directory bundles. Basic signatures/container
+  markers are checked before processing; this is not malware scanning.
+- `content.source_hash()` computes SHA-256 for text or binary data. Uploads
+  receive UUID file IDs; metadata, hashes and storage locations are persisted in
+  `source`. Root sources have a NULL parent. Graphic hashes are deduplicated
+  within the current poster under the owner's transaction lock. Existing assets
+  retain their original parent; no private content is shared between posters.
+  Multiple uploads of the same kind are allowed; uniqueness remains for
+  logo/moreinfo/QR-code kinds.
+- PDF, DOCX, PPTX, Markdown and Pages use the configured Docling service. Picture
+  descriptions/classification, chart extraction and formula enrichment are
+  enabled. Text and LaTeX are retained; tables also retain HTML cell data.
+  Generated PNG assets retain source parent IDs, descriptions and dimensions.
+  If a crop is unavailable, formula/table text is retained with an icon, and
+  converter warnings are logged rather than inventing a graphic.
+- XLSX/XLSM cells and sheet names are HTML-escaped and stored as tables.
+  Numbers uses Docling's table output, failing explicitly when none is returned.
+  Pages, Numbers and Keynote files are submitted directly to Docling on every
+  platform. No local Apple apps, AppleScript or PDF export is required;
+  unsupported service conversions fail explicitly.
+- Nonempty source text is summarized into `source.summary`. Uploaded images
+  receive model-generated descriptions. Configure `DOCLING_SERVICE_URL`,
+  optionally `DOCLING_SERVICE_API_KEY`, and `OPENAI_API_KEY`;
+  `OPENAI_POSTER_MODEL` defaults to `gpt-4.1`. Source analysis uses no browsing
+  tools or shared prompt cache. Model/converter failures do not silently save
+  an unprocessed file as success.
+- A filename or description containing "logo" marks a graphic as a logo
+  candidate. The largest pixel area wins; replacing the logo retains the
+  previous graphic as an ordinary image.
+- The list shows owner-only PNG thumbnails via `GET /content/{sid}/thumbnail`
+  or document icons, filenames and the first description line. At 150 DPI, an
+  image with either dimension below 300 pixels is marked `.ill-sized`; exactly
+  300 pixels is not flagged. Wikkit's warning uses `num2words` and correct
+  singular/plural phrasing.
+- Local files use `{SOURCES_DIR}/{fileid.int % 10}/{fileid}`; `SOURCES_DIR`
+  defaults to the repository's `sources` directory. If `GCS_BUCKET` is set,
+  files instead use `gs://{GCS_BUCKET}/{fileid.int % 10}/{fileid}` with Google
+  Application Default Credentials. Storage locations are not exposed to clients.
+- Uploads are streamed with a per-file `POSTER_UPLOAD_MAX_MB` limit (default 32).
+  Authentication, ownership, editable status, same-origin requests, safe
+  filenames and supported file types are checked server-side. Database failures
+  remove newly stored files; storage/database failures return explicit errors.
+- Apply `schema/schema.sql` to migrate source parents, storage metadata,
+  summaries and the partial uniqueness index. Install `requirements-content.txt`
+  for storage and processing dependencies.
+  Run `bin/python -m unittest test_content test_posters test_wikkit`; set
+  `POSTERS_TEST_DATABASE_URL` for isolated PostgreSQL integration tests.
+- `POST /content/finished` checks the current owner-scoped draft. No content or
+  insufficient readable source text returns HTTP 409 and Wikkit's specified
+  message, without a redirect. `SOURCE_TEXT_MIN_LENGTH` defaults to **4000**;
+  exactly the minimum passes. Spreadsheet/table HTML markup, summaries and
+  descriptions are not counted, and child text is not counted twice.
+  The Finished button and Wikkit's `I'm Finished` chat button invoke this same
+  endpoint. On the upload page, chat replies are cleaned with
+  `common.clean_response()` against `finished`, `imfinished`, `done`,
+  `imdone` and `alldone`; matches run the page's `finished-uploading` command,
+  and other replies receive normal intent handling. The upload page waits for
+  these replies without "Are you still there?" reminders. Success navigates to
+  `/content/elucidate`, where Wikkit says "Terrific ... We're making great
+  progress."
+- **Deferred:** optional source deletion/download controls.
+  The incomplete `go-back` intent below does not
+  yet define an action and is not registered.
+
 **`/content/upload`**
+### Template Content
+A drag-and-drop element across the entire page.
+
+"""
+<p class="large-font,centered-text">
+DROP CONTENT HERE
+</p>
+
+<table id="items-list"></table>
+
+<div class="centered-text">
+<button>Finished</button>
+</div>
+"""
+
 ### Internal Logic
 Allows uploading of PDF, Microsoft's DOCX, PPTX and XLSX, XLSM, PNG, TIFF, JPEG (JPG), and Apple's Pages, Numbers and Keynote
 Non-textual uploaded content is identified by its source and stored relative to {SOURCES_DIR}, sharded across 10 subdirectories for local development, and in GCS when in the cloud.
 
-If the document is a PDF, DocX, MD, RTF, Apple Pages:
+If no content has already been uploaded for the current poster:
+- Wikkit says:
+"""
+<p>
+Let&rsquo;s start by uploading your source content so I can start examining it.
+You can always upload additional content later if needed, or delete content you no longer want to include.
+</p>
+
+Wikkit says:
+"""
+<p>
+I can read and consider PDFs, Microsoft Word, Excel, and PowerPoint documents; Apple Numbers, Pages, and Keynote files, PNG and JPEG (JPG) images, as well as Markdown (MD) files.
+</p>
+<p>
+Go ahead and upload your content.
+
+<button data-send="finished">I&rsquo;m Finished</button>
+</p>
+"""
+
+While True:
+- Wait for User input while content is being uploaded.
+- Clean the user input with common.clean_response(user_input, ["finished","imfinished","done","imdone","alldone"])
+- If the user  is in [ "finished", "imfinished", "done", "imdone", "alldone" ]:
+	- If no source text in aggregate has been added:
+		- Wikkit says:
+f"""
+<p>
+{request.state.user['user-name']}, you can&rsquo;t have a poster without any content!
+Please give me some material to work with.
+</p>
+<p>
+I can’t magic a complete poster out of thin air.
+</p>
+"""
+	- Elif the source text in aggregate is less than os.env.get('SOURCE_TEXT_MIN_LENGTH') characters: 
+		- Wikkit says f"""
+I’m sorry, {request.state.user['user-name']}, but I need more content to work with.
+
+I&rsquo;m unable to conjure enough content to create a useful poster.
+"""
+
+- redirect to `/content/elucidate`
+
+### Intents
+finished-uploading: Finished, I'm finished, I am finished, All done, I'm all done
+
+### Intents-map:
+finished-uploading:
+- redirect to `/content/elucidate`
+
+## Upload Handling
+
+For each uploaded item:
+If the document is a PDF, DocX, MD, Apple Pages:
 - Use Docling for IBM Watson X to extract texts, charts, formulae (math), tables images, math (as latex) from source documents: (descriptions for images and charts turned on)
  - For text documents, store the text, if any, in the source's db source record's text field.
 	- Use the LLM to summarize the text and store the summary in the source reccord's summary field.
@@ -651,7 +862,9 @@ Else for images, charts, formulae (math), and graphs:
 	- For items with dimensions in pixels, store those dimensions in the source's height and width fields in the source table.
 	- Store items descriptions and thier hashes with them in the source table and store their data in the file system or cloud as described. 
 
-As each item is uploaded and added to the database, display the entire list, including any previously uploaded content in a table with each row consisting of a thumbnail or icon, the content's filename or its parent's filename, the document type, and an optional delete button, ordered chronologically, in #items-list.
+Display the entire list, including any previously uploaded content in a table with each row consisting of a thumbnail or icon, the content's filename or its parent's filename, the document type, and an optional delete button, ordered chronologically, in #items-list.
+
+As each item is uploaded and added to the database, display it in the #items-list table.
 
 - If the item has height and width, and it is less than two inches on either axis:
 	- Display the item's filename with the class '.ill-sized'.
@@ -659,75 +872,79 @@ As each item is uploaded and added to the database, display the entire list, inc
 - Underneath each item, put the first line of the item's description, if any. 
 - Indent extracted items under their parent items to indicate the parent/child relationship.
 
-If the count of odd-sized items:
-- morethan = count > 1
-- Wikkit says: f"""
-	<div>
-	{use num2words} file{'s are' if morethan else 'is'} will likely not be easily visible from typical poster viewing distances and I have no spell that could change that.
-	</div>
-	<div>
-	I&rsquo;ve identified {'them' if morethan else 'it'} by coloring {'their' if morethan else 'its'} <span class="ill-sized">filename{'s' if morethan else ''}</span>.
-	</div>
-
-When the Finished button is pressed:
-- If no content has been added:
-	Wikkit says f"{username}, you can&rsquo;t have a poster without any content!"
-- Elif there is no source text in aggregate or the aggregated source text is less than os.env.get('SOURCE_TEXT_MIN_LENGTH') characters:
-	Wikkit says f"""
-		<p>
-		I&rsquo;m sorry, {username}, but I need more content to work with.
-		</p>
-		<p>
-		Even I can&rsquo;t conjure research out of thin air.
-		</p>
-	"""
-- Else:
-	redirect to `/content/elucidate`
-
-### Template Content
-A drag-and-drop element across the entire page.
-
-"""
-<p class="large-font,centered-text">
-DROP CONTENT HERE
-</p>
-
-<table id="items-list"></table>
-
-<div class="centered-text">
-<button>Finished</button>
-</div>
-"""
-
-### Wikkit Says
-
-"""
-<p>
-Upload raw content for your poster. 
-</p>
-<p>
-This can include PDFs, Microsoft Word, PowerPoint, and Excel documents, Apple Pages, Keynote, and Numbers documents, and PNG, TIFF, JPG (JPEG) images.
-</p>
-<p>
-Click the <strong>Finish</strong> button or let me know when you have finished uploading. 
-</p>
-"""
-
-### Intents
-finished-uploading: Finished, I'm finished, I am finished, All done, I'm all done
-- Wikkit says "Moving on..."
-go-back: 
-- Wikkit says "
-
-### Intents-map:
-finished-uploading:
-- Wikkit says f"Terrific, {username}. We&rsquo;re making great progress."
-- redirect to `/content/elucidate`
-
 
 **`/content/elucidate`**
+### Implemented elucidation contract
+
+- `GET /content/elucidate` requires an authenticated user with an owner-checked,
+  selected, unpurchased poster. It renders Wikkit's initial review message and
+  starts a same-origin JSON `POST /content/elucidate`; GET alone does not run
+  the model or change database content.
+- The POST merges root source texts in chronological order without repeating
+  extracted-child text. Spreadsheet HTML is reduced to readable cell text;
+  summaries and graphic descriptions are not substituted for the original
+  evidence. The default `SOURCE_TEXT_MIN_LENGTH=4000` is rechecked server-side.
+- OpenAI Responses uses a strict `json_schema` response generated from the
+  validated `PosterContent` model. All listed fields are required; unknown
+  properties, duplicate author names, missing titles, results of 300 or more
+  words, malformed JSON, refusals and incomplete responses fail explicitly.
+  Missing optional source information is represented by empty strings/lists.
+  The writing prompt below governs prose, headers, sentence limits and citation
+  formatting. No browsing tools or shared prompt cache are used.
+- Configure `OPENAI_API_KEY` and optionally `OPENAI_POSTER_MODEL` (default
+  `gpt-4.1`). The model timeout is 600 seconds with automatic retries disabled.
+- Authors are replaced atomically for this poster; `institution` maps to
+  `authors.affiliation`, and author `errata` is retained in its own column.
+  Sections are upserted, including empty optional sections to clear stale
+  generated content on a rerun. `Abstract` maps to `abstract`, `conclusions` to
+  the existing `conclusion` enum, and `further information` to
+  `additional information`. Acknowledgements use their own section enum value.
+  Title/author metadata is plain text; other sections use allowlisted HTML,
+  including headings, lists and strong reference markers, without event
+  attributes, scripts or unsafe links. Read-only previews sanitize HTML too.
+- Saving locks the owner and editable poster and compares a source snapshot
+  fingerprint. Changes to ownership, purchase status or source content prevent
+  stale writes and return HTTP 409. Author/section failures roll back together.
+  Section/poster embeddings are invalidated after content changes.
+- While the POST is pending, the browser chooses a new random delay in the
+  inclusive 15–30-second range and a random Wikkit message from the list below.
+  Completion, failure and leaving the page stop the timers. Failure stays on
+  the page with an explicit error and a Try again button; no success redirect
+  is returned before persistence completes.
+- Success navigates to `/layout/edit`; the layout editor itself remains
+  deferred. Apply `schema/schema.sql` for `authors.errata` and the
+  `acknowledgements` section enum, and install `requirements-content.txt`.
+  Run `bin/python -m unittest test_elucidation test_content test_posters test_wikkit`.
+
 ### Internal Logic
-Uses OpenAI to analyze merged source texts and identify and extract the sections in the schema below. 
+
+Wikkit says:
+f"""
+<p>
+Terrific, {request.state.user['user-name']}. 
+We&rsquo;re making great progress.
+<p>
+Please give me a few minutes.
+You&rsquo;ve given me a lot to review.
+</p>
+<p>
+I&rsquo;m reviewing what you shared with me.
+</p>
+"""
+
+Every fifteen to thirty seconds, Wikkit says randomly:
+- "Still working."
+- f"A few more moments, please, {username}."
+- f"Thanks for being patient, {username}."
+- "I&rsquo;m making progress."
+- "Any day now."
+- "There&rsquo;s a lot to look over."
+- f"{username}, you&rsquo;ve given me a lot to think about."
+- "Getting a cup of tea."
+- "I&rsquo;m indisposed for a moment..."
+
+## Server-side Processing
+Use OpenAI to analyze merged source texts and identify and extract the sections in the schema below. 
 (Rewrite the response schema into proper OpenAI structured response format.)
 
 Store the poster's authors into the author's table.
@@ -808,29 +1025,6 @@ Return the following information:
 		any provided contact information
 }
 ```
-
-### Wikkit Says
-
-f"""
-<p>
-Please give me a few moments,{username}.
-</p>
-<p>
-I&rsquo;m reviewing what you shared with me.
-</p>
-"""
-
-Every fifteen to thirty seconds, Wikkit says randomly:
-- "Still working."
-- f"A few more moments, please, {username}."
-- f"Thanks for being patient, {username}."
-- "I&rsquo;m making progress."
-- "Any day now."
-- "There&rsquo;s a lot to look over."
-- f"{username}, you&rsquo;ve given me a lot to think about."
-- "Getting a cup of tea."
-- "I&rsquo;m indisposed for a moment..."
-
 
 # Layout Router
 

@@ -1,0 +1,30 @@
+{% extends "page.html" %}
+{% block title %}Upload content - {{ app_name() }}{% endblock %}
+{% block content %}
+<h1>Upload source content</h1>
+<section id="drop-content" aria-label="Upload source files">
+    <p class="large-font centered-text">DROP CONTENT HERE</p>
+    <label>Choose source files
+        <input id="source-files" type="file" accept="{{ accept }}" multiple>
+    </label>
+</section>
+<p id="upload-status" role="status" aria-live="polite"></p>
+<table id="items-list">
+    <caption>Uploaded source files</caption>
+    <thead><tr><th scope="col">Preview</th><th scope="col">Filename</th><th scope="col">Type</th></tr></thead>
+    <tbody>
+    {% for item in items %}
+        <tr data-source-id="{{ item.sid }}">
+            <td>{% if item.thumbnail %}<img src="/content/{{ item.sid }}/thumbnail" alt="Preview of {{ item.filename }}" width="80" loading="lazy">{% else %}<span aria-label="Document">DOC</span>{% endif %}</td>
+            <td style="padding-left: {{ item.depth * 1.5 }}rem">
+                <span{% if item.ill_sized %} class="ill-sized"{% endif %}>{{ item.filename }}</span>
+                {% if item.description %}<p class="source-description">{{ item.description.splitlines()[0] }}</p>{% endif %}
+            </td>
+            <td>{{ item.mimetype }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+<div class="centered-text"><button id="finish-upload" type="button">Finished</button></div>
+<p><a href="/posters/list">Back to my posters</a></p>
+{% endblock %}

@@ -1,0 +1,31 @@
+#drop-content {
+    border: 2px dashed currentColor;
+    padding: 2rem;
+}
+
+#items-list {
+    width: 100%;
+    text-align: left;
+}
+
+#items-list td {
+    padding: 0.5rem;
+    vertical-align: top;
+}
+
+.ill-sized {
+    color: #a32920;
+    font-weight: bold;
+}
+
+.source-description {
+    margin: 0.25rem 0;
+}
+
+.large-font {
+    font-size: 2rem;
+}
+
+.centered-text {
+    text-align: center;
+}
