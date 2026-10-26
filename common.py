@@ -86,7 +86,7 @@ def clean_response(response: str, other: list[str]|None = None) -> dict|None:
         return {"type": "system", "response": "no"}
     if response in ["yes", "sure", "ok", "okay", "yep"] or response == "y":
         return {"type":"system", "response": "yes"}
-    if response in ["idontknow", "notsure", "unsure", "idk", "maybe"]:
+    if response in ["idontknow", "imnotsure", "notsure", "unsure", "idk", "maybe"]:
         return {"type":"system", "response": "idk"}
 
     highest_ratio = 0

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlsplit
 
 import psycopg
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 from httpx import Response
 
@@ -64,6 +64,23 @@ class PasswordAndLinkTests(unittest.TestCase):
         with patch.dict(os.environ, {"SECRET_KEY": "short"}):
             with self.assertRaises(RuntimeError):
                 users.link_token(users.CONFIRMATION_PURPOSE, user)
+
+
+class ResumptionPageTests(unittest.TestCase):
+    def test_missing_poster_starts_conference_search(self) -> None:
+        request = Request({"type": "http"})
+        self.assertEqual(account.resumption_page(request), "/conferences/find")
+        request.state.poster = None
+        self.assertEqual(account.resumption_page(request), "/conferences/find")
+
+    def test_existing_poster_resumes_only_at_a_local_page(self) -> None:
+        request = Request({"type": "http"})
+        request.state.poster = {"resumption-page": "/layout/edit"}
+        self.assertEqual(account.resumption_page(request), "/layout/edit")
+        for page in (None, "", "//example.com", "https://example.com", 7):
+            with self.subTest(page=page):
+                request.state.poster = {"resumption-page": page}
+                self.assertEqual(account.resumption_page(request), "/posters/list")
 
 
 class AccountWithoutDatabaseTests(unittest.TestCase):
@@ -158,7 +175,7 @@ class AccountMenuTests(unittest.TestCase):
         response = self.sign_in()
         self.assertEqual(response.status_code, 200)
         self.assertIs(response.json()["signed_in"], True)
-        self.assertEqual(response.json()["redirect"], "/posters/list")
+        self.assertEqual(response.json()["redirect"], "/conferences/find")
         self.assertIn('href="/account/signout">Sign out</a>', self.client.get("/wikkit").text)
 
         response = self.client.get("/account/signout")
@@ -327,14 +344,14 @@ class AccountFlowTests(unittest.TestCase):
         self.assertIn("I&rsquo;m sorry, Ada,", self.sign_in(password="wrong").json()["say"])
         response = self.sign_in(email="ADA@example.com")
         self.assertEqual(response.json(), {
-            "ok": True, "redirect": "/posters/list",
+            "ok": True, "redirect": "/conferences/find",
             "signed_in": True,
             "command": {"does": "clear-chat"},
             "say": response.json()["say"],
         })
         self.assertEqual(
             self.client.get("/account/signin", follow_redirects=False).headers["location"],
-            "/posters/list",
+            "/conferences/find",
         )
         signout = self.client.get("/account/signout")
         self.assertIn('data-signed-in="false"', signout.text)

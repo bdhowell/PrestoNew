@@ -92,7 +92,7 @@ class PosterRouteTests(unittest.TestCase):
         self.store.new_or_existing.return_value = (11, True)
         response = self.client.post("/posters/new", json={})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["redirect"], "/posters/create")
+        self.assertEqual(response.json()["redirect"], "/conferences/find")
         self.assertIn("&lt;Ada&gt;", response.json()["say"])
         self.assertEqual(self.session["poster_id"], 11)
         self.store.new_or_existing.assert_awaited_once_with(7)

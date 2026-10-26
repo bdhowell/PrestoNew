@@ -70,13 +70,14 @@ CREATE INDEX IF NOT EXISTS idx_conference_verified ON conference (verified) WHER
 
 CREATE TABLE IF NOT EXISTS poster (
     pid          SERIAL PRIMARY KEY,
+    cid          INTEGER REFERENCES conference(cid),
     uid          INTEGER REFERENCES "user"(uid) ON DELETE SET NULL,
---    logo         BYTEA,
---    logotype     TEXT,        -- type of the logo (e.g., 'png', 'jpg', 'svg')
-    dimensions   TEXT NOT NULL DEFAULT '36x48',
-    description  TEXT NOT NULL,
---    moreinfo     TEXT,
---    moreinfopng  BYTEA,
+    logo         BYTEA,
+    logotype     TEXT,        -- type of the logo (e.g., 'png', 'jpg', 'svg')
+    dimensions   TEXT DEFAULT '36x48',
+    description  TEXT,
+    moreinfo     TEXT,
+    moreinfopng  BYTEA,
     template     TEXT,
     theme        TEXT,
     fonts        TEXT,         -- name of the font set used in the poster

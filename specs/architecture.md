@@ -303,7 +303,7 @@ Please sign in and we&rsquo;ll continue working on your poster.
 """
 
 Uses `/account/validate` for AJAX submission of the sign-in form.
-- After successful sign-in, as indicated from the response of `/account/validate`, redirect the user to request.state.poster['resumption-page'], or to `/posters/list` if there is no resumption page doesn't exist.
+- After successful sign-in, as indicated from the response of `/account/validate`, redirect the user to request.state.poster['resumption-page']. If there is no poster, redirect to `/conferences/find`; an existing poster without a valid local resumption page falls back to `/posters/list`.
 
 **`/account/validate`**
 ### Internal Logic
@@ -418,7 +418,7 @@ Create a common function that checks whether the user has an existing unpurchase
 - Else:
 	- Create a new unpurchased poster.
 	- Have Wikkit say f"I&rsquo'm creating your new poster, {request.state.user['user-name']}!"
-	- Redirect to `/posters/create/`
+	- Redirect to `/conferences/find`
 
 
 # Posters Router
@@ -438,7 +438,7 @@ Has a button, "New Poster" which when clicked checks whether the user has an exi
 - Else:
 	- Create a new unpurchased poster.
 	- Have Wikkit say f"I&rsquo'm creating your new poster, {request.state.user['user-name']}!"
-	- Redirect to `/posters/create`
+	- Redirect to `/conferences/find`
 
 ========================================
 
@@ -450,7 +450,9 @@ Has a button, "New Poster" which when clicked checks whether the user has an exi
 - `POST /posters/new` atomically checks for an existing draft by locking the
   owner's user row. Existing drafts return HTTP 409 with Wikkit's offer and an
   Open/Not now dialog. Otherwise it creates and selects the draft, sends Wikkit's
-  creation message, and returns `/posters/create` as the AJAX redirect.
+  creation message, and returns `/conferences/find` as the AJAX redirect.
+  The conference-finding page is planned separately; this redirect does not
+  initialize the poster's template or theme.
 - `GET /posters/create` initializes only unset template/theme values on the
   selected unpurchased poster. Portrait posters use `vertical`; other posters
   randomly use `arena` or `central`. Themes are discovered from `themes.css`.
@@ -483,15 +485,9 @@ Has a button, "New Poster" which when clicked checks whether the user has an exi
 ### Internal Logic
 If the user already has an unpurchased poster:
 - Wikkit sayx f"I&rsquo'm sorry, {request.state.user['user-name']}! You already have an existing unpurchased poster. Here it is."
-- Redirect to `/layout/edit`
+- Redirect to `/layout/edit` with the poster ID as a query parameter, e.g., `/layout/edit?pid={request.state.poster['pid']}`
 
-If the poster's dimensions have not been set from conference information:
-	- If the poster's aspect ratio is vertical, then set the template as /templates/layout/vertical.html
-		- Else randomly set the template as /templates/layout/arena.html or /templates/layout/central.html
-
-	- If the poster's theme is unset, then randomly set its theme to one of the themes in themes.css
-
-	- If the 
+Create a basic poster entry with null values for optional fields such as logo, moreinfo, and moreinfopng.
 
 Randomly
 
@@ -525,34 +521,76 @@ Else:
 ### Template Content
 
 ### Internal Logic
+Given a set of criteria describing a conference or fair, including its name, location, purpose, date or dates use conferences.get_conference_info() to find matching conferences
+
+**`/conferences/query`**
+
+### Internal Logic
+
 Wikkit says: 
 f"""
 <div>Many conferences and fairs have specific requirements for poster designs.</div>
 <div>If we can find your conference or fair, I can likely find any poster requirements for it.</div>
 <div>Please provide any information you have about your conference or fair.</div>
 <div>Besides its name, its location (some conferences and fairs occur in multiple cities), purpose, and dates are helpful.</div>
-
-Wait for user input
-
-
-Given a set of criteria describing a conference or fair, including its name, location, purpose, date or dates use conferences.get_conference_info() to find matching conferences
-
-**`/conferences/query`**
-
-### Wikkit says: (client output)
-
-f"""
-<div>Let me begin by asking what you know about the conference or fair for which we're creating your poster.</div<>>
-Please tell me any information you have about your conference or fair, such as its name, subject area, location, or dates: 
 """
 
 Wait for user input.
+Clean the input using common.clean_response()
 
-If there is no user input or the user replied t then:
-- Wikkit says "That
+If there is no user input or the user replied 'idontknow'  then:
+- Wikkit says "That&rsquo;s okay, we can continue without conference information."
+- redirect to `/content/upload`
 
-Use `/conferences/find` to find any matching conferences, passing the user input as the search criteria.
-Display any found conferences or fairs on the page in an enumerated, clickable scrollable list searchable by name.
+While True:
+- Check the database for any existing conferences or fairs that match the user input.
+	Use full-text search or other relevant search methods to find matching conferences or fairs in the database.
+- if any results were found, display them in a formatted, enumerated table:
+	- Include columns for the conference or fair name, location, purpose, and dates.
+	- Allow the user to click on a row to select a conference or fair.
+	- If there is one result:
+		- Use Levenshtein.ratio to determine indel similarity between the user input and the single result.
+		- If the ratio is above 0.7, consider it a match
+			- Wikkit say:
+	f"""
+	I found a conference or fair that I think is yours.
+	Am I right? 
+	<button sends="yes">Yes</button>
+	&nbsp;
+	<button sends="no">No</button>
+	"""
+
+			- Wait for user input.
+			- if the user input is 'yes'
+				- set request.state.poster.conference to the matched conference
+				- redirect to `/content/upload`
+
+	Use `/conferences/find` to find any matching conferences, passing the user input as the search criteria.
+	- If no matching conferences or fairs are found
+		- Wikkit says 
+			f"""
+I&rsquo;m sorry {request.state.user['user-name']} I couldn't find any matching conferences or fairs."
+<div>
+Can you add anything?
+</div>
+<button sends="yes">Yes</button>
+&nbsp;
+<button sends="no">No</button>
+"""	
+	- if user input is 'no':
+		- Wikkit says "Okay, we will continue without conference information."
+		- redirect to `/content/upload`
+
+		- prompt the user to provide more information or continue without conference information.
+	- Wait for user input.
+	- Clean the user input using common.clean_response()
+
+	- If the user provides additional information, repeat the search for matching conferences or fairs.
+	prompt the user to provide more information or continue without conference information.
+
+
+	Add the current conferences in the table with the newly found results.
+
 When a conference is clicked;
 - Add the conference to the conference table if it is unique.
 - Redirect to `/content/upload`

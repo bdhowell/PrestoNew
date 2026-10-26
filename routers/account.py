@@ -94,8 +94,10 @@ I&rsquo;m sorry, but my spellbook is closed: accounts are unavailable right now.
 
 
 def resumption_page(request: Request) -> str:
-    """Where to resume after signing in: the poster's resumption page or the poster list."""
+    """Resume a poster, or find a conference when no poster is selected."""
     poster = getattr(request.state, "poster", None)
+    if poster is None:
+        return "/conferences/find"
     page = poster.get("resumption-page") if isinstance(poster, dict) else None
     return page if isinstance(page, str) and page.startswith("/") and not page.startswith("//") else POSTERS_PAGE
 
@@ -255,7 +257,7 @@ async def signin_page(request: Request, email: str = "") -> Response:
     if name is not None:
         says = f"""
 <p>
-Welcome back, {identity.display_name(request)}, to {html.escape(identity.application_name())}!
+Welcome back, {identity.display_name(request)}.
 I&rsquo;m happy to see you again.
 </p>
 <p>

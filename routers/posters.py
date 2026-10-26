@@ -95,7 +95,7 @@ async def new_poster(request: Request) -> JSONResponse:
         }, status_code=409)
     _select(request, pid)
     return JSONResponse({
-        "ok": True, "redirect": "/posters/create",
+        "ok": True, "redirect": "/conferences/find",
         "say": f"<p>I&rsquo;m creating your new poster, {name}!</p>",
     })
 
