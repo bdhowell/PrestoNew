@@ -77,6 +77,16 @@ class ContentRouteTests(unittest.TestCase):
         self.assertNotIn("start by uploading your source content", response.text)
         self.assertNotIn("Rich Text Format", response.text)
 
+    def test_reduced_conversion_notice_is_visible_on_page_and_upload_response(self) -> None:
+        with patch.dict(os.environ, {"DOCLING_ENABLE_ENRICHMENT": "false"}):
+            page = self.client.get("/content/upload")
+            response = self.upload()
+        self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, page.text)
+        self.assertEqual(response.status_code, 201)
+        self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, response.json()["say"])
+        with patch.dict(os.environ, {"DOCLING_ENABLE_ENRICHMENT": "true"}):
+            self.assertNotIn(source_processing.REDUCED_FEATURE_NOTICE, self.client.get("/content/upload").text)
+
     def test_upload_returns_metadata_and_passes_owner_checked_poster(self) -> None:
         response = self.upload(filename="résumé.pdf")
         self.assertEqual(response.status_code, 201)
@@ -466,6 +476,27 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(convert.call_args.kwargs["native_iwork"])
                 self.assertEqual(convert.call_args.kwargs["filename"], "research" + suffix)
 
+    def test_reduced_conversion_is_explicit_and_retains_source_text(self) -> None:
+        manifest = {
+            "output_directory": "/tmp", "warnings": [],
+            "source_texts": [{"id": "paragraph", "text": "Research evidence"}], "elements": [],
+        }
+        with patch.dict(os.environ, {
+            "DOCLING_SERVICE_URL": "https://converter.invalid", "DOCLING_ENABLE_ENRICHMENT": "false",
+        }), patch.object(source_processing.docxtractor, "extract_document", return_value=manifest) as convert:
+            result = source_processing.extract("research.pdf", b"%PDF-1.7")
+        for option in ("describe_pictures", "extract_chart_data", "enrich_formulas"):
+            self.assertIs(convert.call_args.kwargs[option], False)
+        self.assertEqual(result.text, "Research evidence")
+        self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, result.warnings)
+
+    def test_enrichment_defaults_to_enabled_and_rejects_invalid_settings(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(source_processing.enrichment_enabled())
+        with patch.dict(os.environ, {"DOCLING_ENABLE_ENRICHMENT": "off"}):
+            with self.assertRaisesRegex(source_processing.ProcessingError, "must be true or false"):
+                source_processing.enrichment_enabled()
+
     async def test_rtf_is_rejected_by_validation_and_processing(self) -> None:
         self.assertNotIn(".rtf", content.FORMATS)
         with self.assertRaises(ValueError):
@@ -487,6 +518,17 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
             }]
             result = source_processing.extract("sheet.numbers", b"archive")
             self.assertEqual(result.text, "<table><tr><td>&lt;Research&gt;</td></tr></table>")
+
+    def test_refused_docling_requests_explain_instance_and_key_checks(self) -> None:
+        from docling.service_client.exceptions import ServiceError
+        refused = ServiceError("Task submission failed.", status_code=403)
+        with patch.dict(os.environ, {"DOCLING_SERVICE_URL": "https://docling.example"}), \
+                patch.object(source_processing.docxtractor, "extract_document", side_effect=refused):
+            with self.assertRaises(source_processing.ProcessingError) as raised:
+                source_processing.extract("file.md", b"# Research")
+        self.assertIn("refused the request (HTTP 403)", str(raised.exception))
+        self.assertIn("instance is enabled", str(raised.exception))
+        self.assertIs(raised.exception.__cause__, refused)
 
     async def test_missing_services_fail_explicitly(self) -> None:
         with patch.dict(os.environ, {"DOCLING_SERVICE_URL": "", "OPENAI_API_KEY": ""}):
@@ -553,6 +595,42 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(options.do_picture_description)
         self.assertTrue(options.do_formula_enrichment)
         self.assertTrue(options.do_chart_extraction)
+        self.assertEqual(options.image_export_mode, "referenced")
+        self.assertTrue(options.include_images)
+        self.assertTrue(options.include_page_images)
+
+    def test_referenced_docling_bundle_preserves_extracted_pngs(self) -> None:
+        from types import SimpleNamespace
+        from PIL import Image
+        from docling.service_client import DoclingServiceClient
+        from docling_core.types.doc import DoclingDocument, ImageRef
+        import docxtractor
+
+        document = DoclingDocument(name="research")
+        picture = document.add_picture(
+            image=ImageRef.from_pil(Image.new("RGB", (320, 400), "red"), dpi=150),
+        )
+        picture.image.uri = Path("artifacts/picture.png")
+        png = io.BytesIO()
+        Image.new("RGB", (320, 400), "red").save(png, format="PNG")
+        bundle = io.BytesIO()
+        with zipfile.ZipFile(bundle, "w") as archive:
+            archive.writestr("document.json", document.model_dump_json())
+            archive.writestr("artifacts/picture.png", png.getvalue())
+
+        with DoclingServiceClient(url="https://docling.example") as sdk:
+            restored = sdk._document_from_artifact("resource_bundle", bundle.getvalue())
+        client = Mock()
+        client.convert.return_value = SimpleNamespace(status="success", document=restored, errors=[])
+        with tempfile.TemporaryDirectory() as directory:
+            result = docxtractor.extract_document(
+                b"# Research", filename="paper.md", output_dir=directory, client=client,
+            )
+            asset = Path(result["output_directory"]) / result["elements"][0]["asset"]
+            with Image.open(asset) as image:
+                self.assertEqual(image.size, (320, 400))
+                self.assertEqual(image.format, "PNG")
+        self.assertEqual(result["warnings"], [])
 
 
 @unittest.skipUnless(os.environ.get("POSTERS_TEST_DATABASE_URL"), "Set POSTERS_TEST_DATABASE_URL for PostgreSQL tests")

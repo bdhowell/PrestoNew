@@ -210,7 +210,9 @@ def extract_document(
     =False). It remains open and is useful for connection reuse and testing.
     Otherwise this function owns/closes an official DoclingServiceClient.
     service_options can select model presets and override enrichment defaults;
-    JSON output and embedded images remain required. Set allow_partial explicitly
+    JSON output and referenced image export remain required. The service client
+    materializes the image resource bundle before returning the document.
+    Set allow_partial explicitly
     to retain incomplete conversions. Failures raise ExtractionError; no successful
     manifest is written for a failed conversion.
     """
@@ -249,7 +251,7 @@ def extract_document(
             'do_picture_description': describe_pictures,
             'do_chart_extraction': extract_chart_data}
     opts.update(service_options or {})
-    opts.update(to_formats=['json'], image_export_mode='embedded', include_images=True)
+    opts.update(to_formats=['json'], image_export_mode='referenced', include_images=True)
     options = ConvertDocumentsOptions(**opts)
     warnings = []
     with tempfile.TemporaryDirectory(prefix='docling-input-') as temporary:

@@ -23,6 +23,20 @@ class ProcessingError(RuntimeError):
     """A configured converter or model could not process a source."""
 
 
+REDUCED_FEATURE_NOTICE = (
+    "Temporary reduced-feature document conversion is enabled. Docling formula "
+    "enrichment, picture descriptions and chart-data extraction are disabled. "
+    "Text, tables, available image crops and picture classification are still processed."
+)
+
+
+def enrichment_enabled() -> bool:
+    value = os.environ.get("DOCLING_ENABLE_ENRICHMENT", "true")
+    if value not in ("true", "false"):
+        raise ProcessingError("DOCLING_ENABLE_ENRICHMENT must be true or false.")
+    return value == "true"
+
+
 @dataclass
 class Asset:
     filename: str
@@ -89,19 +103,30 @@ def extract(filename: str, data: bytes) -> Processed:
             raise ValueError("The spreadsheet could not be read.") from error
     if not os.environ.get("DOCLING_SERVICE_URL"):
         raise ProcessingError("DOCLING_SERVICE_URL is required to extract documents.")
+    enrich = enrichment_enabled()
     with tempfile.TemporaryDirectory(prefix="presto-extract-") as directory:
         try:
             manifest = docxtractor.extract_document(
                 data, filename=filename, output_dir=directory,
                 native_iwork=True,
-                describe_pictures=True, extract_chart_data=True, enrich_formulas=True,
+                describe_pictures=enrich, extract_chart_data=enrich, enrich_formulas=enrich,
             )
         except (docxtractor.ExtractionError, DoclingServiceClientError, ValueError) as error:
+            status = getattr(error, "status_code", None)
+            if status in (401, 403):
+                detail = getattr(error, "detail", None)
+                raise ProcessingError(
+                    f"Document conversion failed: the Docling service refused the request (HTTP {status})"
+                    + (f": {detail}" if detail else "")
+                    + ". Check that the Docling service instance is enabled and DOCLING_SERVICE_API_KEY is correct."
+                ) from error
             raise ProcessingError(f"Document conversion failed: {error}") from error
         result = Processed(
             text="\n\n".join(item["text"] for item in manifest["source_texts"]),
             warnings=list(manifest["warnings"]),
         )
+        if not enrich:
+            result.warnings.append(REDUCED_FEATURE_NOTICE)
         texts = {item["id"]: item["text"] for item in manifest["source_texts"]}
         table_html = []
         root = Path(manifest["output_directory"]).resolve()

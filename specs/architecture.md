@@ -712,8 +712,20 @@ Write a local function that takes a Python text or binary object and produces a 
   Multiple uploads of the same kind are allowed; uniqueness remains for
   logo/moreinfo/QR-code kinds.
 - PDF, DOCX, PPTX, Markdown and Pages use the configured Docling service. Picture
-  descriptions/classification, chart extraction and formula enrichment are
+  export uses `referenced` mode; the official service client materializes the
+  resource bundle, preserving images for local PNG extraction. Embedded image
+  export is not requested from the service. Picture descriptions/classification,
+  chart extraction and formula enrichment are
   enabled. Text and LaTeX are retained; tables also retain HTML cell data.
+  Temporary opt-in reduced-feature operation is available by setting
+  `DOCLING_ENABLE_ENRICHMENT=false` (default `true`). This disables Docling
+  formula enrichment, picture descriptions and chart-data extraction when
+  those features fail in the configured service; picture classification,
+  text/table extraction and available image crops remain enabled. The upload
+  page and upload responses show an explicit reduced-feature notice, and each
+  affected conversion logs a warning. There is no automatic feature downgrade
+  or success fallback after a failed conversion. Set it back to `true` and
+  re-upload affected documents to obtain the missing enrichments.
   Generated PNG assets retain source parent IDs, descriptions and dimensions.
   If a crop is unavailable, formula/table text is retained with an icon, and
   converter warnings are logged rather than inventing a graphic.
