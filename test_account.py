@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from unittest.mock import AsyncMock, patch
@@ -15,6 +16,7 @@ from httpx import Response
 with patch.dict(os.environ, {"SESSION_BACKEND": "none"}):
     import app  # noqa: F401  (loads .env and the routers in application order)
 import mailer
+import posters
 from kvstore import KVStore
 import users
 from identity import NAME_COOKIE, identity_context
@@ -66,21 +68,82 @@ class PasswordAndLinkTests(unittest.TestCase):
                 users.link_token(users.CONFIRMATION_PURPOSE, user)
 
 
-class ResumptionPageTests(unittest.TestCase):
-    def test_missing_poster_starts_conference_search(self) -> None:
-        request = Request({"type": "http"})
-        self.assertEqual(account.resumption_page(request), "/conferences/find")
-        request.state.poster = None
-        self.assertEqual(account.resumption_page(request), "/conferences/find")
+class ResumptionPageTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.request = Request({
+            "type": "http", "scheme": "https", "server": ("example.com", 443),
+            "path": "/account/signin", "headers": [], "query_string": b"",
+            "session": {"poster_id": 11},
+        })
+        self.request.state.user_id = 7
+        self.poster = posters.Poster(11, "Research", None, None, None, None, False, None)
+        self.store = AsyncMock()
+        self.store.get.return_value = self.poster
+        self.store.set_resumption.return_value = True
+        mocked = patch.object(posters, "store", return_value=self.store)
+        mocked.start()
+        self.addCleanup(mocked.stop)
 
-    def test_existing_poster_resumes_only_at_a_local_page(self) -> None:
-        request = Request({"type": "http"})
-        request.state.poster = {"resumption-page": "/layout/edit"}
-        self.assertEqual(account.resumption_page(request), "/layout/edit")
-        for page in (None, "", "//example.com", "https://example.com", 7):
+    async def test_missing_poster_starts_conference_search(self) -> None:
+        self.store.get.return_value = None
+        self.assertEqual(await account.resumption_page(self.request), "/conferences/find")
+        self.store.set_resumption.assert_not_awaited()
+
+    async def test_missing_identity_or_selection_does_not_access_storage(self) -> None:
+        self.request.state.user_id = None
+        self.assertEqual(await account.resumption_page(self.request), "/conferences/find")
+        self.request.state.user_id = 7
+        for pid in (None, "11", True, 0, -1):
+            self.request.scope["session"]["poster_id"] = pid
+            self.assertEqual(await account.resumption_page(self.request), "/conferences/find")
+        self.store.get.assert_not_awaited()
+        self.store.set_resumption.assert_not_awaited()
+
+    async def test_marker_clears_saved_page_and_returns_it(self) -> None:
+        page = "/layout/edit?pid=11&tag=one&tag=two&xyzzy=arpa"
+        self.store.get.return_value = replace(self.poster, resumption=page)
+        self.assertEqual(await account.resumption_page(self.request), page)
+        self.store.get.assert_awaited_once_with(7, 11)
+        self.store.set_resumption.assert_awaited_once_with(7, 11, None)
+
+    async def test_unmarked_page_is_not_cleared(self) -> None:
+        for page in (
+            "/content/upload?pid=11", "/content/upload?xyzzy=wrong",
+            "/content/upload?notxyzzy=arpa", "/content/upload?xyzzy=arpa-extra",
+            "/content/upload?next=xyzzy%3Darpa", "/content/upload#xyzzy=arpa",
+        ):
             with self.subTest(page=page):
-                request.state.poster = {"resumption-page": page}
-                self.assertEqual(account.resumption_page(request), "/posters/list")
+                self.store.get.return_value = replace(self.poster, resumption=page)
+                self.assertEqual(await account.resumption_page(self.request), page)
+        self.store.set_resumption.assert_not_awaited()
+
+    async def test_same_origin_absolute_url_preserves_query_parameters(self) -> None:
+        page = "/content/upload?pid=11&filter=a%2Fb&tag=one&tag=two&blank=&xyzzy=arpa"
+        self.store.get.return_value = replace(self.poster, resumption="https://example.com" + page)
+        self.assertEqual(await account.resumption_page(self.request), page)
+        self.store.set_resumption.assert_awaited_once_with(7, 11, None)
+
+    async def test_existing_poster_resumes_only_at_a_local_page(self) -> None:
+        for page in (None, "", "//evil.com", "https://evil.com", "/\\evil.com", "/\t/evil"):
+            with self.subTest(page=page):
+                self.store.get.return_value = replace(self.poster, resumption=page)
+                self.assertEqual(await account.resumption_page(self.request), "/posters/list")
+
+    async def test_storage_errors_are_logged_and_reported(self) -> None:
+        self.store.get.return_value = replace(self.poster, resumption="/edit?xyzzy=arpa")
+        for operation in (self.store.get, self.store.set_resumption):
+            operation.side_effect = psycopg.OperationalError("unavailable")
+            with self.assertLogs("routers.account", "ERROR"), self.assertRaises(account.HTTPException) as error:
+                await account.resumption_page(self.request)
+            self.assertEqual(error.exception.status_code, 503)
+            operation.side_effect = None
+
+    async def test_poster_deleted_before_clear_is_reported(self) -> None:
+        self.store.get.return_value = replace(self.poster, resumption="/edit?xyzzy=arpa")
+        self.store.set_resumption.return_value = False
+        with self.assertRaises(account.HTTPException) as error:
+            await account.resumption_page(self.request)
+        self.assertEqual(error.exception.status_code, 404)
 
 
 class AccountWithoutDatabaseTests(unittest.TestCase):

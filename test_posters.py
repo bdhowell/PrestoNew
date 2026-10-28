@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import openai
 import psycopg
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from psycopg import sql
@@ -346,6 +346,18 @@ class PosterRouteTests(unittest.TestCase):
 
 
 class PosterValueTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resumption_update_is_parameterized_and_owner_scoped(self) -> None:
+        store = posters.PosterStore()
+        connection = AsyncMock()
+        url = "/layout/edit?pid=11&title=O%27Brien&tag=a&tag=b"
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            for row, expected in (((11,), True), (None, False)):
+                connection.execute.return_value.fetchone.return_value = row
+                self.assertEqual(await store.set_resumption(7, 11, url), expected)
+        statement, params = connection.execute.call_args.args
+        self.assertIn("WHERE uid = %s AND pid = %s", statement)
+        self.assertEqual(params, (url, 7, 11))
+
     async def test_shared_draft_check_uses_owner_and_does_not_write(self) -> None:
         store = posters.PosterStore()
         connection = AsyncMock()
@@ -500,6 +512,45 @@ class PosterDatabaseTests(unittest.TestCase):
         rows = asyncio.run(self.store.list(7, direction="desc"))
         self.assertEqual([row.pid for row in rows], [z, a])
         self.assertIsNone(asyncio.run(self.store.get(8, a)))
+
+    def test_resumption_is_nullable_persistent_and_owner_scoped(self) -> None:
+        pid = self.create("Research")
+        self.assertIsNone(asyncio.run(self.store.get(7, pid)).resumption)
+        url = f"/layout/edit?pid={pid}&title=O%27Brien&tag=one&tag=two&blank="
+        self.assertFalse(asyncio.run(self.store.set_resumption(8, pid, "/wrong")))
+        self.assertIsNone(asyncio.run(self.store.get(7, pid)).resumption)
+        self.assertTrue(asyncio.run(self.store.set_resumption(7, pid, url)))
+        self.assertEqual(asyncio.run(self.store.get(7, pid)).resumption, url)
+        self.assertEqual(asyncio.run(self.store.list(7))[0].resumption, url)
+        self.assertFalse(asyncio.run(self.store.set_resumption(8, pid, None)))
+        self.assertEqual(asyncio.run(self.store.get(7, pid)).resumption, url)
+        self.assertTrue(asyncio.run(self.store.set_resumption(7, pid, None)))
+        self.assertIsNone(asyncio.run(self.store.get(7, pid)).resumption)
+        self.assertFalse(asyncio.run(self.store.set_resumption(7, pid + 1000, url)))
+
+    def test_account_resumption_can_preserve_or_clear_persisted_url(self) -> None:
+        from routers import account
+
+        pid = self.create("Research")
+        page = f"/layout/edit?pid={pid}&tag=one&tag=two"
+        asyncio.run(self.store.set_resumption(7, pid, page))
+        request = Request({
+            "type": "http", "scheme": "https", "server": ("example.com", 443),
+            "path": "/account/signin", "headers": [], "query_string": b"",
+            "session": {"poster_id": pid},
+        })
+        request.state.user_id = 7
+        with patch.object(posters, "store", return_value=self.store):
+            self.assertEqual(asyncio.run(account.resumption_page(request)), page)
+            self.assertEqual(asyncio.run(self.store.get(7, pid)).resumption, page)
+            import common
+
+            asyncio.run(common.resume(request, page))
+            marked = page + "&xyzzy=arpa"
+            self.assertEqual(asyncio.run(self.store.get(7, pid)).resumption, marked)
+            self.assertEqual(asyncio.run(account.resumption_page(request)), marked)
+            self.assertIsNone(asyncio.run(self.store.get(7, pid)).resumption)
+            self.assertEqual(asyncio.run(account.resumption_page(request)), "/posters/list")
 
     def test_fts_tracks_description_sections_authors_and_keyterms(self) -> None:
         pid = self.create("Ocean science")

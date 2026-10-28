@@ -31,6 +31,7 @@ class Poster:
     theme: str | None
     purchased: bool
     conference_date: datetime | None
+    resumption: str | None = None
 
     @property
     def inches(self) -> tuple[float, float]:
@@ -90,7 +91,8 @@ class PosterStore:
                p.description, p.dimensions, p.template, p.theme,
                EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) AS purchased,
                (SELECT min(c.starts) FROM show s JOIN conference c USING (cid)
-                WHERE s.pid = p.pid) AS conference_date
+                WHERE s.pid = p.pid) AS conference_date,
+               p.resumption
         FROM poster p
         LEFT JOIN section t ON t.pid = p.pid AND t.which = 'title'
         WHERE p.uid = %s
@@ -214,6 +216,15 @@ class PosterStore:
                 "(SELECT 1 FROM purchase b WHERE b.pid = p.pid)",
                 (template, theme, uid, pid),
             )
+
+    async def set_resumption(self, uid: int, pid: int, url: str | None) -> bool:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "UPDATE poster SET resumption = %s WHERE uid = %s AND pid = %s RETURNING pid",
+                (url, uid, pid),
+            )
+            return await cursor.fetchone() is not None
 
     async def delete(self, uid: int, pid: int) -> bool:
         connection = await self._connect()

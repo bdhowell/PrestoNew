@@ -17,6 +17,7 @@ from google.api_core.exceptions import GoogleAPIError
 from google.auth.exceptions import GoogleAuthError
 from starlette.concurrency import run_in_threadpool
 
+import common
 import content
 import identity
 import posters
@@ -136,7 +137,6 @@ async def upload_file(request: Request) -> JSONResponse:
         "say": conversion_notice() + size_warning(items),
     }, status_code=201)
 
-
 @router.post("/finished")
 async def finished(request: Request) -> JSONResponse:
     await read_json(request)
@@ -165,11 +165,12 @@ async def finished(request: Request) -> JSONResponse:
         }, status_code=409)
     return JSONResponse({"ok": True, "redirect": "/content/elucidate"})
 
-
 @router.get("/elucidate")
 async def elucidate_page(request: Request) -> Response:
     if getattr(request.state, "user_id", None) is None:
         return RedirectResponse("/account/signin", status_code=303)
+    if request.query_params.get("xyzzy") != 'arpa':
+        await common.resume(request)
     try:
         await selected_draft(request)
     except STORAGE_ERRORS:
@@ -178,7 +179,7 @@ async def elucidate_page(request: Request) -> Response:
     return render_page(
         request, "content/elucidate.html", "content-elucidate",
         f"<p>Terrific, {identity.display_name(request)}. We&rsquo;re making great progress.</p>"
-        "<p>Please give me a few minutes. You&rsquo;ve given me a lot to review.</p>"
+        "<p>Please give me a few minutes.</p>"
         "<p>I&rsquo;m reviewing what you shared with me.</p>",
         progress_messages=[
             "Still working.",

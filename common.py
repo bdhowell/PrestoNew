@@ -1,8 +1,62 @@
 import Levenshtein
+import logging
 import num2words
+import psycopg
 import random
 import re
 import string
+
+from fastapi import HTTPException, Request
+from starlette.datastructures import URL
+
+import identity
+import posters
+
+logger = logging.getLogger(__name__)
+
+
+def _resumption_identity(request: Request) -> tuple[int, int]:
+    uid = getattr(request.state, "user_id", None)
+    if uid is None:
+        raise HTTPException(401, "Please sign in to manage your posters.")
+    session = identity.session(request)
+    pid = session.get("poster_id") if session is not None else None
+    if type(pid) is not int or pid <= 0:
+        raise HTTPException(409, "Please create or open a poster before managing its resumption page.")
+    return uid, pid
+
+
+async def resume(request: Request, url: str | URL | None = None, clear: bool = True) -> None:
+    """Save a URL, marked for clearing on resumption unless clear is False."""
+    uid, pid = _resumption_identity(request)
+    value = str(request.url if url is None else url)
+    if not value.strip():
+        raise HTTPException(422, "A resumption URL is required.")
+    if clear:
+        page, fragment_separator, fragment = value.partition("#")
+        separator = "&" if "?" in page else "?"
+        if page.endswith(("?", "&")):
+            separator = ""
+        value = f"{page}{separator}xyzzy=arpa{fragment_separator}{fragment}"
+    try:
+        saved = await posters.store().set_resumption(uid, pid, value)
+    except psycopg.Error:
+        logger.exception("Could not save poster resumption URL")
+        raise HTTPException(503, "Your resumption page could not be saved. Please try again.") from None
+    if not saved:
+        raise HTTPException(404, "Poster not found")
+
+
+async def clear_resume(request: Request) -> None:
+    """Clear the saved resumption URL for the signed-in user's selected poster."""
+    uid, pid = _resumption_identity(request)
+    try:
+        cleared = await posters.store().set_resumption(uid, pid, None)
+    except psycopg.Error:
+        logger.exception("Could not clear poster resumption URL")
+        raise HTTPException(503, "Your resumption page could not be cleared. Please try again.") from None
+    if not cleared:
+        raise HTTPException(404, "Poster not found")
 
 
 SEEKING_ACTIONS = {

@@ -6,15 +6,17 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from fastapi import APIRouter, Request
+import psycopg
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 import identity
 import mailer
+import posters
 import users
-from routers.wikkit import read_json, render_page
+from routers.wikkit import navigation_url, read_json, render_page
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/account", tags=["account"])
@@ -93,13 +95,31 @@ I&rsquo;m sorry, but my spellbook is closed: accounts are unavailable right now.
 """
 
 
-def resumption_page(request: Request) -> str:
-    """Resume a poster, or find a conference when no poster is selected."""
-    poster = getattr(request.state, "poster", None)
-    if poster is None:
+async def resumption_page(request: Request) -> str:
+    """Return the saved page, clearing it only when marked with xyzzy=arpa."""
+    uid = getattr(request.state, "user_id", None)
+    session = identity.session(request)
+    pid = session.get("poster_id") if session is not None else None
+    if uid is None or type(pid) is not int or pid <= 0:
         return "/conferences/find"
-    page = poster.get("resumption-page") if isinstance(poster, dict) else None
-    return page if isinstance(page, str) and page.startswith("/") and not page.startswith("//") else POSTERS_PAGE
+    try:
+        poster = await posters.store().get(uid, pid)
+        if poster is None:
+            return "/conferences/find"
+        page = poster.resumption
+        clear = page is not None and ("xyzzy", "arpa") in parse_qsl(urlsplit(page).query)
+        if clear and not await posters.store().set_resumption(uid, pid, None):
+            raise HTTPException(404, "Poster not found")
+    except psycopg.Error:
+        logger.exception("Could not load or clear poster resumption URL")
+        raise HTTPException(503, "Your resumption page could not be loaded. Please try again.") from None
+    if page is not None:
+        base = str(request.base_url)
+        if page.startswith(base):
+            page = "/" + page[len(base):]
+        if navigation_url(page) == page:
+            return page
+    return POSTERS_PAGE
 
 
 def _link(request: Request, path: str, **query: object) -> str:
@@ -205,7 +225,7 @@ async def confirmation(request: Request, uid: int = 0, token: str = "") -> Respo
         user = await store.get(user_id) if user_id is not None else None
         if user is None:
             return RedirectResponse("/account/signin", status_code=303)
-        return _confirmed_page(request, user)
+        return await _confirmed_page(request, user)
     user = await store.get(uid) if uid > 0 else None
     confirmed = None
     if user is not None and users.check_link(
@@ -225,12 +245,12 @@ Please <a href="/account/signin">sign in</a> and I&rsquo;ll send you a fresh one
             status_code=400, confirmed=False,
         )
     if not _sessions_available(request):
-        return _confirmed_page(request, confirmed)
+        return await _confirmed_page(request, confirmed)
     identity.sign_in(request, confirmed)
     return RedirectResponse("/account/confirmation", status_code=303)
 
 
-def _confirmed_page(request: Request, user: users.User) -> HTMLResponse:
+async def _confirmed_page(request: Request, user: users.User) -> HTMLResponse:
     says = f"""
 <p>
 Congratulations, {html.escape(user.name)}.
@@ -242,14 +262,14 @@ Let&rsquo;s get started on your poster!
 """
     return render_page(
         request, "account/confirmation.html", "account-confirmation", says,
-        confirmed=True, name=user.name, next_page=resumption_page(request),
+        confirmed=True, name=user.name, next_page=await resumption_page(request),
     )
 
 
 @router.get("/signin", response_class=HTMLResponse)
 async def signin_page(request: Request, email: str = "") -> Response:
     if _signed_in(request):
-        return RedirectResponse(resumption_page(request), status_code=303)
+        return RedirectResponse(await resumption_page(request), status_code=303)
     name = identity.cookie_name(request)
     data = identity.session(request)
     if data is not None and name is not None:
@@ -307,7 +327,7 @@ Let&rsquo;s get back to work on your poster!
 </p>
 """
         return _reply(
-            True, says, redirect=resumption_page(request), command={"does": "clear-chat"},
+            True, says, redirect=await resumption_page(request), command={"does": "clear-chat"},
             signed_in=True,
         )
     name = identity.cookie_name(request)
@@ -499,7 +519,7 @@ Please <a href="/account/recover">request a new one</a>.
 All done, {identity.display_name(request)}! Your new password is in place.
 </p>
 """
-    return _reply(True, says, redirect=resumption_page(request), signed_in=True)
+    return _reply(True, says, redirect=await resumption_page(request), signed_in=True)
 
 
 @router.get("/delete", response_class=HTMLResponse)

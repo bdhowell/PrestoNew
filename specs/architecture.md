@@ -35,6 +35,18 @@ Unpurchased posters cannot be downloaded.
 Purchased posters can be downloaded as digitally native PDFs.
 A user can have only one unpurchased poster at a time, but any number of purchased posters.
 
+`poster.resumption` is nullable text storing a saved URL, including query parameters.
+It follows `uid` in the schema definition and is appended when upgrading an existing
+database. Routes can call `await common.resume(request, url)` to save it for the
+signed-in user's session-selected poster. The helper verifies ownership, preserves
+the URL verbatim (including `request.url` objects). Omitting `url` or passing `None`
+saves the current request's full URL, including query parameters. It reports missing selection,
+missing posters, and database failures explicitly. Pages do not save it automatically.
+The `clear: bool = True` argument appends `xyzzy=arpa` to the saved URL's query
+string (before any fragment). Pass `clear=False` to save the URL unchanged.
+Call `await common.clear_resume(request)` to explicitly clear the selected,
+owned poster's resumption URL to NULL, regardless of any query marker.
+
 # Schema
 
 A preliminary schema is in `schema/schema.sql`. It needs work.
@@ -303,7 +315,14 @@ Please sign in and we&rsquo;ll continue working on your poster.
 """
 
 Uses `/account/validate` for AJAX submission of the sign-in form.
-- After successful sign-in, as indicated from the response of `/account/validate`, redirect the user to request.state.poster['resumption-page']. If there is no poster, redirect to `/conferences/find`; an existing poster without a valid local resumption page falls back to `/posters/list`.
+- After successful sign-in, as indicated from the response of `/account/validate`,
+  redirect using `await account.resumption_page(request)`. It reads
+  `poster.resumption` for the signed-in user's session-selected poster and clears
+  that database field to NULL only if the saved URL has the query assignment
+  `xyzzy=arpa`. Otherwise it leaves the field set. The returned URL retains the
+  marker. If there is no selected, owned poster, redirect
+  to `/conferences/find`; an existing poster without a valid local or same-origin
+  resumption URL falls back to `/posters/list`. Query parameters are preserved.
 
 **`/account/validate`**
 ### Internal Logic
@@ -759,6 +778,20 @@ Write a local function that takes a Python text or binary object and produces a 
 - Apply `schema/schema.sql` to migrate source parents, storage metadata,
   summaries and the partial uniqueness index. Install `requirements-content.txt`
   for storage and processing dependencies.
+  Existing databases must be upgraded before accepting uploads; application
+  startup does not apply these schema migrations. An `UndefinedColumn` error
+  for `source.storage_uri` indicates an outdated database, not a document
+  conversion failure. From the repository root, with `DATABASE_URL` exported
+  for the same database used by the application, run:
+
+  ```sh
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 --single-transaction -f schema/schema.sql
+  ```
+
+  This also adds `source.summary`, allows top-level sources with a null
+  `parent`, and updates the special-kind uniqueness index. Retry the upload
+  after the migration completes. The reduced-feature Docling warning is
+  independent of database schema compatibility.
   Run `bin/python -m unittest test_content test_posters test_wikkit`; set
   `POSTERS_TEST_DATABASE_URL` for isolated PostgreSQL integration tests.
 - `POST /content/finished` checks the current owner-scoped draft. No content or

@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS poster (
     pid          SERIAL PRIMARY KEY,
     cid          INTEGER REFERENCES conference(cid),
     uid          INTEGER REFERENCES "user"(uid) ON DELETE SET NULL,
+    resumption   TEXT,
     logo         BYTEA,
     logotype     TEXT,        -- type of the logo (e.g., 'png', 'jpg', 'svg')
     dimensions   TEXT DEFAULT '36x48',
@@ -88,6 +89,8 @@ CREATE TABLE IF NOT EXISTS poster (
     search_vector tsvector,
     embedding    vector(1536)
 );
+
+ALTER TABLE poster ADD COLUMN IF NOT EXISTS resumption TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_poster_uid ON poster (uid);
 CREATE INDEX IF NOT EXISTS idx_poster_searchable ON poster (searchable) WHERE searchable = 1;

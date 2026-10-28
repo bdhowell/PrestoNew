@@ -141,8 +141,7 @@ async def _open_current(request: Request, uid: int) -> int:
     if pid is None:
         raise HTTPException(404, "You do not have an unpurchased poster.")
     _select(request, pid)
-    request.state.poster_id = pid
-    request.state.poster = {"pid": pid}
+    request.state.pid = pid
     return pid
 
 
@@ -159,8 +158,7 @@ async def create_poster(request: Request) -> JSONResponse:
         raise HTTPException(503, "Your poster could not be created. Please try again.") from None
     name = identity.display_name(request)
     _select(request, pid)
-    request.state.poster_id = pid
-    request.state.poster = {"pid": pid}
+    request.state.pid = pid
     if not created:
         return JSONResponse({
             "ok": True,
