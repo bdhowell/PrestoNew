@@ -13,9 +13,10 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from google.cloud import storage
-from google.api_core.exceptions import GoogleAPIError
+from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.auth.exceptions import GoogleAuthError
 import psycopg
+from psycopg import sql
 from starlette.concurrency import run_in_threadpool
 
 from posters import PosterStore
@@ -164,11 +165,15 @@ class SourceFiles:
         return str(path)
 
     def delete(self, uri: str) -> None:
+        """Remove a source file, treating an already-absent file as deleted."""
         if uri.startswith("gs://"):
             bucket, key = uri[5:].split("/", 1)
-            storage.Client().bucket(bucket).blob(key).delete(timeout=60)
+            try:
+                storage.Client().bucket(bucket).blob(key).delete(timeout=60)
+            except NotFound:
+                pass
         else:
-            Path(uri).unlink()
+            Path(uri).unlink(missing_ok=True)
 
     def read(self, uri: str) -> bytes:
         if uri.startswith("gs://"):

@@ -524,7 +524,10 @@ Would you like me to open it for you?
   `common.clean_response()` must recognize "yes" to delete. Other replies
   cancel. Both results return `deleted` and Wikkit's message; the list removes
   the card only on deletion. Deletion removes dependent rows and poster memory
-  and clears the selected poster when appropriate. The legacy
+  and clears the selected poster when appropriate. Source files are removed
+  before database deletion; already-missing local files or GCS objects do not
+  block deletion or retries. Other storage failures preserve the poster record
+  and return an explicit error. The legacy
   `POST /posters/{pid}/delete` endpoint continues to require `confirmed: true`.
 - Poster identity is revalidated before HTTP/websocket memory initialization.
   Authentication, owner filtering, and confirmation are enforced on the server.

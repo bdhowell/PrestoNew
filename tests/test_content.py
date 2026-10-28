@@ -14,7 +14,7 @@ import psycopg
 from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
-from google.api_core.exceptions import ServiceUnavailable
+from google.api_core.exceptions import Forbidden, NotFound, ServiceUnavailable
 from starlette.requests import HTTPConnection
 
 import content
@@ -257,6 +257,12 @@ class SourceFileTests(unittest.TestCase):
                 self.assertEqual(Path(uri).read_bytes(), b"source")
                 files.delete(uri)
                 self.assertFalse(Path(uri).exists())
+                files.delete(uri)
+
+    def test_local_delete_preserves_permission_errors(self) -> None:
+        with patch.object(Path, "unlink", side_effect=PermissionError("denied")):
+            with self.assertRaises(PermissionError):
+                content.SourceFiles().delete("/sources/one")
 
     def test_gcs_uses_configured_bucket_and_uuid_key(self) -> None:
         client = Mock()
@@ -272,6 +278,18 @@ class SourceFileTests(unittest.TestCase):
             )
             files.delete(uri)
             client.bucket().blob().delete.assert_called_once_with(timeout=60)
+
+    def test_gcs_delete_tolerates_only_missing_objects(self) -> None:
+        client = Mock()
+        with patch.object(content.storage, "Client", return_value=client):
+            files = content.SourceFiles()
+            client.bucket().blob().delete.side_effect = NotFound("missing")
+            files.delete("gs://source-test/one")
+            for error in (Forbidden("denied"), ServiceUnavailable("down")):
+                with self.subTest(error=type(error).__name__):
+                    client.bucket().blob().delete.side_effect = error
+                    with self.assertRaises(type(error)):
+                        files.delete("gs://source-test/one")
 
 
 class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
@@ -350,6 +368,27 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(content.SourceDeletionError):
                     await store.delete(7, 11)
         self.assertEqual(connection.execute.await_count, 3)
+
+    async def test_delete_missing_source_still_removes_memory_and_poster(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        owner, poster, sources, memory, cleared, deleted = (
+            AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock(),
+        )
+        poster.fetchone.return_value = (11,)
+        memory.fetchone.return_value = (f"{store.schema}.poster_memory",)
+        deleted.fetchone.return_value = (11,)
+        connection.execute.side_effect = [owner, poster, sources, memory, cleared, deleted]
+        with tempfile.TemporaryDirectory() as directory:
+            sources.fetchall.return_value = [(str(Path(directory) / "missing"),)]
+            with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+                self.assertTrue(await store.delete(7, 11))
+        memory_statement, memory_params = connection.execute.await_args_list[4].args
+        self.assertIn("poster_memory", memory_statement.as_string())
+        self.assertEqual(memory_params, (11,))
+        self.assertEqual(connection.execute.await_args_list[5].args, (
+            "DELETE FROM poster WHERE uid = %s AND pid = %s RETURNING pid", (7, 11),
+        ))
 
     async def test_failed_database_insert_removes_saved_file(self) -> None:
         store = content.SourceStore()
