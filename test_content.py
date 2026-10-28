@@ -245,6 +245,11 @@ class SourceFileTests(unittest.TestCase):
     def test_local_files_are_uuid_named_and_sharded_across_ten_directories(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SOURCES_DIR": directory, "GCS_BUCKET": ""}):
             files = content.SourceFiles()
+            files.prepare_directories()
+            self.assertEqual(
+                {path.name for path in Path(directory).iterdir()},
+                {str(shard) for shard in range(10)},
+            )
             for number in range(10):
                 fileid = uuid.UUID(int=number)
                 uri = files.put(fileid, b"source", "application/pdf")

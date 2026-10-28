@@ -951,6 +951,8 @@ As each item is uploaded and added to the database, display it in the #items-lis
   fingerprint. Changes to ownership, purchase status or source content prevent
   stale writes and return HTTP 409. Author/section failures roll back together.
   Section/poster embeddings are invalidated after content changes.
+- After successful elucidation is saved, the browser redirects to
+  `/conferences/query` to collect optional conference or fair information.
 - While the POST is pending, the browser chooses a new random delay in the
   inclusive 15–30-second range and a random Wikkit message from the list below.
   Completion, failure and leaving the page stop the timers. Failure stays on
@@ -995,7 +997,8 @@ Use OpenAI to analyze merged source texts and identify and extract the sections 
 Store the poster's authors into the author's table.
 Store the poster's sections into the section table.
 
-Upon completion of elucidation, redirect to `/layout/edit`.
+Upon completion of elucidation, redirect to `/conferences/query` to get
+conference or fair information.
 
 PROMPT
 

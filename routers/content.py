@@ -213,7 +213,7 @@ async def elucidate_poster(request: Request) -> JSONResponse:
     except STORAGE_ERRORS:
         logger.exception("Could not analyze or save poster content")
         raise HTTPException(503, "Your content could not be analyzed or saved. Please try again.") from None
-    return JSONResponse({"ok": True, "redirect": "/layout/edit"})
+    return JSONResponse({"ok": True, "redirect": "/conferences/query"})
 
 
 @router.get("/{sid}/thumbnail")

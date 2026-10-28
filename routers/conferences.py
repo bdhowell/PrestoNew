@@ -21,7 +21,7 @@ from wikkit import Chatbot
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/conferences", tags=["conferences"])
 
-UPLOAD_PAGE = "/content/upload"
+LAYOUT_PAGE = "/layout/upload"
 MATCH_RATIO = 0.7
 MAX_CRITERIA_LENGTH = 2000
 DECLINES = ["none", "noneofthese", "nomatch", "continue", "skip", "moveon", "continuewithoutconferenceinformation"]
@@ -161,7 +161,7 @@ async def query_page(request: Request) -> Response:
 
 
 async def continue_without(bot: Chatbot, message: str) -> None:
-    await bot.send({"say": f"<p>{message}</p>", "command": {"does": "redirect", "payload": UPLOAD_PAGE}})
+    await bot.send({"say": f"<p>{message}</p>", "command": {"does": "redirect", "payload": LAYOUT_PAGE}})
 
 
 async def choose(bot: Chatbot, uid: int, pid: int, conference: Conference) -> bool:
@@ -178,7 +178,7 @@ async def choose(bot: Chatbot, uid: int, pid: int, conference: Conference) -> bo
         logger.exception("Could not select conference for poster %s", pid)
         await bot.send({"say": "<p>I&rsquo;m sorry, I couldn&rsquo;t save that conference. Please try again.</p>"})
         return False
-    await bot.send({"command": {"does": "redirect", "payload": UPLOAD_PAGE}})
+    await bot.send({"command": {"does": "redirect", "payload": LAYOUT_PAGE}})
     return True
 
 

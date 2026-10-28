@@ -136,6 +136,12 @@ class SourceFiles:
         self.bucket = os.environ.get("GCS_BUCKET")
         self.root = Path(os.environ.get("SOURCES_DIR", Path(__file__).parent / "sources")).resolve()
 
+    def prepare_directories(self) -> None:
+        if self.bucket:
+            return
+        for shard in range(10):
+            (self.root / str(shard)).mkdir(parents=True, exist_ok=True)
+
     def put(self, fileid: UUID, data: bytes, mimetype: str) -> str:
         key = f"{fileid.int % 10}/{fileid}"
         if self.bucket:
@@ -143,7 +149,6 @@ class SourceFiles:
             blob.upload_from_string(data, content_type=mimetype, if_generation_match=0, timeout=60)
             return f"gs://{self.bucket}/{key}"
         path = self.root / key
-        path.parent.mkdir(parents=True, exist_ok=True)
         output = path.open("xb")
         try:
             with output:

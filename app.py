@@ -1,5 +1,7 @@
 """PrestoPresentations FastAPI application."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 import mimetypes
 import os
 from pathlib import Path
@@ -12,14 +14,23 @@ from fastapi.staticfiles import StaticFiles
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
+from content import SourceFiles  # noqa: E402
 from routers import account, conferences, content, posters, wikkit  # noqa: E402  (loaded after .env so routers see its settings)
 from identity import identity_context  # noqa: E402
 from posters import poster_context  # noqa: E402
 from memory import memory_context  # noqa: E402
 from sessions import PostgresSessionMiddleware, configured_session_store  # noqa: E402
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    SourceFiles().prepare_directories()
+    yield
+
+
 app = FastAPI(
     title="PrestoPresentations",
+    lifespan=lifespan,
     # identity_context installs the trusted user_id that memory_context relies on.
     dependencies=[
         Depends(identity_context),
