@@ -20,9 +20,9 @@ from starlette.requests import HTTPConnection
 import content
 import source_processing
 import posters
-import test_posters
+from tests import test_posters
 from routers import content as routes
-from test_posters import DRAFT, ROOT
+from tests.test_posters import DRAFT, ROOT
 
 ITEM = content.Source(1, "<paper>.pdf", "application/pdf", 12, "2026-10-25")
 

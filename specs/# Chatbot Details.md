@@ -407,7 +407,7 @@ Run the memory and chatbot tests with:
 ```sh
 # Use a dedicated test database, never production.
 TEST_DATABASE_URL=postgresql:///presto_memory_test \
-    bin/python -m unittest test_sessions test_memory test_wikkit test_intents test_account
+    bin/python -m unittest tests.test_sessions tests.test_memory tests.test_wikkit tests.test_intents tests.test_account
 ```
 
 Without `TEST_DATABASE_URL`, PostgreSQL integration tests are explicitly skipped;

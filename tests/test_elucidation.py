@@ -11,7 +11,7 @@ from pydantic import ValidationError
 import content
 import docxtractor
 import elucidation
-import test_content
+from tests import test_content
 
 
 def poster_content(**changes) -> elucidation.PosterContent:

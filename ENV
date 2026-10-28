@@ -1,0 +1,54 @@
+APPLICATION_NAME="AutoPoster"
+DATABASE_URL="postgresql://root:Fr33d0m@localhost/presto"
+DB_USER="root"
+DB_PASSWORD="Fr33d0m"
+DB_HOST="localhost"
+DB_PORT=5432
+DB_NAME="presto"
+SECRET_KEY=""
+SERVER_HOST="0.0.0.0"
+SERVER_PORT=8000
+LOG_LEVEL=info
+JAVA_HOME="/opt/homebrew/opt/openjdk/libexec/openjdk.jdk"
+RENDER_PRICE=0.00
+RENDER_RENDERINGS=1
+
+SESSION_MAX_AGE=600
+SESSION_EXPIRATION_NOTIFICATION=480
+
+PGVECTOR_LENGTH=1536
+VDB_TIMEOUT=30000
+
+OPENAI_API_KEY=""
+OPENAI_MODEL="gpt-5.5"
+OPENAI_TIKTOKEN="cl100k_base"
+OPENAI_TOKEN_LIMIT=8192
+OPENAI_EMBEDDING="text-embedding-3-small"
+
+# CONTENT_SWEEP_INTERVAL=600
+
+# FILE_SHARDING_MODULO=100
+
+AUTOCOMPLETE_VECTOR_CANDIDATE_MULTIPLIER=5
+AUTOCOMPLETE_VECTOR_CANDIDATE_MIN=25
+AUTOCOMPLETE_MERGE_METHOD="rrf"
+AUTOCOMPLETE_MERGE_RRF_K=60
+AUTOCOMPLETE_MERGE_FTS_WEIGHT=1.0
+AUTOCOMPLETE_MERGE_VECTOR_WEIGHT=1.0
+
+POSTER_UPLOAD_MAX_MB=40 # megabytes
+POSTER_ATTACHMENT_MAX_MB=40 # megabytes 
+
+DOCLING_SERVICE_URL="https://api.aws-c1.dcls.saas.ibm.com/20261027-2135-4822-40ab-411460ff8b44"
+DOCLING_SERVICE_API_KEY=""
+DOCLING_ENABLE_ENRICHMENT=false
+# Formula enrichment (do_formula_enrichment) — recognizes mathematical formulas and produces LaTeX.
+# Picture descriptions (do_picture_description) — generates textual descriptions of images.
+# Chart-data extraction (do_chart_extraction) — extracts structured data from charts.
+
+SOURCES_DIR="sources/"
+
+SOURCE_TEXT_MIN_LENGTH=4096
+
+CHAT_WINDOW_TRANSITION=330 # milliseconds
+CHAT_INPUT_TRANSITION=500 # milliseconds

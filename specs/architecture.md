@@ -525,7 +525,7 @@ Would you like me to open it for you?
 - Poster identity is revalidated before HTTP/websocket memory initialization.
   Authentication, owner filtering, and confirmation are enforced on the server.
 - Apply `schema/schema.sql` before enabling poster search. Run the focused tests
-  with `bin/python -m unittest test_posters`. Set `POSTERS_TEST_DATABASE_URL` to
+  with `bin/python -m unittest tests.test_posters`. Set `POSTERS_TEST_DATABASE_URL` to
   enable PostgreSQL integration tests; those use a temporary isolated schema and
   never truncate the public schema.
 
@@ -600,7 +600,7 @@ Else:
   owner's unpurchased poster gets `poster.cid`, the conference is stored in
   poster memory as `conference`, and Wikkit redirects to `/content/upload`.
 - Apply `schema/schema.sql` so conference search vectors are computed on
-  insert. Run `bin/python -m unittest test_conferences`; set
+  insert. Run `bin/python -m unittest tests.test_conferences`; set
   `POSTERS_TEST_DATABASE_URL` for isolated PostgreSQL integration tests.
 
 **`/conferences/find`**
@@ -792,7 +792,7 @@ Write a local function that takes a Python text or binary object and produces a 
   `parent`, and updates the special-kind uniqueness index. Retry the upload
   after the migration completes. The reduced-feature Docling warning is
   independent of database schema compatibility.
-  Run `bin/python -m unittest test_content test_posters test_wikkit`; set
+  Run `bin/python -m unittest tests.test_content tests.test_posters tests.test_wikkit`; set
   `POSTERS_TEST_DATABASE_URL` for isolated PostgreSQL integration tests.
 - `POST /content/finished` checks the current owner-scoped draft. No content or
   insufficient readable source text returns HTTP 409 and Wikkit's specified
@@ -961,7 +961,7 @@ As each item is uploaded and added to the database, display it in the #items-lis
 - Success navigates to `/layout/edit`; the layout editor itself remains
   deferred. Apply `schema/schema.sql` for `authors.errata` and the
   `acknowledgements` section enum, and install `requirements-content.txt`.
-  Run `bin/python -m unittest test_elucidation test_content test_posters test_wikkit`.
+  Run `bin/python -m unittest tests.test_elucidation tests.test_content tests.test_posters tests.test_wikkit`.
 
 ### Internal Logic
 
