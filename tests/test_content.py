@@ -298,6 +298,59 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ORDER BY s.added, s.sid", statement)
         self.assertEqual(params, (7, 11))
 
+    async def test_delete_removes_source_files_before_deleting_poster_record(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        owner, poster, sources, memory, deleted = (
+            AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock(),
+        )
+        owner.fetchone.return_value = (7,)
+        poster.fetchone.return_value = (11,)
+        memory.fetchone.return_value = (None,)
+        deleted.fetchone.return_value = (11,)
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / "one", Path(directory) / "two"]
+            for path in paths:
+                path.write_bytes(b"source")
+            sources.fetchall.return_value = [(str(path),) for path in paths]
+            poster_delete_saw_missing_files = []
+            responses = iter((owner, poster, sources, memory, deleted))
+
+            async def execute(statement: str, params: tuple = ()) -> AsyncMock:
+                if isinstance(statement, str) and statement.startswith("DELETE FROM poster WHERE"):
+                    poster_delete_saw_missing_files.append(
+                        all(not path.exists() for path in paths)
+                    )
+                return next(responses)
+
+            connection.execute.side_effect = execute
+            with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+                self.assertTrue(await store.delete(7, 11))
+
+            self.assertEqual(poster_delete_saw_missing_files, [True])
+            self.assertIn(
+                "SELECT DISTINCT storage_uri FROM source",
+                connection.execute.await_args_list[2].args[0],
+            )
+
+    async def test_delete_keeps_poster_record_when_source_file_cannot_be_removed(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        owner, poster, sources = AsyncMock(), AsyncMock(), AsyncMock()
+        owner.fetchone.return_value = (7,)
+        poster.fetchone.return_value = (11,)
+        sources.fetchall.return_value = [("/sources/one",)]
+        connection.execute.side_effect = [owner, poster, sources]
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "source"
+            source_path.write_bytes(b"source")
+            sources.fetchall.return_value = [(str(source_path),)]
+            with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                    patch.object(content, "run_in_threadpool", AsyncMock(side_effect=OSError("permission denied"))):
+                with self.assertRaises(content.SourceDeletionError):
+                    await store.delete(7, 11)
+        self.assertEqual(connection.execute.await_count, 3)
+
     async def test_failed_database_insert_removes_saved_file(self) -> None:
         store = content.SourceStore()
         connection = AsyncMock()

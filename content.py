@@ -29,6 +29,10 @@ class SourceConflictError(RuntimeError):
     """The poster or its source text changed while analysis was running."""
 
 
+class SourceDeletionError(RuntimeError):
+    """A poster's source file could not be removed."""
+
+
 @dataclass(frozen=True)
 class SourceText:
     count: int
@@ -174,6 +178,48 @@ class SourceFiles:
 
 
 class SourceStore(PosterStore):
+    async def delete(self, uid: int, pid: int) -> bool:
+        self.invalidate(uid, pid)
+        connection = await self._connect()
+        async with connection:
+            await connection.execute('SELECT uid FROM "user" WHERE uid = %s FOR UPDATE', (uid,))
+            cursor = await connection.execute(
+                "SELECT pid FROM poster WHERE uid = %s AND pid = %s FOR UPDATE", (uid, pid)
+            )
+            if await cursor.fetchone() is None:
+                return False
+
+            cursor = await connection.execute(
+                "SELECT DISTINCT storage_uri FROM source "
+                "WHERE pid = %s AND storage_uri IS NOT NULL", (pid,),
+            )
+            files = SourceFiles()
+            for (uri,) in await cursor.fetchall():
+                try:
+                    await run_in_threadpool(files.delete, uri)
+                except (OSError, GoogleAPIError, GoogleAuthError, ValueError) as error:
+                    raise SourceDeletionError(
+                        f"Could not remove a source file for poster {pid}."
+                    ) from error
+
+            cursor = await connection.execute(
+                "SELECT to_regclass(%s)", (f"{self.schema}.poster_memory",)
+            )
+            row = await cursor.fetchone()
+            if row is not None and row[0] is not None:
+                await connection.execute(
+                    sql.SQL("DELETE FROM {} WHERE pid = %s").format(
+                        sql.Identifier(self.schema, "poster_memory")
+                    ), (pid,),
+                )
+            cursor = await connection.execute(
+                "DELETE FROM poster WHERE uid = %s AND pid = %s RETURNING pid", (uid, pid)
+            )
+            deleted = await cursor.fetchone() is not None
+        if deleted:
+            self.invalidate(uid, pid)
+        return deleted
+
     async def source_file(self, uid: int, sid: int) -> tuple[bytes, str] | None:
         connection = await self._connect()
         async with connection:

@@ -8,9 +8,10 @@ import psycopg
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+import content
+import elucidation
 import identity
 import posters
-import elucidation
 from markupsafe import Markup
 from common import clean_response
 from routers.wikkit import read_json, render_page, templates
@@ -229,8 +230,8 @@ async def confirm_delete(request: Request) -> JSONResponse:
 
 async def _delete_confirmed(request: Request, uid: int, pid: int) -> JSONResponse:
     try:
-        deleted = await posters.store().delete(uid, pid)
-    except psycopg.Error:
+        deleted = await content.store().delete(uid, pid)
+    except (psycopg.Error, content.SourceDeletionError):
         logger.exception("Could not delete poster %s", pid)
         raise HTTPException(503, "Your poster could not be deleted. Please try again.") from None
     if not deleted:

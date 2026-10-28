@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from psycopg import sql
 from starlette.requests import HTTPConnection
 
+import content
 import posters
 from routers import posters as routes
 
@@ -34,6 +35,9 @@ class PosterRouteTests(unittest.TestCase):
             [("Ada", "Institute")],
         )
         mocked = patch.object(posters, "store", return_value=self.store)
+        mocked.start()
+        self.addCleanup(mocked.stop)
+        mocked = patch.object(content, "store", return_value=self.store)
         mocked.start()
         self.addCleanup(mocked.stop)
 
@@ -336,6 +340,11 @@ class PosterRouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/posters/delete", json={
             "pid": 11, "response": "yes",
         }).status_code, 404)
+        self.store.delete.side_effect = content.SourceDeletionError("could not remove source")
+        with self.assertLogs("routers.posters", "ERROR"):
+            self.assertEqual(self.client.post("/posters/11/delete", json={
+                "confirmed": True,
+            }).status_code, 503)
 
     def test_database_errors_are_visible(self) -> None:
         self.store.list.side_effect = psycopg.OperationalError("unavailable")
