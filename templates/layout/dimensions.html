@@ -1,0 +1,15 @@
+{% extends "page.html" %}
+{% block title %}Poster dimensions - {{ app_name() }}{% endblock %}
+{% block content %}
+<h1>Poster dimensions</h1>
+<p>Tell Wikkit the height and width of your poster.</p>
+<section id="dimension-correction" hidden aria-label="Correct poster dimensions">
+    <div id="poster-preview"><span id="poster-size"></span></div>
+    <form id="dimension-form">
+        <label for="poster-dimensions">Height x width (cm, mm, or in)</label>
+        <input id="poster-dimensions" name="dimensions" placeholder="36 in x 48 in" maxlength="100" required>
+        <button type="submit">Set dimensions</button>
+    </form>
+    <p id="dimension-status" role="status" aria-live="polite"></p>
+</section>
+{% endblock %}

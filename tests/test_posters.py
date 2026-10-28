@@ -17,8 +17,8 @@ from starlette.requests import HTTPConnection
 import posters
 from routers import posters as routes
 
-ROOT = Path(__file__).resolve().parent
-DRAFT = posters.Poster(11, "<Research>", "Description", "36x48", None, None, False, None)
+ROOT = Path(__file__).resolve().parent.parent
+DRAFT = posters.Poster(11, "<Research>", "Description", "91.44x121.92", None, None, False, None)
 
 
 class PosterRouteTests(unittest.TestCase):
@@ -454,6 +454,7 @@ class PosterDatabaseTests(unittest.TestCase):
         cls.connection.close()
 
     def setUp(self) -> None:
+        self.store._last = None
         self.connection.execute('TRUNCATE "user" RESTART IDENTITY CASCADE')
         self.connection.execute("""
             INSERT INTO "user" (uid, name, username, email, password, pwd_updated, created, updated)

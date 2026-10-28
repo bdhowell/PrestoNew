@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS poster (
     resumption   TEXT,
     logo         BYTEA,
     logotype     TEXT,        -- type of the logo (e.g., 'png', 'jpg', 'svg')
-    dimensions   TEXT DEFAULT '36x48',
+    dimensions   TEXT DEFAULT '91.44x121.92', -- width x height, always centimeters
+    units        TEXT NOT NULL DEFAULT 'cm' CHECK (units IN ('cm', 'mm', 'in')),
     description  TEXT,
     moreinfo     TEXT,
     moreinfopng  BYTEA,
@@ -92,6 +93,25 @@ CREATE TABLE IF NOT EXISTS poster (
 
 ALTER TABLE poster ADD COLUMN IF NOT EXISTS cid INTEGER REFERENCES conference(cid);
 ALTER TABLE poster ADD COLUMN IF NOT EXISTS resumption TEXT;
+
+-- Older installations stored dimensions in inches. Convert only on upgrade.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'poster' AND column_name = 'units'
+    ) THEN
+        UPDATE poster SET dimensions =
+            (split_part(dimensions, 'x', 1)::numeric * 2.54)::text || 'x' ||
+            (split_part(dimensions, 'x', 2)::numeric * 2.54)::text
+        WHERE dimensions IS NOT NULL;
+        ALTER TABLE poster ADD COLUMN units TEXT NOT NULL DEFAULT 'in'
+            CHECK (units IN ('cm', 'mm', 'in'));
+    END IF;
+END
+$$;
+ALTER TABLE poster ALTER COLUMN units SET DEFAULT 'cm';
+ALTER TABLE poster ALTER COLUMN dimensions SET DEFAULT '91.44x121.92';
 
 CREATE INDEX IF NOT EXISTS idx_poster_uid ON poster (uid);
 CREATE INDEX IF NOT EXISTS idx_poster_searchable ON poster (searchable) WHERE searchable = 1;

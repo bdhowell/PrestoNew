@@ -161,6 +161,7 @@ class ElucidationRouteTests(unittest.TestCase):
         self.sources.source_text.assert_awaited_once_with(7, 11)
         self.analyze.assert_awaited_once_with(self.snapshot.text)
         self.sources.save_elucidation.assert_awaited_once_with(7, 11, self.snapshot, self.result)
+        self.posters.invalidate.assert_called_once_with(7, 11)
 
     def test_page_and_post_require_signed_in_owner_and_editable_selected_poster(self) -> None:
         self.uid = None

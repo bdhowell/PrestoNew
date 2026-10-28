@@ -173,6 +173,18 @@ class SourceFiles:
 
 
 class SourceStore(PosterStore):
+    async def source_file(self, uid: int, sid: int) -> tuple[bytes, str] | None:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT s.storage_uri, s.mimetype FROM source s JOIN poster p USING (pid) "
+                "WHERE p.uid = %s AND s.sid = %s", (uid, sid),
+            )
+            row = await cursor.fetchone()
+        if row is None or not row[0]:
+            return None
+        return await run_in_threadpool(SourceFiles().read, row[0]), row[1]
+
     _SOURCE_COLUMNS = (
         "s.sid, coalesce(s.filename, parent.filename, 'Untitled source'), s.mimetype, "
         "s.size, s.added::text, s.parent, s.description, s.width, s.height, s.kind"

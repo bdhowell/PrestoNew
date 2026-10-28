@@ -31,7 +31,7 @@ class ContentRouteTests(unittest.TestCase):
     def setUp(self) -> None:
         self.uid = 7
         self.session = {"poster_id": 11}
-        self.posters = AsyncMock()
+        self.posters = AsyncMock(spec=posters.PosterStore)
         self.posters.get.return_value = DRAFT
         self.sources = AsyncMock()
         self.sources.list_sources.return_value = []

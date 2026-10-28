@@ -1079,7 +1079,51 @@ Return the following information:
 
 # Layout Router
 
-Create a function, layout(template, pid)) for laying out a template, which takes a template name and a poster ID.
+Implementation contract:
+- `layout(template, pid, *, uid, request=None)` renders a fresh copy of the named
+  template. The trusted owner's `uid` is required; the optional request supplies
+  navigation context. `/layout/edit` and `/layout/layout` display the result.
+- Panes use `data-sections` (legacy `data-section` is also accepted). Commas
+  separate sections; pipes group sections inside a `section-parent`. Vertical
+  panes and their grouped sections use the `vertical` class.
+- Section aliases map template names to database names: methods to materials
+  and methods, conclusions to conclusion, citations to literature cited, and
+  information to additional information. Authors come from the authors table.
+- Stored section HTML is sanitized with the same allowlist as poster previews.
+- The last poster lookup is cached by owner and poster ID for two seconds;
+  poster mutations invalidate it.
+- Media endpoints require ownership. QR PNG bytes come from `poster.moreinfopng`,
+  logos from `poster.logo` with an allowlisted `poster.logotype`, and source files
+  from owner-scoped source storage. Responses are private and non-cacheable.
+- All stored `poster.dimensions` are **width x height in centimeters**.
+  `poster.units` controls display, not storage. Applying `schema/schema.sql`
+  converts existing inch-based records once and retains their `in` display
+  units. New posters default to `cm`. Existing pixel previews still convert to
+  inches at the rendering boundary.
+- User input is **height x width**; decimals and `cm`, `mm`, and `in` are accepted,
+  including separately specified units per axis. Missing units use the
+  conference units, or the poster display units without a conference.
+- Landscape and square posters select `arena`; portrait posters select `vertical`.
+- `/layout/dimensions` uses the `layout-dimensions` Wikkit workflow: save exact
+  required sizes and wait for confirmation, otherwise offer complete maximum
+  sizes, then request custom input as necessary. `idk` uses complete maximum
+  sizes only when available; without them it asks again rather than inventing
+  dimensions. All conference bounds are converted to centimeters before validation.
+- Exact conference requirements take precedence over readability minima.
+  Otherwise both dimensions must meet the configured minimums. Partial maxima
+  and requirements still constrain custom input. The existing 240-inch safety
+  ceiling remains in effect.
+- Only invalid input reveals the correction form and centered aspect-ratio
+  preview. Server commands provide its dimensions and translucent labels.
+  Edits POST JSON `{"dimensions": "36 in x 48 in"}` to `/layout/dimensions`;
+  invalid values return HTTP 422 with errors and, when parseable, a preview.
+  Valid values persist dimensions, units, and orientation together and redirect
+  to `/layout/edit`. The server rejects edits to purchased or foreign posters.
+
+The following original design sketch is superseded by the implementation
+contract above where unit conversions, field names, or orientation differ.
+
+Create a function, layout(template, pid) for laying out a template, which takes a template name and a poster ID.
 - Get the poster's section contents from the database's section table.
 - Get the poster's logo, if any, from the database's poster table.
 

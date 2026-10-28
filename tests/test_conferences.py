@@ -214,7 +214,7 @@ class QueryWorkflowTests(unittest.IsolatedAsyncioTestCase):
         return bot
 
     def redirected(self, bot: SimpleNamespace) -> bool:
-        return bot.sent[-1]["command"] == {"does": "redirect", "payload": "/content/upload"}
+        return bot.sent[-1]["command"] == {"does": "redirect", "payload": "/layout/dimensions"}
 
     async def test_no_information_continues_to_uploads(self) -> None:
         for reply in ("I don't know", "idk", "No"):

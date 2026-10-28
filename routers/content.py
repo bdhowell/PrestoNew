@@ -205,6 +205,7 @@ async def elucidate_poster(request: Request) -> JSONResponse:
             raise HTTPException(409, "Please upload enough source text before running analysis.")
         result = await elucidation.analyze(sources.text)
         await content.store().save_elucidation(uid, pid, sources, result)
+        posters.store().invalidate(uid, pid)
     except content.SourceConflictError as error:
         raise HTTPException(409, str(error)) from None
     except elucidation.ElucidationError as error:

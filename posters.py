@@ -4,8 +4,10 @@ import logging
 import math
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
 import openai
@@ -41,18 +43,33 @@ class Poster:
     purchased: bool
     conference_date: datetime | None
     resumption: str | None = None
+    units: str = "cm"
+    logo: bytes | None = None
+    logotype: str | None = None
+    moreinfopng: bytes | None = None
 
     @property
-    def inches(self) -> tuple[float, float]:
+    def centimeters(self) -> tuple[float, float]:
         if self.dimensions is None:
             raise ValueError(f"Poster {self.pid} dimensions have not been set")
         match = re.fullmatch(r"(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)", self.dimensions)
         if match is None:
             raise ValueError(f"Poster {self.pid} has invalid dimensions")
         width, height = map(float, match.groups())
-        if not all(math.isfinite(value) and 0 < value <= 240 for value in (width, height)):
-            raise ValueError(f"Poster {self.pid} dimensions must be within 240 inches")
+        if not all(math.isfinite(value) and 0 < value <= 240 * 2.54 for value in (width, height)):
+            raise ValueError(f"Poster {self.pid} dimensions must be within 609.6 cm")
         return width, height
+
+    @property
+    def inches(self) -> tuple[float, float]:
+        width, height = self.centimeters
+        return width / 2.54, height / 2.54
+
+    @property
+    def display_dimensions(self) -> str:
+        width, height = self.centimeters
+        scale = {"cm": 1, "mm": 0.1, "in": 2.54}[self.units]
+        return f"{width / scale:g} x {height / scale:g} {self.units}"
 
 
 async def query_embedding(query: str) -> tuple[list[float] | None, str | None]:
@@ -79,6 +96,11 @@ class PosterStore:
     def __init__(self, database_env: str = "DATABASE_URL", schema: str = "public") -> None:
         self.database_env = database_env
         self.schema = schema
+        self._last: tuple[int, Poster, float] | None = None
+
+    def invalidate(self, uid: int, pid: int) -> None:
+        if self._last is not None and (self._last[0], self._last[1].pid) == (uid, pid):
+            self._last = None
 
     async def _connect(self) -> psycopg.AsyncConnection:
         dsn = os.environ.get(self.database_env)
@@ -101,18 +123,24 @@ class PosterStore:
                EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) AS purchased,
                (SELECT min(c.starts) FROM show s JOIN conference c USING (cid)
                 WHERE s.pid = p.pid) AS conference_date,
-               p.resumption
+               p.resumption, p.units, p.logo, p.logotype, p.moreinfopng
         FROM poster p
         LEFT JOIN section t ON t.pid = p.pid AND t.which = 'title'
         WHERE p.uid = %s
     """
 
     async def get(self, uid: int, pid: int) -> Poster | None:
+        if self._last is not None:
+            owner, poster, expires = self._last
+            if (owner, poster.pid) == (uid, pid) and time.monotonic() < expires:
+                return poster
         connection = await self._connect()
         async with connection:
             cursor = await connection.execute(self._ROWS + " AND p.pid = %s", (uid, pid))
             row = await cursor.fetchone()
-        return Poster(*row) if row else None
+        poster = Poster(*row) if row else None
+        self._last = (uid, poster, time.monotonic() + 2) if poster else None
+        return poster
 
     async def list(
         self, uid: int, query: str = "", embedding: list[float] | None = None,
@@ -216,6 +244,7 @@ class PosterStore:
             return row[0], True
 
     async def initialize(self, uid: int, pid: int, template: str, theme: str) -> None:
+        self.invalidate(uid, pid)
         connection = await self._connect()
         async with connection:
             await connection.execute(
@@ -225,17 +254,22 @@ class PosterStore:
                 "(SELECT 1 FROM purchase b WHERE b.pid = p.pid)",
                 (template, theme, uid, pid),
             )
+        self.invalidate(uid, pid)
 
     async def set_resumption(self, uid: int, pid: int, url: str | None) -> bool:
+        self.invalidate(uid, pid)
         connection = await self._connect()
         async with connection:
             cursor = await connection.execute(
                 "UPDATE poster SET resumption = %s WHERE uid = %s AND pid = %s RETURNING pid",
                 (url, uid, pid),
             )
-            return await cursor.fetchone() is not None
+            saved = await cursor.fetchone() is not None
+        self.invalidate(uid, pid)
+        return saved
 
     async def delete(self, uid: int, pid: int) -> bool:
+        self.invalidate(uid, pid)
         connection = await self._connect()
         async with connection:
             # Serialize deletion with draft creation for this owner.
@@ -274,6 +308,37 @@ class PosterStore:
             )
             authors = await cursor.fetchall()
         return sections, authors
+
+    async def conference_details(self, uid: int, pid: int) -> tuple[str, dict]:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT c.name, c.details FROM poster p JOIN conference c USING (cid) "
+                "WHERE p.uid = %s AND p.pid = %s", (uid, pid),
+            )
+            row = await cursor.fetchone()
+        return (row[0], row[1] or {}) if row else ("", {})
+
+    async def set_dimensions(
+        self, uid: int, pid: int, width: float, height: float, units: str,
+    ) -> bool:
+        if units not in ("cm", "mm", "in") or not all(
+            math.isfinite(value) and 0 < value <= 609.6 for value in (width, height)
+        ):
+            raise ValueError("Invalid poster dimensions or units")
+        dimensions = "x".join(format(Decimal(str(value)), "f") for value in (width, height))
+        self.invalidate(uid, pid)
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "UPDATE poster p SET dimensions = %s, units = %s, template = %s, updated = now() "
+                "WHERE p.uid = %s AND p.pid = %s AND NOT EXISTS "
+                "(SELECT 1 FROM purchase b WHERE b.pid = p.pid) RETURNING p.pid",
+                (dimensions, units, "arena" if width >= height else "vertical", uid, pid),
+            )
+            saved = await cursor.fetchone() is not None
+        self.invalidate(uid, pid)
+        return saved
 
 
 _store = PosterStore()
