@@ -6,3 +6,5 @@ pyvenv.cfg
 .DS_Store
 /sources/
 .env
+__pycache__/
+*.pyc
