@@ -20,6 +20,15 @@ Sort = Literal["name", "conference_date", "relevance"]
 Direction = Literal["asc", "desc"]
 TEMPLATES = ("arena", "central", "vertical")
 
+POSTER_MIN_WIDTH = 24  # inches
+POSTER_MIN_HEIGHT = 24  # inches
+POSTER_MAX_WIDTH = 240  # inches
+POSTER_MAX_HEIGHT = 240  # inches
+POSTER_UNITS = "cm"  # default units for poster dimensions
+POSTER_MIN_WIDTH_CM = 36 * 2.54  # cm
+POSTER_MIN_HEIGHT_CM = 36 * 2.54  # cm
+POSTER_MAX_WIDTH_CM = 96 * 2.54  # cm
+POSTER_MAX_HEIGHT_CM = 96 * 2.54  # cm
 
 @dataclass(frozen=True)
 class Poster:

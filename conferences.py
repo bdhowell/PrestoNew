@@ -158,6 +158,7 @@ IMPORTANT_FEATURES_LIST = list(IMPORTANT_FEATURES)
 
 SINGULARITY = {
     "dimensions" : ["allowed_poster_dimensions", "required_poster_dimensions", "maximum_poster_dimensions"],
+    "largest" :  ["maximum_poster_dimensions", "allowed_poster_dimensions"],
     "width" : ["allowed_poster_width", "required_poster_width", "maximum_poster_width"],
     "height" : ["allowed_poster_height", "required_poster_height", "maximum_poster_height"],
     "units" : ["poster_units"],
@@ -239,6 +240,15 @@ Do not invent information. Use null when a poster requirement is not specified o
                 (conference[attribute] for attribute in sources if conference.get(attribute) is not None),
                 None,
             )
+
+        if match := conference['dimensions'] and not conference['height'] and re.fullmatch(r'(\d+)\s*x\s*(\d+)', conference['dimensions']):
+            conference['width'] = int(match.group(1))
+            conference['height'] = int(match.group(2))
+
+        if match := conference['largest'] and not conference['maximum_poster_height'] and re.fullmatch(r'(\d+)\s*x\s*(\d+)', conference['largest']):
+            conference['maximum_poster_width'] = int(match.group(1))
+            conference['maximum_poster_height'] = int(match.group(2))
+
         conference["units"] = UNITS.get(conference["units"], conference["units"])
 
         if conference["conference_start_date"] is None:

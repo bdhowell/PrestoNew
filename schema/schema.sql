@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS poster (
     embedding    vector(1536)
 );
 
+ALTER TABLE poster ADD COLUMN IF NOT EXISTS cid INTEGER REFERENCES conference(cid);
 ALTER TABLE poster ADD COLUMN IF NOT EXISTS resumption TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_poster_uid ON poster (uid);

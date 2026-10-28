@@ -21,7 +21,7 @@ from wikkit import Chatbot
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/conferences", tags=["conferences"])
 
-LAYOUT_PAGE = "/layout/layout"
+LAYOUT_PAGE = "/layout/dimensions"
 MATCH_RATIO = 0.7
 MAX_CRITERIA_LENGTH = 2000
 DECLINES = ["none", "noneofthese", "nomatch", "continue", "skip", "moveon", "continuewithoutconferenceinformation"]

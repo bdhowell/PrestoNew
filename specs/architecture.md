@@ -599,6 +599,9 @@ Else:
   `hideafter=0` and a NULL `verified`, and requirements go in `details`. The
   owner's unpurchased poster gets `poster.cid`, the conference is stored in
   poster memory as `conference`, and Wikkit redirects to `/content/upload`.
+- `poster.cid` is a nullable integer foreign key to `conference.cid`. New
+  posters leave it NULL until a conference is selected; selecting another
+  conference replaces it. The schema also adds the column for older databases.
 - Apply `schema/schema.sql` so conference search vectors are computed on
   insert. Run `bin/python -m unittest tests.test_conferences`; set
   `POSTERS_TEST_DATABASE_URL` for isolated PostgreSQL integration tests.
@@ -1115,6 +1118,101 @@ Takes a poster id (pid), looks up its record and outputs the contents of its pos
 Takes the source id (sid) of a source and outputs the associated file
 Used to display images.
 
+**`/layout/dimensions`**
+### Internal Logic
+Set the poster's height and width to 0
+adjustable = True
+If a conference was found for the poster:
+- If the conference details provide a required poster height and width:
+	- Set the poster height to the required poster height specified in the conference details.
+	- Set the poster width to the required poster width specified in the conference details.
+	- adjustable = False
+	- Wikkit says: f"""
+Okay, {identity.display_name(request)}, {conference['conference_name']} has a required poster height of {conference['required_poster_height']} and a required poster width of {conference['required_poster_width']}.
+
+I&rsquo;ve set your poster dimensions to the required values.
+Let me know when you&rsquo;re ready to proceed.
+
+<button data-send="ok">I&rsquo;m ready</button>
+"""
+
+	- Wait for user input
+
+- Elif the conference details provide a maximum poster height:
+	- Wikkit says: 
+f"""
+Okay, {identity.display_name(request)}, {conference['conference_name']} has a maximum poster height of {conference['maximum_poster_height']}[{conference['poster_units']}] and a maximum poster width of {conference['maximum_poster_width']}{conference['poster_units']}.
+
+Do you want to set your poster dimensions to these maximum values? 
+You can always change them later.
+
+<button data-send="ok">Set the dimensions to maximum</button>
+<button data-send="cancel">I want to set my dimensions</button>
+"""
+
+	- Wait for user input
+		- If the user chooses to set the dimensions to maximum:
+			- poster.height = conference["maximum_poster_height"]
+			- poster.width = conference["maximum_poster_width"]
+			- Wikkit says: "Done!"
+
+- if adjustable and (not poster.height or not poster.width):
+- Wikkit says: 
+	f""" 
+So what are the dimensions of your poster, {identity.display_name(request)}?
+You can always change them later.
+"""
+while True:
+- Wait for user input
+- match = re.fullmatch(r'(\d+)\s*(cm|mm|in)?\s*x\s*(\d+)\s*(cm|mm|in)?', user_input)
+- if match:
+	- iscm = conference['poster_units'] == 'cm'
+	- poster.height = int(match.group(1)) * 2.54 if iscm else int(match.group(1))
+	- poster.width = int(match.group(3)) * 2.54 if iscm else int(match.group(3))
+	- poster.units = match.group(2) or match.group(4) or conference['poster_units']
+	- scaling = 1
+	- if conference['poster_units']:
+		if conference['poster_units'] == 'mm':
+			scaling = 10
+		elif conference['poster_units'] == 'in':
+			scaling = 2.54
+
+	- poster.height *= scaling
+	- poster.width *= scaling	
+
+	- if poster.width < POSTER_MIN_WIDTH_CM:
+		- Wikkit says: "Your poster width is too small. Nobody will be able to read it."
+		- validated = False
+	- if poster.height < POSTER_MIN_HEIGHT_CM:
+		- Wikkit says: "Your poster height is too small. Nobody will be able to read it."
+		- validated = False
+	- if conference.get("maximum_poster_height") and poster.height > conference["maximum_poster_height"] * scaling:
+		- Wikkit says: "Poster height exceeds the maximum allowed."
+		- validated = False
+	- if conference.get("maximum_poster_width") and poster.width > conference["maximum_poster_width"] * scaling:
+		- Wikkit says: "Poster width exceeds the maximum allowed."
+		- validated = False
+	- if validated:
+	- if poster.height > poster.width:
+		- Poster template is arena
+	- else:
+		- Poster template is vertical
+	- redirect to `layout/edit`
+
+- user_input = common.clean_input(user_input)
+- if user_input == 'idk':
+	- Wikkit says: "I&rsquo;ll set the maximum dimensions for now and you can always adjust your poster dimensions later."
+	- poster.height = conference["maximum_poster_height"]
+	- poster.width = conference["maximum_poster_width"]
+	- Wikkit says: "Done!"
+	- break
+
+### Template Content
+Displays a centeredrectangular region representing the poster's dimensions with the dimensions overlaid semitransparently. 
+Whenever the user adjusts the poster dimensions, the rectangular region updates to reflect the new size.
+Use a server-side command to update the poster dimensions and re-render the layout whenever the user makes changes.
+This only occurs if the parsed poster dimensions are invalid and need to be corrected by the user.
+
 
 **`/layout/edit`**
 ### Internal Logic
@@ -1195,7 +1293,6 @@ If Rewrite is clicked and no section is contentEditable="true":
 - Strip the input and remove r/^\s*rewrite\s*|the\s+/i to get the section name
 - Activate the item  as if it was clicked.
 - Wikkit Says: "How would you like me to change it?"
-
 
 ### Wikkit Says:
 

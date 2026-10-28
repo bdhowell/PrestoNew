@@ -22,7 +22,7 @@ from conferences import Conference
 from routers import conferences as routes
 from routers import wikkit as wikkit_routes
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 TODAY = datetime.date.today()
 NEXT_YEAR = TODAY.replace(year=TODAY.year + 1)
 DRAFT = posters.Poster(11, "Research", None, None, None, None, False, None)
@@ -336,6 +336,29 @@ class ConferenceDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.connection.execute("SELECT count(*) FROM conference").fetchone()[0], 0)
         with self.assertRaises(LookupError):
             await self.store.select(7, 999, conference("Boston Chemistry Meeting", 123))
+
+    async def test_poster_conference_is_nullable_and_references_a_conference(self) -> None:
+        self.assertIsNone(self.connection.execute(
+            "SELECT cid FROM poster WHERE pid = %s", (self.pid,)
+        ).fetchone()[0])
+        with self.assertRaises(psycopg.errors.ForeignKeyViolation):
+            self.connection.execute(
+                "UPDATE poster SET cid = %s WHERE pid = %s", (123, self.pid)
+            )
+
+    async def test_stored_conference_selection_and_reselection_update_poster(self) -> None:
+        first = await self.store.select(7, self.pid, conference("First Meeting"))
+        second = await self.store.select(7, self.pid, conference("Second Meeting"))
+        for selected in (first, second):
+            with self.subTest(cid=selected.cid):
+                result = await self.store.select(7, self.pid, selected)
+                self.assertEqual(result.cid, selected.cid)
+                self.assertEqual(self.connection.execute(
+                    "SELECT cid FROM poster WHERE pid = %s", (self.pid,)
+                ).fetchone()[0], selected.cid)
+        self.assertEqual(self.connection.execute(
+            "SELECT count(*) FROM conference"
+        ).fetchone()[0], 2)
 
 
 if __name__ == "__main__":
