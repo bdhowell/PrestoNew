@@ -52,26 +52,47 @@ body {
     width: 0;
 }
 
+.poster-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
+}
+
+.logo-title {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 4fr) minmax(0, 1fr);
+    align-items: center;
+}
+
+#logo {
+    grid-column: 1;
+    min-width: 0;
+}
+
+#logo img {
+    max-width: 100%;
+    height: auto;
+    margin: 0;
+}
+
 .title {
+    grid-column: 2;
     font-family: var(--heading-font-face);
     font-size: 2rem;
     flex: 1;
     min-width: 0;
     text-align: center;
-    height: 6rem;
+    overflow-wrap: anywhere;
 }
 
 .authors {
     font-family: var(--heading-font-face);
-    font-size: 1rem;;
+    font-size: 1rem;
     flex: 1;
     min-width: 0;
     text-align: center;
-    height: 2rem;
-}
-
-.logo:not(:empty) ~ .title {
-    text-align: left;
+    overflow-wrap: anywhere;
 }
 
 .section-parent {

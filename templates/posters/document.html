@@ -4,10 +4,11 @@
     <meta charset="UTF-8">
     <title>{{ poster.name }}</title>
     <link rel="stylesheet" href="/static/css/themes.css">
+    <link rel="stylesheet" href="/static/css/fonts.css">
     <link rel="stylesheet" href="/static/css/pages/poster-document.css">
 </head>
 <body>
-<article class="poster-document {{ theme }} {{ layout }}" style="width: {{ width }}px; height: {{ height }}px" data-width="{{ width }}" data-height="{{ height }}">
+<article class="poster-document {{ theme }} {{ fonts }} {{ layout }}" style="width: {{ width }}px; height: {{ height }}px" data-width="{{ width }}" data-height="{{ height }}">
     <header>
         <h1>{{ poster.name }}</h1>
         {% for name, affiliation in authors %}

@@ -73,8 +73,8 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
         raise HTTPException(404, "Poster not found")
     sections, authors = await posters.store().content(uid, pid)
     values = {which: elucidation.clean_html(value) for which, value in sections}
-    values["authors"] = "<br>".join(
-        html.escape(name) + (f" ({html.escape(affiliation)})" if affiliation else "")
+    values["authors"] = ", ".join(
+        html.escape(name).replace(" ", "&nbsp;") + (f"&nbsp;({html.escape(affiliation)})" if affiliation else "")
         for name, affiliation in authors
     )
     values["author"] = values["authors"]
@@ -82,6 +82,8 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
         request = Request({"type": "http", "headers": [], "state": {"user_id": uid}})
     raw = templates.env.get_template(f"layouts/{template}.html").render(
         request=request, poster=poster, layout_template=template,
+        theme=poster.theme if poster.theme in posters.installed_themes() else "",
+        fonts=poster.fonts if poster.fonts in posters.installed_fonts() else "",
     )
     document = dom.document_fromstring(raw)
     if poster.logo:

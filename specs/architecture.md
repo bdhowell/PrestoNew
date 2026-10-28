@@ -435,6 +435,10 @@ f"""
 
 `PosterStore.unpurchased()` is the common owner-scoped draft check.
 `POST /posters/check` uses it before the New Poster button proceeds.
+New posters receive an independently random theme from the class selectors in
+`static/css/themes.css` and font set from `static/css/fonts.css`. Both are saved
+atomically with the new poster, then applied in the layout editor and read-only
+previews. Reusing an existing draft preserves its styling; no reassignment occurs.
 - If it does: 
 	- Have Wikkit say f"I&rsquo;m sorry, {request.state.user['user-name']}, you can work on only one poster at a time.
 - Else:
@@ -1077,6 +1081,32 @@ Return the following information:
 }
 ```
 
+# System Router
+
+`POST /system/purge` permanently removes all posters and conferences, including
+their cascading dependent records and optional poster memory, then deletes only
+the numbered `0` through `9` subdirectories of the configured local `SOURCES_DIR`.
+The source root, other subdirectories, and loose files are preserved.
+User accounts are preserved unless the request includes exactly one `users=yes`
+query parameter (`POST /system/purge?users=yes`). This opt-in deletes accounts and
+optional user memory in the same database transaction and clears the caller's
+session. Other values, duplicate parameters, and JSON body fields do not opt in.
+The response includes the number of deleted users, zero by default.
+Subsequent uploads recreate their shard directories as needed.
+
+This development-only endpoint is disabled unless `SYSTEM_PURGE_ENABLED=true`.
+It requires a direct loopback client, a `localhost`, `127.0.0.1`, or `[::1]` Host,
+no `Forwarded` or `X-Forwarded-*` headers, and same-origin JSON with the exact body
+`{"confirm": "purge"}`. Do not enable it on a shared or production server.
+It rejects cloud source storage, unsafe roots, and symlinked/non-directory shards.
+The deployment must preserve the real peer address; do not strip forwarding
+headers or expose this endpoint through a local proxy.
+
+Database deletion is transactional and precedes file deletion. A database error
+leaves files intact. A later filesystem error explicitly reports that the database
+was purged but source deletion is incomplete; retrying cleans remaining shards.
+The poster cache and the caller's selected poster are cleared after database commit.
+
 # Layout Router
 
 Implementation contract:
@@ -1088,7 +1118,8 @@ Implementation contract:
   panes and their grouped sections use the `vertical` class.
 - Section aliases map template names to database names: methods to materials
   and methods, conclusions to conclusion, citations to literature cited, and
-  information to additional information. Authors come from the authors table.
+  information to additional information. Authors come from the authors table
+  and form a comma-separated, wrapping list beneath the title. Both are centered.
 - Stored section HTML is sanitized with the same allowlist as poster previews.
 - The last poster lookup is cached by owner and poster ID for two seconds;
   poster mutations invalidate it.

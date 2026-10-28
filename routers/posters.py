@@ -2,7 +2,6 @@
 
 import html
 import logging
-import re
 from typing import Literal
 
 import psycopg
@@ -14,7 +13,7 @@ import posters
 import elucidation
 from markupsafe import Markup
 from common import clean_response
-from routers.wikkit import BASE_DIR, read_json, render_page, templates
+from routers.wikkit import read_json, render_page, templates
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/posters", tags=["posters"])
@@ -42,11 +41,7 @@ async def _owned(request: Request, pid: int) -> posters.Poster:
 
 
 def installed_themes() -> list[str]:
-    css = (BASE_DIR / "static/css/themes.css").read_text()
-    themes = re.findall(r"^\s*\.([a-zA-Z_][a-zA-Z0-9_-]*)\s*\{", css, re.MULTILINE)
-    if not themes:
-        raise RuntimeError("No poster themes are installed")
-    return themes
+    return posters.installed_themes()
 
 
 @router.get("/list", response_class=HTMLResponse)
@@ -276,6 +271,7 @@ async def preview(request: Request, pid: int) -> Response:
             "poster": poster, "sections": sections, "authors": authors,
             "width": width * 96, "height": height * 96,
             "theme": poster.theme if poster.theme in installed_themes() else "",
+            "fonts": poster.fonts if poster.fonts in posters.installed_fonts() else "",
             "layout": poster.template if poster.template in posters.TEMPLATES else "arena",
         },
         headers={"Cache-Control": "private, no-store"},

@@ -181,6 +181,13 @@ class PosterRouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/posters/new", json={}).status_code, 404)
         self.assertEqual(self.client.get("/posters/create").status_code, 405)
 
+    def test_preview_applies_saved_theme_and_font_set(self) -> None:
+        self.store.get.return_value = replace(DRAFT, theme="blues", fonts="technical")
+        response = self.client.get("/posters/11/preview")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('class="poster-document blues technical arena"', response.text)
+        self.assertIn('href="/static/css/fonts.css"', response.text)
+
     def test_new_draft_without_dimensions_has_explicit_preview_placeholder(self) -> None:
         self.store.get.return_value = replace(DRAFT, dimensions=None, description=None)
         response = self.client.get("/posters/11/preview")
@@ -378,16 +385,22 @@ class PosterValueTests(unittest.IsolatedAsyncioTestCase):
         draft.fetchone.return_value = None
         inserted.fetchone.return_value = (11,)
         connection.execute.side_effect = [owner, draft, inserted]
-        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), patch.object(
+            posters.random, "choice", side_effect=["blues", "technical"],
+        ) as choose:
             self.assertEqual(await store.new_or_existing(7), (11, True))
+        self.assertEqual(choose.call_args_list[0].args, (posters.installed_themes(),))
+        self.assertEqual(choose.call_args_list[1].args, (posters.installed_fonts(),))
         calls = connection.execute.await_args_list
         self.assertIn("FOR UPDATE", calls[0].args[0])
         self.assertIn("NOT EXISTS", calls[1].args[0])
         self.assertEqual(calls[1].args[1], (7,))
-        self.assertEqual(calls[2].args, (
-            "INSERT INTO poster (uid, dimensions, created) VALUES (%s, NULL, now()) RETURNING pid",
-            (7,),
-        ))
+        self.assertIn("INSERT INTO poster (uid, dimensions, theme, fonts, created)", calls[2].args[0])
+        uid, theme, fonts = calls[2].args[1]
+        self.assertEqual(uid, 7)
+        self.assertIn(theme, posters.installed_themes())
+        self.assertIn(fonts, posters.installed_fonts())
+        self.assertEqual((theme, fonts), ("blues", "technical"))
 
     async def test_creation_reuses_existing_draft_without_inserting(self) -> None:
         store = posters.PosterStore()
@@ -396,8 +409,11 @@ class PosterValueTests(unittest.IsolatedAsyncioTestCase):
         owner.fetchone.return_value = (7,)
         draft.fetchone.return_value = (11,)
         connection.execute.side_effect = [owner, draft]
-        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), patch.object(
+            posters.random, "choice",
+        ) as choose:
             self.assertEqual(await store.new_or_existing(7), (11, False))
+        choose.assert_not_called()
         self.assertEqual(connection.execute.await_count, 2)
 
     async def test_embedding_fallback_is_explicit(self) -> None:
@@ -474,6 +490,19 @@ class PosterDatabaseTests(unittest.TestCase):
             "INSERT INTO purchase VALUES (%s, 7, 10, 'test', now())", (pid,)
         )
 
+    def test_existing_draft_keeps_its_theme_and_fonts(self) -> None:
+        pid, created = asyncio.run(self.store.new_or_existing(7))
+        self.assertTrue(created)
+        original = self.connection.execute(
+            "SELECT theme, fonts FROM poster WHERE pid = %s", (pid,),
+        ).fetchone()
+        with patch.object(posters.random, "choice") as choose:
+            self.assertEqual(asyncio.run(self.store.new_or_existing(7)), (pid, False))
+        choose.assert_not_called()
+        self.assertEqual(self.connection.execute(
+            "SELECT theme, fonts FROM poster WHERE pid = %s", (pid,),
+        ).fetchone(), original)
+
     def test_concurrent_new_clicks_create_one_draft_and_allow_new_after_purchase(self) -> None:
         async def concurrent():
             return await asyncio.gather(*(self.store.new_or_existing(7) for _ in range(6)))
@@ -495,10 +524,14 @@ class PosterDatabaseTests(unittest.TestCase):
             "SELECT cid, logo, logotype, dimensions, description, moreinfo, moreinfopng, "
             "template, theme, fonts, updated, embedding FROM poster WHERE pid = %s", (pid,),
         ).fetchone()
-        self.assertEqual(row, (None,) * 12)
+        self.assertEqual(row[:8], (None,) * 8)
+        self.assertIn(row[8], posters.installed_themes())
+        self.assertIn(row[9], posters.installed_fonts())
+        self.assertEqual(row[10:], (None, None))
         poster = asyncio.run(self.store.get(7, pid))
         self.assertEqual(poster.name, "Untitled poster")
         self.assertIsNone(poster.dimensions)
+        self.assertEqual((poster.theme, poster.fonts), (row[8], row[9]))
         self.purchase(pid)
         self.assertIsNone(asyncio.run(self.store.unpurchased(7)))
 

@@ -3,11 +3,13 @@
 import logging
 import math
 import os
+import random
 import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Literal
 
 import openai
@@ -21,6 +23,24 @@ logger = logging.getLogger(__name__)
 Sort = Literal["name", "conference_date", "relevance"]
 Direction = Literal["asc", "desc"]
 TEMPLATES = ("arena", "central", "vertical")
+
+
+def installed_themes() -> list[str]:
+    return stylesheet_classes("themes")
+
+
+def installed_fonts() -> list[str]:
+    return stylesheet_classes("fonts")
+
+
+def stylesheet_classes(stylesheet: Literal["themes", "fonts"]) -> list[str]:
+    css = (Path(__file__).resolve().parent / "static" / "css" / f"{stylesheet}.css").read_text()
+    classes = list(dict.fromkeys(re.findall(
+        r"^\s*\.([a-zA-Z_][a-zA-Z0-9_-]*)\s*\{", css, re.MULTILINE,
+    )))
+    if not classes:
+        raise RuntimeError(f"No poster {stylesheet} are installed")
+    return classes
 
 POSTER_MIN_WIDTH = 24  # inches
 POSTER_MIN_HEIGHT = 24  # inches
@@ -47,6 +67,7 @@ class Poster:
     logo: bytes | None = None
     logotype: str | None = None
     moreinfopng: bytes | None = None
+    fonts: str | None = None
 
     @property
     def centimeters(self) -> tuple[float, float]:
@@ -102,6 +123,9 @@ class PosterStore:
         if self._last is not None and (self._last[0], self._last[1].pid) == (uid, pid):
             self._last = None
 
+    def clear_cache(self) -> None:
+        self._last = None
+
     async def _connect(self) -> psycopg.AsyncConnection:
         dsn = os.environ.get(self.database_env)
         if not dsn:
@@ -123,7 +147,7 @@ class PosterStore:
                EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) AS purchased,
                (SELECT min(c.starts) FROM show s JOIN conference c USING (cid)
                 WHERE s.pid = p.pid) AS conference_date,
-               p.resumption, p.units, p.logo, p.logotype, p.moreinfopng
+               p.resumption, p.units, p.logo, p.logotype, p.moreinfopng, p.fonts
         FROM poster p
         LEFT JOIN section t ON t.pid = p.pid AND t.which = 'title'
         WHERE p.uid = %s
@@ -235,9 +259,12 @@ class PosterStore:
             pid = await self.unpurchased(uid, connection)
             if pid is not None:
                 return pid, False
+            theme = random.choice(installed_themes())
+            fonts = random.choice(installed_fonts())
             cursor = await connection.execute(
-                "INSERT INTO poster (uid, dimensions, created) VALUES (%s, NULL, now()) RETURNING pid",
-                (uid,),
+                "INSERT INTO poster (uid, dimensions, theme, fonts, created) "
+                "VALUES (%s, NULL, %s, %s, now()) RETURNING pid",
+                (uid, theme, fonts),
             )
             row = await cursor.fetchone()
             assert row is not None

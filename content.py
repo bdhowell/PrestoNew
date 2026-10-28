@@ -149,6 +149,7 @@ class SourceFiles:
             blob.upload_from_string(data, content_type=mimetype, if_generation_match=0, timeout=60)
             return f"gs://{self.bucket}/{key}"
         path = self.root / key
+        path.parent.mkdir(parents=True, exist_ok=True)
         output = path.open("xb")
         try:
             with output:

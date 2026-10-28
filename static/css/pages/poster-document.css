@@ -13,7 +13,14 @@ body {
     overflow: hidden;
     background: var(--background-color, #fff);
     color: var(--text-color, #111);
-    font: 32px/1.4 system-ui, sans-serif;
+    font: 32px/1.4 var(--body-font-face, system-ui, sans-serif);
+}
+
+.poster-document h1,
+.poster-document h2,
+.poster-document h3,
+.poster-document .author {
+    font-family: var(--heading-font-face, system-ui, sans-serif);
 }
 
 .poster-document header {

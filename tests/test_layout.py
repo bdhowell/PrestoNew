@@ -68,6 +68,30 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertIn('class="section-parent vertical"', response.text)
         self.assertEqual(self.session["poster_id"], 12)
 
+    def test_saved_theme_and_fonts_are_applied_to_layout(self) -> None:
+        self.store.get.return_value = replace(DRAFT, theme="blues", fonts="technical")
+        document = html.fromstring(self.client.get("/layout/edit").text)
+        self.assertEqual(document.find("body").get("class").split(), ["blues", "technical"])
+        self.assertTrue(document.xpath('//link[@href="/static/css/themes.css"]'))
+        self.assertTrue(document.xpath('//link[@href="/static/css/fonts.css"]'))
+
+    def test_authors_are_comma_separated_below_the_centered_title(self) -> None:
+        self.store.content.return_value = (
+            [("title", "Research")],
+            [("<Ada>", "Institute"), ("Grace", None), ("Lin", "University")],
+        )
+        for template in posters.TEMPLATES:
+            with self.subTest(template=template):
+                self.store.get.return_value = replace(DRAFT, template=template)
+                document = html.fromstring(self.client.get("/layout/edit").text)
+                authors = document.get_element_by_id("authors")
+                self.assertEqual(authors.text_content(), "<Ada> (Institute), Grace, Lin (University)")
+                self.assertFalse(authors.xpath(".//br"))
+                self.assertIn("authors", authors.get("class").split())
+                title = document.get_element_by_id("title")
+                self.assertIn("title", title.get("class").split())
+                self.assertIs(title.getparent().getnext(), authors)
+
     def test_home_redirects_to_layout(self) -> None:
         response = self.client.get("/layout", follow_redirects=False)
         self.assertEqual(response.status_code, 303)
