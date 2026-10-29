@@ -2,7 +2,7 @@
 {% block title %}New poster - {{ app_name() }}{% endblock %}
 {% block content %}
 <h1>Your new poster is ready</h1>
-<p>{{ poster.name }} &mdash; {% if poster.dimensions %}{{ poster.display_dimensions }} (width x height){% else %}Dimensions not set{% endif %}</p>
+<p>{{ poster.name }} &mdash; {% if poster.width is not none and poster.height is not none %}{{ poster.display_dimensions }} (width x height){% else %}Dimensions not set{% endif %}</p>
 <p>Layout: {{ poster.template }}. Theme: {{ poster.theme }}.</p>
 <p><a href="/posters/{{ poster.pid }}/open">Open layout editor</a></p>
 <p><a href="/posters/list">Back to my posters</a></p>

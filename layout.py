@@ -124,7 +124,7 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
                     body.remove(body[0])
     width, height = poster.inches
     canvas = document.get_element_by_id("poster-canvas")
-    canvas.set("style", f"width: {width * 96:.6f}px; min-height: {height * 96:.6f}px")
+    canvas.set("style", f"width: {width * 96:.6f}px; height: {height * 96:.6f}px")
     rendered = etree.tostring(document, method="html", encoding="unicode", doctype="<!DOCTYPE html>")
     widths = await balance_header_widths(rendered, width * 96)
     for selector, percentage in widths.items():
@@ -277,36 +277,46 @@ class DimensionRules:
     def fixed(self) -> bool:
         return self.required_width is not None and self.required_height is not None
 
-    def errors(self, width: float, height: float) -> list[str]:
+    def errors(self, width: float, height: float, units: str | None = None) -> list[str]:
+        units = units or self.units
+        scale = SCALE[units]
         errors = []
         for label, value, minimum, required, maximum in (
-            ("width", width, posters.POSTER_MIN_WIDTH_CM, self.required_width, self.max_width),
-            ("height", height, posters.POSTER_MIN_HEIGHT_CM, self.required_height, self.max_height),
+            ("width", width, posters.POSTER_MIN_WIDTH_CM, self.required_width,
+             min(self.max_width, posters.POSTER_MAX_WIDTH_CM)
+             if self.max_width is not None else posters.POSTER_MAX_WIDTH_CM),
+            ("height", height, posters.POSTER_MIN_HEIGHT_CM, self.required_height,
+             min(self.max_height, posters.POSTER_MAX_HEIGHT_CM)
+             if self.max_height is not None else posters.POSTER_MAX_HEIGHT_CM),
         ):
             if not math.isfinite(value) or value <= 0:
                 errors.append(f"Poster {label} must be a positive finite number.")
             elif required is not None and not math.isclose(value, required, abs_tol=0.001):
                 errors.append(f"Poster {label} must match the conference requirement.")
             elif value < minimum and required is None:
-                errors.append(f"Your poster {label} is too small. Nobody will be able to read it.")
-            if maximum is not None and value > maximum + 0.001:
-                errors.append(f"Poster {label} exceeds the maximum allowed.")
-            if value > 609.6:
-                errors.append(f"Poster {label} must not exceed 609.6 cm.")
+                errors.append(f"Your poster {label} is too small. Nobody will be able to read it. The minimum is {minimum / scale:g} {units}.")
+            if value > maximum + 0.001:
+                errors.append(f"Poster {label} is too big. The maximum is {maximum / scale:g} {units}.")
+            if math.isfinite(value) and value > 0 and not math.isclose(
+                value / scale, round(value / scale), abs_tol=0.001,
+            ):
+                errors.append(f"Poster {label} must be a whole number using the selected units.")
         return errors
 
 
 def parse_dimensions(text: str, default_units: str) -> tuple[float, float, str]:
     match = re.fullmatch(
-        r"\s*(\d+(?:\.\d+)?)\s*(cm|mm|in)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(cm|mm|in)?\s*",
+        r'\s*(\d+(?:\.\d+)?)\s*(cm|mm|in|")?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(cm|mm|in|")?\s*',
         text, re.IGNORECASE,
     )
     if match is None:
         raise ValueError("Enter height x width, with units cm, mm, or in (for example, 36 in x 48 in).")
     first, second = match[2], match[4]
     units = (second or first or default_units).lower()
-    height = float(match[1]) * SCALE[(first or units).lower()]
+    if units == '"':
+        units = "in"
     width = float(match[3]) * SCALE[(second or units).lower()]
+    height = float(match[1]) * SCALE[(first or units).lower()]
     if not all(math.isfinite(value) for value in (width, height)):
         raise ValueError("Poster dimensions must be finite numbers.")
     return width, height, units
@@ -350,7 +360,7 @@ async def update_dimensions(request: Request) -> JSONResponse:
         poster = await owned(request, draft=True)
         rules = await rules_for(uid_for(request), poster.pid)
         width, height, units = parse_dimensions(text, rules.units if rules.name else poster.units)
-        errors = rules.errors(width, height)
+        errors = rules.errors(width, height, units)
         payload = dimensions_payload(width, height, units)
         if errors:
             return JSONResponse({"ok": False, "errors": errors, "preview": payload}, status_code=422)
@@ -380,7 +390,7 @@ async def dimensions_workflow(bot: Chatbot) -> None:
         if rules.fixed:
             width, height = rules.required_width, rules.required_height
             assert width is not None and height is not None
-            errors = rules.errors(width, height)
+            errors = rules.errors(width, height, rules.units)
             if errors:
                 raise ValueError(" ".join(errors))
             await save_dimensions(uid, pid, width, height, rules.units)
@@ -429,7 +439,7 @@ async def dimensions_workflow(bot: Chatbot) -> None:
                             prompt = f"<p>{html.escape(str(error))}</p>"
                             await bot.send({"command": {"does": "correct-dimensions", "payload": None}})
                             continue
-                errors = rules.errors(width, height)
+                errors = rules.errors(width, height, units)
                 if not errors:
                     await save_dimensions(uid, pid, width, height, units)
                     await bot.send({"say": "<p>Done!</p>"})

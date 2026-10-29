@@ -785,18 +785,9 @@ Write a local function that takes a Python text or binary object and produces a 
   Authentication, ownership, editable status, same-origin requests, safe
   filenames and supported file types are checked server-side. Database failures
   remove newly stored files; storage/database failures return explicit errors.
-- Apply `schema/schema.sql` to migrate source parents, storage metadata,
-  summaries and the partial uniqueness index. Install `requirements-content.txt`
-  for storage and processing dependencies.
-  Existing databases must be upgraded before accepting uploads; application
-  startup does not apply these schema migrations. An `UndefinedColumn` error
-  for `source.storage_uri` indicates an outdated database, not a document
-  conversion failure. From the repository root, with `DATABASE_URL` exported
-  for the same database used by the application, run:
-
-  ```sh
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 --single-transaction -f schema/schema.sql
-  ```
+- `schema/schema.sql` defines the current database, including source storage
+  metadata. It initializes the maintained local database; it is not an upgrade
+  script. Install `requirements-content.txt` for storage and processing dependencies.
 
   This also adds `source.summary`, allows top-level sources with a null
   `parent`, and updates the special-kind uniqueness index. Retry the upload
@@ -1128,9 +1119,10 @@ Implementation contract:
   adding lines. It searches widths at CSS-pixel precision, retaining the widest
   equal-scoring result. Empty and single-line containers retain their full width.
   `layout()` measures `#title` and `#authors` at the poster's physical width
-  (96 CSS pixels per inch), fixes `#poster-canvas` to that width and a minimum
+  (96 CSS pixels per inch), fixes `#poster-canvas` to that width and the exact
   physical poster height, and embeds percentage widths in the returned HTML.
-  CSS keeps both containers centered within their original layout slots.
+  CSS keeps both containers centered within their original layout slots, measured
+  inside the canvas margins of `2 * var(--gutter)` on every side.
   Measurement uses local stylesheets and waits for web fonts; scripts and other
   network resources are excluded. Browser/font failures return an explicit 503,
   rather than silently returning an unbalanced layout.
@@ -1147,6 +1139,10 @@ Implementation contract:
   `layout-zoom.js` scales the canvas without reflowing text and resizes its stage
   to avoid unscaled overflow. Fit mode follows viewport, menu, font, image, and
   content size changes. Physical dimensions remain on the canvas, not the body.
+  The inner `#poster-content` fills the area inside the margins and shrinks as
+  needed to fit overflowing content, independently of viewport zoom. Non-horizontal
+  panes stretch vertically, with sections and grouped sections sharing the
+  remaining height after gutters. Horizontal panes arrange sections in a row.
   Layout grid columns share the space left after gutters to avoid overflowing
   the poster width.
 - Stored section HTML is sanitized with the same allowlist as poster previews.
@@ -1155,13 +1151,12 @@ Implementation contract:
 - Media endpoints require ownership. QR PNG bytes come from `poster.moreinfopng`,
   logos from `poster.logo` with an allowlisted `poster.logotype`, and source files
   from owner-scoped source storage. Responses are private and non-cacheable.
-- All stored `poster.dimensions` are **width x height in centimeters**.
-  `poster.units` controls display, not storage. Applying `schema/schema.sql`
-  converts existing inch-based records once and retains their `in` display
-  units. New posters default to `cm`. Existing pixel previews still convert to
-  inches at the rendering boundary.
-- User input is **height x width**; decimals and `cm`, `mm`, and `in` are accepted,
-  including separately specified units per axis. Missing units use the
+- `poster.width` and `poster.height` are nullable integers, stored in the units
+  selected in `poster.units` (`cm`, `mm`, or `in`). New posters have null
+  dimensions until the user sets them. Pixel previews convert those dimensions
+  to inches at the rendering boundary.
+- User input is **height x width**; whole numbers and `cm`, `mm`, and `in` are accepted.
+  Missing units use the
   conference units, or the poster display units without a conference.
 - Landscape and square posters select `arena`; portrait posters select `vertical`.
 - `/layout/dimensions` uses the `layout-dimensions` Wikkit workflow: save exact
@@ -1171,13 +1166,15 @@ Implementation contract:
   dimensions. All conference bounds are converted to centimeters before validation.
 - Exact conference requirements take precedence over readability minima.
   Otherwise both dimensions must meet the configured minimums. Partial maxima
-  and requirements still constrain custom input. The existing 240-inch safety
-  ceiling remains in effect.
+  and requirements still constrain custom input. Layout validation enforces
+  `POSTER_MAX_WIDTH_CM` and `POSTER_MAX_HEIGHT_CM`, using conference maxima
+  when they are stricter. Minimum and maximum validation messages convert
+  centimeter limits to the entered poster units and include the unit label.
 - Only invalid input reveals the correction form and centered aspect-ratio
   preview. Server commands provide its dimensions and translucent labels.
   Edits POST JSON `{"dimensions": "36 in x 48 in"}` to `/layout/dimensions`;
   invalid values return HTTP 422 with errors and, when parseable, a preview.
-  Valid values persist dimensions, units, and orientation together and redirect
+  Valid values persist width, height, units, and orientation together and redirect
   to `/layout/edit`. The server rejects edits to purchased or foreign posters.
 
 The following original design sketch is superseded by the implementation

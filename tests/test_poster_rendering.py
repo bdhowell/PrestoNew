@@ -207,6 +207,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 await self.editor(template)
                 full = await self.dimensions()
                 self.assertAlmostEqual(full["canvasWidth"], DRAFT.inches[0] * 96, delta=0.1)
+                self.assertAlmostEqual(full["canvasHeight"], DRAFT.inches[1] * 96, delta=0.1)
                 self.assertAlmostEqual(full["top"], full["menuBottom"], delta=0.1)
                 self.assertAlmostEqual(full["bottom"], full["controlsTop"], delta=0.1)
                 self.assertAlmostEqual(full["controlsBottom"], 700, delta=0.1)
@@ -248,8 +249,104 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("#layout").evaluate("element => element.style.height = '6000px'")
         await self.page.wait_for_timeout(100)
         dimensions = await self.dimensions()
-        self.assertLess(dimensions["sliderMin"], previous)
+        self.assertAlmostEqual(dimensions["sliderMin"], previous, delta=0.01)
         self.assertLessEqual(dimensions["scrollHeight"], dimensions["clientHeight"] + 1)
+        await self.assert_content_bounds()
+
+    async def assert_content_bounds(self) -> None:
+        bounds = await self.page.evaluate("""() => {
+            const canvas = document.getElementById("poster-canvas");
+            const content = document.getElementById("poster-content");
+            const poster = canvas.getBoundingClientRect();
+            const scale = poster.width / canvas.offsetWidth;
+            const style = getComputedStyle(canvas);
+            const area = {
+                left: poster.left + parseFloat(style.paddingLeft) * scale,
+                top: poster.top + parseFloat(style.paddingTop) * scale,
+                right: poster.right - parseFloat(style.paddingRight) * scale,
+                bottom: poster.bottom - parseFloat(style.paddingBottom) * scale,
+            };
+            const rectangles = [content, ...content.querySelectorAll("*")]
+                .map(element => element.getBoundingClientRect())
+                .filter(rect => rect.width && rect.height);
+            return {
+                area, padding: parseFloat(style.paddingLeft),
+                gutter: parseFloat(getComputedStyle(document.getElementById("layout")).gap),
+                left: Math.min(...rectangles.map(rect => rect.left)),
+                top: Math.min(...rectangles.map(rect => rect.top)),
+                right: Math.max(...rectangles.map(rect => rect.right)),
+                bottom: Math.max(...rectangles.map(rect => rect.bottom)),
+            };
+        }""")
+        self.assertAlmostEqual(bounds["padding"], 2 * bounds["gutter"], delta=0.1)
+        for side in ("left", "top"):
+            self.assertGreaterEqual(bounds[side], bounds["area"][side] - 1)
+        for side in ("right", "bottom"):
+            self.assertLessEqual(bounds[side], bounds["area"][side] + 1)
+
+    async def test_poster_margins_and_vertical_sections_fill_available_height(self) -> None:
+        for template in posters.TEMPLATES:
+            with self.subTest(template=template):
+                await self.editor(template)
+                await self.assert_content_bounds()
+                sections = await self.page.locator(
+                    ".layout .pane:not(.horizontal), .layout .section-parent.vertical",
+                ).evaluate_all(
+                    """panes => panes.map(pane => {
+                        const children = [...pane.children];
+                        const gutter = parseFloat(getComputedStyle(pane).gap);
+                        return {
+                            height: pane.clientHeight,
+                            occupied: children.reduce((sum, child) => sum + child.offsetHeight, 0)
+                                + Math.max(0, children.length - 1) * gutter,
+                        };
+                    })""",
+                )
+                for section in sections:
+                    self.assertAlmostEqual(section["height"], section["occupied"], delta=2)
+                layout_bottom = await self.page.locator("#layout").evaluate(
+                    "element => element.getBoundingClientRect().bottom",
+                )
+                content_bottom = await self.page.locator("#poster-content").evaluate(
+                    "element => element.getBoundingClientRect().bottom",
+                )
+                self.assertAlmostEqual(layout_bottom, content_bottom, delta=1)
+
+    async def test_overflowing_content_shrinks_without_changing_poster_dimensions(self) -> None:
+        for template in posters.TEMPLATES:
+            with self.subTest(template=template):
+                await self.editor(template)
+                await self.page.locator("#results .content").evaluate(
+                    "(element, text) => element.textContent = text",
+                    "Detailed experimental results and observations. " * 2500,
+                )
+                await self.page.wait_for_function(
+                    "() => document.getElementById('poster-content').style.transform !== 'scale(1)'",
+                )
+                await self.assert_content_bounds()
+                larger_overflows = await self.page.locator("#poster-content").evaluate("""element => {
+                    const width = element.style.width;
+                    const height = element.style.height;
+                    element.style.width = `${parseFloat(width) / 1.01}px`;
+                    element.style.height = `${parseFloat(height) / 1.01}px`;
+                    const overflows = element.scrollWidth > element.clientWidth
+                        || element.scrollHeight > element.clientHeight;
+                    element.style.width = width;
+                    element.style.height = height;
+                    return overflows;
+                }""")
+                self.assertTrue(larger_overflows)
+                dimensions = await self.dimensions()
+                self.assertAlmostEqual(dimensions["canvasWidth"], DRAFT.inches[0] * 96, delta=0.1)
+                self.assertAlmostEqual(dimensions["canvasHeight"], DRAFT.inches[1] * 96, delta=0.1)
+                await self.set_zoom("fit")
+                await self.assert_content_bounds()
+                await self.page.locator("#results .content").evaluate(
+                    "element => element.textContent = 'Results'",
+                )
+                await self.page.wait_for_function(
+                    "() => document.getElementById('poster-content').style.transform === 'scale(1)'",
+                )
 
     async def test_header_measurement_handles_nested_zoom_canvas(self) -> None:
         await self.editor()
@@ -257,11 +354,56 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         widths = await balance_header_widths(await self.page.content(), DRAFT.inches[0] * 96)
         self.assertEqual(widths, {"#title": 100, "#authors": 100})
 
+    async def test_header_measurement_uses_the_same_margins_as_the_editor(self) -> None:
+        await self.editor()
+        await self.page.locator("#poster-canvas").evaluate("""element => {
+            element.style.width = "900px";
+            element.style.height = "1400px";
+        }""")
+        await self.page.locator("#title").evaluate("""element => {
+            element.style.width = "100%";
+            element.textContent = "A detailed investigation of cells and their response to treatment "
+                + "with experimental observations and implications for future research";
+        }""")
+        await self.page.wait_for_timeout(100)
+        widths = await balance_header_widths(await self.page.content(), 900)
+        expected = await balance_text_width(self.page, "#title")
+        self.assertAlmostEqual(widths["#title"], expected, delta=0.01)
+
+    async def test_images_and_unbroken_text_fit_with_custom_gutters(self) -> None:
+        for template, width, height in (
+            ("arena", 1400, 900), ("central", 1000, 1000), ("vertical", 900, 1400),
+        ):
+            with self.subTest(template=template):
+                await self.editor(template)
+                await self.page.locator("#poster-canvas").evaluate(
+                    """(element, size) => {
+                        element.style.width = `${size[0]}px`;
+                        element.style.height = `${size[1]}px`;
+                        element.style.setProperty("--gutter", "1rem");
+                    }""", [width, height],
+                )
+                await self.page.locator("#results .content").evaluate("""element => {
+                    element.textContent = "Observation".repeat(300);
+                    const image = document.createElement("img");
+                    image.style.width = "5000px";
+                    image.style.height = "2000px";
+                    image.alt = "Large research image";
+                    element.append(image);
+                }""")
+                await self.page.wait_for_function(
+                    "() => document.getElementById('poster-content').style.transform !== 'scale(1)'",
+                )
+                await self.assert_content_bounds()
+                dimensions = await self.dimensions()
+                self.assertAlmostEqual(dimensions["canvasWidth"], width, delta=0.1)
+                self.assertAlmostEqual(dimensions["canvasHeight"], height, delta=0.1)
+
     async def test_small_poster_is_not_enlarged_and_slider_is_disabled(self) -> None:
         await self.editor()
         await self.page.locator("#poster-canvas").evaluate("""element => {
             element.style.width = "300px";
-            element.style.minHeight = "100px";
+            element.style.height = "250px";
             element.querySelector("#layout").style.display = "none";
         }""")
         await self.page.wait_for_function(

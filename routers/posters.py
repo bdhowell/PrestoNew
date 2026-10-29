@@ -258,7 +258,7 @@ async def view_poster(request: Request, pid: int) -> Response:
 @router.get("/{pid}/preview", response_class=HTMLResponse)
 async def preview(request: Request, pid: int) -> Response:
     poster = await _owned(request, pid)
-    if poster.dimensions is None:
+    if poster.width is None or poster.height is None:
         return HTMLResponse(
             "<p>Preview unavailable: poster dimensions have not been set.</p>",
             headers={"Cache-Control": "private, no-store"},

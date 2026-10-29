@@ -76,7 +76,7 @@ class ResumptionPageTests(unittest.IsolatedAsyncioTestCase):
             "session": {"poster_id": 11},
         })
         self.request.state.user_id = 7
-        self.poster = posters.Poster(11, "Research", None, None, None, None, False, None)
+        self.poster = posters.Poster(11, "Research", None, None, None, None, None, False, None)
         self.store = AsyncMock()
         self.store.get.return_value = self.poster
         self.store.set_resumption.return_value = True

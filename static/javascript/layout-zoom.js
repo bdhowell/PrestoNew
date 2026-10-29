@@ -4,16 +4,53 @@
     const viewport = document.getElementById("poster-container");
     const stage = document.getElementById("poster-stage");
     const canvas = document.getElementById("poster-canvas");
+    const content = document.getElementById("poster-content");
     const slider = document.getElementById("poster-zoom");
     const output = document.getElementById("poster-zoom-value");
     let scale = 1;
     let fitting = false;
     let pending = false;
 
+    function fitContent() {
+        const style = getComputedStyle(canvas);
+        const width = canvas.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        const height = canvas.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+        if (width <= 0 || height <= 0) {
+            throw new Error("Poster margins leave no available content area.");
+        }
+        function overflowRatio(fit) {
+            content.style.width = `${width / fit}px`;
+            content.style.height = `${height / fit}px`;
+            return Math.min(
+                1, content.clientWidth / content.scrollWidth, content.clientHeight / content.scrollHeight,
+            );
+        }
+        let fit = 1;
+        let upper = 1;
+        for (let attempt = 0; attempt < 30; attempt++) {
+            const ratio = overflowRatio(fit);
+            if (ratio === 1) {
+                // Recover the largest fitting scale after bracketing the overflow.
+                for (let step = 0; fit < upper && step < 12; step++) {
+                    const middle = (fit + upper) / 2;
+                    if (overflowRatio(middle) === 1) fit = middle;
+                    else upper = middle;
+                }
+                overflowRatio(fit);
+                content.style.transform = `scale(${fit})`;
+                return;
+            }
+            upper = fit;
+            fit *= ratio * 0.99;
+        }
+        throw new Error("Poster content could not be fitted within its margins.");
+    }
+
     function update() {
         pending = false;
-        const width = Math.max(canvas.offsetWidth, canvas.scrollWidth);
-        const height = Math.max(canvas.offsetHeight, canvas.scrollHeight);
+        fitContent();
+        const width = canvas.offsetWidth;
+        const height = canvas.offsetHeight;
         if (!width || !height || !viewport.clientWidth || !viewport.clientHeight) return;
 
         // Use the full viewport before scrollbars so fitting can remove them.
@@ -47,6 +84,8 @@
     ]) {
         observer.observe(element);
     }
+    const mutations = new MutationObserver(schedule);
+    mutations.observe(content, {childList: true, characterData: true, subtree: true});
     canvas.addEventListener("load", schedule, true);
     document.fonts.ready.then(schedule);
     update();

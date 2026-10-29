@@ -37,10 +37,16 @@ async def balance_header_widths(rendered: str, width: float) -> dict[str, float]
     if not headers:
         raise ValueError("Poster document has no header")
     header = headers[0]
+    canvases = document.xpath('//*[@id="poster-canvas"]')
     header.getparent().remove(header)
     for child in list(body):
         body.remove(child)
-    body.append(header)
+    if canvases:
+        canvas = dom.Element("div", attrib=dict(canvases[0].attrib))
+        canvas.append(header)
+        body.append(canvas)
+    else:
+        body.append(header)
     body.set("style", f"{body.get('style', '')}; width: {width}px")
     for image in body.xpath(".//img"):
         image.getparent().remove(image)

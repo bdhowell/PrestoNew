@@ -25,7 +25,7 @@ from routers import wikkit as wikkit_routes
 ROOT = Path(__file__).resolve().parent.parent
 TODAY = datetime.date.today()
 NEXT_YEAR = TODAY.replace(year=TODAY.year + 1)
-DRAFT = posters.Poster(11, "Research", None, None, None, None, False, None)
+DRAFT = posters.Poster(11, "Research", None, None, None, None, None, False, None)
 
 
 def result(name: str, start: str | None, end: str | None = None, **extra: object) -> dict:
@@ -164,7 +164,7 @@ class ConferenceRouteTests(unittest.TestCase):
         self.assertIn('id="conferences-list"', response.text)
         self.assertIn("/static/javascript/pages/conferences-query.js", response.text)
         self.posters.get.assert_awaited_once_with(7, 11)
-        self.posters.get.return_value = posters.Poster(11, "Research", None, None, None, None, True, None)
+        self.posters.get.return_value = posters.Poster(11, "Research", None, None, None, None, None, True, None)
         response = self.client.get("/conferences/query", follow_redirects=False)
         self.assertEqual(response.headers["location"], "/posters/list")
         self.pid = None

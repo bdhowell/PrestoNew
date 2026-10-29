@@ -19,7 +19,7 @@ import posters
 from routers import posters as routes
 
 ROOT = Path(__file__).resolve().parent.parent
-DRAFT = posters.Poster(11, "<Research>", "Description", "91.44x121.92", None, None, False, None)
+DRAFT = posters.Poster(11, "<Research>", "Description", 36, 48, None, None, False, None, units="in")
 
 
 class PosterRouteTests(unittest.TestCase):
@@ -193,7 +193,7 @@ class PosterRouteTests(unittest.TestCase):
         self.assertIn('href="/static/css/fonts.css"', response.text)
 
     def test_new_draft_without_dimensions_has_explicit_preview_placeholder(self) -> None:
-        self.store.get.return_value = replace(DRAFT, dimensions=None, description=None)
+        self.store.get.return_value = replace(DRAFT, width=None, height=None, description=None)
         response = self.client.get("/posters/11/preview")
         self.assertEqual(response.status_code, 200)
         self.assertIn("poster dimensions have not been set", response.text)
@@ -404,7 +404,8 @@ class PosterValueTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FOR UPDATE", calls[0].args[0])
         self.assertIn("NOT EXISTS", calls[1].args[0])
         self.assertEqual(calls[1].args[1], (7,))
-        self.assertIn("INSERT INTO poster (uid, dimensions, theme, fonts, created)", calls[2].args[0])
+        self.assertIn("INSERT INTO poster (uid, width, height, theme, fonts, created)", calls[2].args[0])
+        self.assertIn("VALUES (%s, NULL, NULL,", calls[2].args[0])
         uid, theme, fonts = calls[2].args[1]
         self.assertEqual(uid, 7)
         self.assertIn(theme, posters.installed_themes())
@@ -442,9 +443,12 @@ class PosterValueTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_dimensions_reject_unsafe_values(self) -> None:
         self.assertEqual(DRAFT.inches, (36, 48))
-        for value in (None, "0x48", "36x99999", "-1x48", "36;DROP TABLE", "NaNx48"):
-            with self.subTest(value=value), self.assertRaises(ValueError):
-                replace(DRAFT, dimensions=value).inches
+        for width, height, units in (
+            (None, 48, "in"), (36, None, "in"), (0, 48, "in"),
+            (36, 99999, "in"), (-1, 48, "in"), (36, 48, "invalid"),
+        ):
+            with self.subTest(width=width, height=height, units=units), self.assertRaises(ValueError):
+                replace(DRAFT, width=width, height=height, units=units).inches
 
     async def test_selected_poster_identity_is_revalidated(self) -> None:
         connection = HTTPConnection({"type": "http", "headers": [], "session": {"poster_id": 11}})
@@ -530,7 +534,7 @@ class PosterDatabaseTests(unittest.TestCase):
         self.assertEqual(asyncio.run(self.store.unpurchased(7)), pid)
         self.assertIsNone(asyncio.run(self.store.unpurchased(8)))
         row = self.connection.execute(
-            "SELECT cid, logo, logotype, dimensions, description, moreinfo, moreinfopng, "
+            "SELECT cid, logo, logotype, width, height, description, moreinfo, moreinfopng, "
             "template, theme, fonts, updated, embedding FROM poster WHERE pid = %s", (pid,),
         ).fetchone()
         self.assertEqual(row[:8], (None,) * 8)
@@ -539,7 +543,8 @@ class PosterDatabaseTests(unittest.TestCase):
         self.assertEqual(row[10:], (None, None))
         poster = asyncio.run(self.store.get(7, pid))
         self.assertEqual(poster.name, "Untitled poster")
-        self.assertIsNone(poster.dimensions)
+        self.assertIsNone(poster.width)
+        self.assertIsNone(poster.height)
         self.assertEqual((poster.theme, poster.fonts), (row[8], row[9]))
         self.purchase(pid)
         self.assertIsNone(asyncio.run(self.store.unpurchased(7)))

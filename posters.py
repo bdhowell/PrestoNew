@@ -8,7 +8,6 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
@@ -42,22 +41,20 @@ def stylesheet_classes(stylesheet: Literal["themes", "fonts"]) -> list[str]:
         raise RuntimeError(f"No poster {stylesheet} are installed")
     return classes
 
-POSTER_MIN_WIDTH = 24  # inches
-POSTER_MIN_HEIGHT = 24  # inches
-POSTER_MAX_WIDTH = 240  # inches
-POSTER_MAX_HEIGHT = 240  # inches
 POSTER_UNITS = "cm"  # default units for poster dimensions
 POSTER_MIN_WIDTH_CM = 36 * 2.54  # cm
 POSTER_MIN_HEIGHT_CM = 36 * 2.54  # cm
 POSTER_MAX_WIDTH_CM = 96 * 2.54  # cm
 POSTER_MAX_HEIGHT_CM = 96 * 2.54  # cm
+POSTER_UNIT_TO_CM = {"cm": 1, "mm": 0.1, "in": 2.54}
 
 @dataclass(frozen=True)
 class Poster:
     pid: int
     name: str
     description: str | None
-    dimensions: str | None
+    width: int | None
+    height: int | None
     template: str | None
     theme: str | None
     purchased: bool
@@ -71,13 +68,13 @@ class Poster:
 
     @property
     def centimeters(self) -> tuple[float, float]:
-        if self.dimensions is None:
+        if self.width is None or self.height is None:
             raise ValueError(f"Poster {self.pid} dimensions have not been set")
-        match = re.fullmatch(r"(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)", self.dimensions)
-        if match is None:
-            raise ValueError(f"Poster {self.pid} has invalid dimensions")
-        width, height = map(float, match.groups())
-        if not all(math.isfinite(value) and 0 < value <= 240 * 2.54 for value in (width, height)):
+        scale = POSTER_UNIT_TO_CM.get(self.units)
+        if scale is None:
+            raise ValueError(f"Poster {self.pid} has invalid dimension units")
+        width, height = self.width * scale, self.height * scale
+        if not all(0 < value <= 240 * 2.54 for value in (width, height)):
             raise ValueError(f"Poster {self.pid} dimensions must be within 609.6 cm")
         return width, height
 
@@ -89,7 +86,7 @@ class Poster:
     @property
     def display_dimensions(self) -> str:
         width, height = self.centimeters
-        scale = {"cm": 1, "mm": 0.1, "in": 2.54}[self.units]
+        scale = POSTER_UNIT_TO_CM[self.units]
         return f"{width / scale:g} x {height / scale:g} {self.units}"
 
 
@@ -143,7 +140,7 @@ class PosterStore:
     _ROWS = """
         SELECT p.pid,
                coalesce(nullif(t.content, ''), nullif(p.description, ''), 'Untitled poster') AS name,
-               p.description, p.dimensions, p.template, p.theme,
+               p.description, p.width, p.height, p.template, p.theme,
                EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) AS purchased,
                (SELECT min(c.starts) FROM show s JOIN conference c USING (cid)
                 WHERE s.pid = p.pid) AS conference_date,
@@ -262,8 +259,8 @@ class PosterStore:
             theme = random.choice(installed_themes())
             fonts = random.choice(installed_fonts())
             cursor = await connection.execute(
-                "INSERT INTO poster (uid, dimensions, theme, fonts, created) "
-                "VALUES (%s, NULL, %s, %s, now()) RETURNING pid",
+                "INSERT INTO poster (uid, width, height, theme, fonts, created) "
+                "VALUES (%s, NULL, NULL, %s, %s, now()) RETURNING pid",
                 (uid, theme, fonts),
             )
             row = await cursor.fetchone()
@@ -349,19 +346,32 @@ class PosterStore:
     async def set_dimensions(
         self, uid: int, pid: int, width: float, height: float, units: str,
     ) -> bool:
-        if units not in ("cm", "mm", "in") or not all(
+        scale = POSTER_UNIT_TO_CM.get(units)
+        if scale is None or not all(
             math.isfinite(value) and 0 < value <= 609.6 for value in (width, height)
         ):
             raise ValueError("Invalid poster dimensions or units")
-        dimensions = "x".join(format(Decimal(str(value)), "f") for value in (width, height))
+        unit_width, unit_height = width / scale, height / scale
+        rounded_width, rounded_height = round(unit_width), round(unit_height)
+        if not all(
+            math.isclose(value, rounded, abs_tol=0.001)
+            for value, rounded in (
+                (unit_width, rounded_width), (unit_height, rounded_height),
+            )
+        ):
+            raise ValueError("Poster dimensions must be whole numbers in the selected units")
         self.invalidate(uid, pid)
         connection = await self._connect()
         async with connection:
             cursor = await connection.execute(
-                "UPDATE poster p SET dimensions = %s, units = %s, template = %s, updated = now() "
+                "UPDATE poster p SET width = %s, height = %s, units = %s, "
+                "template = %s, updated = now() "
                 "WHERE p.uid = %s AND p.pid = %s AND NOT EXISTS "
                 "(SELECT 1 FROM purchase b WHERE b.pid = p.pid) RETURNING p.pid",
-                (dimensions, units, "arena" if width >= height else "vertical", uid, pid),
+                (
+                    rounded_width, rounded_height, units,
+                    "arena" if width >= height else "vertical", uid, pid,
+                ),
             )
             saved = await cursor.fetchone() is not None
         self.invalidate(uid, pid)

@@ -46,7 +46,7 @@ For a detailed feature inventory, see [FEATURES.md](FEATURES.md). For search and
 
 - Python 3.14
 - PostgreSQL 14 or newer, with the pgvector extension
-- A database role that can create and alter tables
+- A database role that can create tables, indexes, functions, and types
 
 Homebrew's pgvector is built only for PostgreSQL 17 and 18. For PostgreSQL 14,
 build it from source and load the schema:
@@ -60,8 +60,8 @@ createdb presto
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/schema.sql
 ```
 
-The schema objects must be owned by the role in `DATABASE_URL`, which runs
-`CREATE ... IF NOT EXISTS` at startup.
+The schema objects must be owned by the role in `DATABASE_URL`. The schema is
+for initializing the maintained local database, not for upgrading older schemas.
 - Poppler (`pdftocairo`) for importing vector figures from PDFs
 - Playwright browser binaries installed
 

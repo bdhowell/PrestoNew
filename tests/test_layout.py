@@ -18,7 +18,7 @@ import layout as routes
 import posters
 from routers import wikkit
 
-DRAFT = posters.Poster(11, "Research", None, "91.44x121.92", None, None, False, None)
+DRAFT = posters.Poster(11, "Research", None, 36, 48, None, None, False, None, units="in")
 
 
 class LayoutRouteTests(unittest.TestCase):
@@ -75,7 +75,7 @@ class LayoutRouteTests(unittest.TestCase):
                 self.assertAlmostEqual(self.balancer.await_args.args[1], DRAFT.inches[0] * 96)
                 self.assertEqual(
                     document.get_element_by_id("poster-canvas").get("style"),
-                    f"width: {DRAFT.inches[0] * 96:.6f}px; min-height: {DRAFT.inches[1] * 96:.6f}px",
+                    f"width: {DRAFT.inches[0] * 96:.6f}px; height: {DRAFT.inches[1] * 96:.6f}px",
                 )
                 self.assertIsNone(document.find("body").get("style"))
                 self.assertTrue(document.xpath('//*[@id="poster-container"]//*[@id="poster-header"]'))
@@ -223,11 +223,33 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertEqual(response.json()["preview"], {"height": 36, "width": 48, "units": "in"})
         self.assertEqual(response.json()["redirect"], "/layout/edit")
 
+    def test_dimension_updates_require_whole_numbers_for_integer_storage(self) -> None:
+        response = self.client.post("/layout/dimensions", json={"dimensions": "36.5 in x 48 in"})
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("whole number using the selected units", " ".join(response.json()["errors"]))
+        self.store.set_dimensions.assert_not_awaited()
+
+    def test_dimension_route_uses_entered_units_for_limit_messages(self) -> None:
+        self.store.conference_details.return_value = (
+            "Meeting", {"maximum_poster_width": 121.92, "poster_units": "cm"},
+        )
+        for text, expected in (
+            ("30 in x 36 in", "The minimum is 36 in."),
+            ("36 in x 50 in", "The maximum is 48 in."),
+        ):
+            with self.subTest(text=text):
+                response = self.client.post("/layout/dimensions", json={"dimensions": text})
+                self.assertEqual(response.status_code, 422)
+                self.assertIn(expected, " ".join(response.json()["errors"]))
+        self.store.set_dimensions.assert_not_awaited()
+
     def test_dimensions_validate_minimum_and_maximum_without_saving(self) -> None:
         self.store.conference_details.return_value = (
             "Meeting", {"maximum_poster_height": 100, "maximum_poster_width": 150, "poster_units": "cm"},
         )
-        for text, message in (("100 x 90 cm", "width is too small"), ("110 x 150 cm", "height exceeds")):
+        for text, message in (
+            ("100 x 90 cm", "width is too small"), ("110 x 150 cm", "height is too big"),
+        ):
             response = self.client.post("/layout/dimensions", json={"dimensions": text})
             self.assertEqual(response.status_code, 422)
             self.assertIn(message, " ".join(response.json()["errors"]))
@@ -256,11 +278,15 @@ class LayoutRouteTests(unittest.TestCase):
 
 
 class DimensionValueTests(unittest.TestCase):
-    def test_poster_displays_chosen_units_without_changing_cm_storage(self) -> None:
-        for units, expected in (("cm", "91.44 x 121.92 cm"), ("in", "36 x 48 in"), ("mm", "914.4 x 1219.2 mm")):
-            poster = replace(DRAFT, units=units)
+    def test_poster_displays_integer_dimensions_in_stored_units(self) -> None:
+        for width, height, units, expected, centimeters in (
+            (91, 122, "cm", "91 x 122 cm", (91, 122)),
+            (36, 48, "in", "36 x 48 in", (91.44, 121.92)),
+            (914, 1219, "mm", "914 x 1219 mm", (91.4, 121.9)),
+        ):
+            poster = replace(DRAFT, width=width, height=height, units=units)
             self.assertEqual(poster.display_dimensions, expected)
-            self.assertEqual(poster.dimensions, "91.44x121.92")
+            self.assertEqual(poster.centimeters, centimeters)
 
     def test_units_and_axis_order(self) -> None:
         for value, units, expected in (
@@ -277,10 +303,46 @@ class DimensionValueTests(unittest.TestCase):
 
     def test_minimum_threshold_is_in_centimeters_and_partial_maxima_are_enforced(self) -> None:
         rules = routes.DimensionRules.from_details("Meeting", {"maximum_poster_width": 150})
-        self.assertEqual(rules.errors(91.44, 91.44), [])
+        self.assertEqual(rules.errors(91.44, 91.44, "in"), [])
         self.assertTrue(rules.errors(91.43, 91.44))
         self.assertTrue(rules.errors(150.01, 100))
         self.assertEqual(rules.errors(150, 100), [])
+
+    def test_dimension_limits_are_reported_in_display_units(self) -> None:
+        rules = routes.DimensionRules.from_details("Meeting", {
+            "maximum_poster_width": 48, "poster_units": "in",
+        })
+        for units, minimum, maximum in (
+            ("cm", "91.44 cm", "121.92 cm"),
+            ("mm", "914.4 mm", "1219.2 mm"),
+            ("in", "36 in", "48 in"),
+        ):
+            with self.subTest(units=units):
+                self.assertIn(f"The minimum is {minimum}.", " ".join(rules.errors(80, 100, units)))
+                self.assertIn(f"The maximum is {maximum}.", " ".join(rules.errors(130, 100, units)))
+        self.assertIn("The minimum is 36 in.", " ".join(rules.errors(80, 100)))
+
+    def test_configured_maxima_apply_independently_to_each_axis(self) -> None:
+        with patch.object(posters, "POSTER_MAX_WIDTH_CM", 121.92), patch.object(
+            posters, "POSTER_MAX_HEIGHT_CM", 152.4,
+        ):
+            for details in ({}, {"maximum_poster_width": 300, "maximum_poster_height": 300}):
+                with self.subTest(details=details):
+                    rules = routes.DimensionRules.from_details("", details)
+                    self.assertEqual(rules.errors(121.92, 152.4, "in"), [])
+                    self.assertEqual(rules.errors(122, 153, "in"), [
+                        "Poster width is too big. The maximum is 48 in.",
+                        "Poster width must be a whole number using the selected units.",
+                        "Poster height is too big. The maximum is 60 in.",
+                        "Poster height must be a whole number using the selected units.",
+                    ])
+            rules = routes.DimensionRules.from_details("Meeting", {
+                "maximum_poster_width": 100, "maximum_poster_height": 110,
+            })
+            self.assertEqual(rules.errors(101, 111), [
+                "Poster width is too big. The maximum is 100 cm.",
+                "Poster height is too big. The maximum is 110 cm.",
+            ])
 
     def test_conference_dimension_pairs_and_singleton_lists(self) -> None:
         rules = routes.DimensionRules.from_details("Meeting", {
@@ -356,8 +418,9 @@ class LayoutStorageTests(unittest.IsolatedAsyncioTestCase):
         store = posters.PosterStore()
         connection = AsyncMock()
         connection.execute.return_value.fetchone.return_value = (
-            DRAFT.pid, DRAFT.name, DRAFT.description, DRAFT.dimensions, DRAFT.template,
-            DRAFT.theme, DRAFT.purchased, DRAFT.conference_date,
+            DRAFT.pid, DRAFT.name, DRAFT.description, DRAFT.width, DRAFT.height,
+            DRAFT.template, DRAFT.theme, DRAFT.purchased, DRAFT.conference_date,
+            DRAFT.resumption, DRAFT.units,
         )
         with patch.object(store, "_connect", AsyncMock(return_value=connection)) as connect:
             with patch.object(posters.time, "monotonic", return_value=10):
@@ -379,13 +442,15 @@ class LayoutStorageTests(unittest.IsolatedAsyncioTestCase):
         connection.execute.return_value.fetchone.return_value = (11,)
         with patch.object(store, "_connect", AsyncMock(return_value=connection)):
             for width, height, template in (
-                (150, 100, "arena"), (100, 150, "vertical"), (123.456789, 100, "arena"),
+                (150, 100, "arena"), (100, 150, "vertical"),
             ):
                 self.assertTrue(await store.set_dimensions(7, 11, width, height, "cm"))
                 statement, params = connection.execute.await_args.args
                 self.assertIn("p.uid = %s AND p.pid = %s", statement)
                 self.assertIn("NOT EXISTS", statement)
-                self.assertEqual(params, (f"{width}x{height}", "cm", template, 7, 11))
+                self.assertEqual(params, (width, height, "cm", template, 7, 11))
+            with self.assertRaisesRegex(ValueError, "whole numbers"):
+                await store.set_dimensions(7, 11, 123.456789, 100, "cm")
 
     async def test_source_file_lookup_checks_owner_before_reading_storage(self) -> None:
         store = content.SourceStore()
@@ -427,24 +492,20 @@ class LayoutDatabaseTests(unittest.TestCase):
         ).fetchone()[0]
         self.store = posters.PosterStore("LAYOUT_TEST_DATABASE_URL", self.schema)
 
-    def test_legacy_inches_migrate_once_and_keep_original_display_units(self) -> None:
-        self.connection.execute("ALTER TABLE poster DROP COLUMN units")
-        self.connection.execute("UPDATE poster SET dimensions = '48x36'")
-        self.connection.execute(self.ddl)
-        self.connection.execute(self.ddl)
+    def test_new_posters_start_with_null_dimensions(self) -> None:
         poster = asyncio.run(self.store.get(7, self.pid))
-        self.assertEqual(poster.centimeters, (121.92, 91.44))
-        self.assertEqual(poster.inches, (48, 36))
-        self.assertEqual(poster.units, "in")
+        self.assertIsNone(poster.width)
+        self.assertIsNone(poster.height)
         self.assertEqual(self.connection.execute(
-            "INSERT INTO poster (uid, created) VALUES (7, now()) RETURNING dimensions, units",
-        ).fetchone(), ("91.44x121.92", "cm"))
+            "INSERT INTO poster (uid, created) VALUES (7, now()) RETURNING width, height",
+        ).fetchone(), (None, None))
 
     def test_persisted_dimensions_reach_rendering_and_cannot_modify_purchased_or_foreign_posters(self) -> None:
         async def exercise() -> None:
             self.assertTrue(await self.store.set_dimensions(7, self.pid, 150, 100, "mm"))
             poster = await self.store.get(7, self.pid)
-            self.assertEqual(poster.centimeters, (150, 100))
+            self.assertEqual(poster.centimeters, (15, 10))
+            self.assertEqual((poster.width, poster.height), (150, 100))
             self.assertEqual((poster.template, poster.units), ("arena", "mm"))
             with patch.object(posters, "store", return_value=self.store):
                 rendered = await routes.layout("arena", self.pid, uid=7)

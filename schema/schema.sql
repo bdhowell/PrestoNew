@@ -3,22 +3,22 @@
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
-CREATE TABLE IF NOT EXISTS chatbot_session (
+CREATE TABLE chatbot_session (
     session_id TEXT PRIMARY KEY,
     data       BYTEA NOT NULL,
     version    BIGINT NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS chatbot_session_expires_at ON chatbot_session (expires_at);
+CREATE INDEX chatbot_session_expires_at ON chatbot_session (expires_at);
 
-CREATE TABLE IF NOT EXISTS administration (
+CREATE TABLE administration (
     username    TEXT,
     password    TEXT,
     updated     TIMESTAMPTZ NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS "user" (
+CREATE TABLE "user" (
     uid         SERIAL PRIMARY KEY,
     name        TEXT NOT NULL,
     username    TEXT NOT NULL UNIQUE,
@@ -32,11 +32,9 @@ CREATE TABLE IF NOT EXISTS "user" (
     verified    TIMESTAMPTZ              -- null = unverified
 );
 
-UPDATE "user" SET superuser = COALESCE(superuser, 0);
+CREATE INDEX idx_user_verified ON "user" (verified) WHERE verified IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_user_verified ON "user" (verified) WHERE verified IS NULL;
-
-CREATE TABLE IF NOT EXISTS conference (
+CREATE TABLE conference (
    cid           SERIAL PRIMARY KEY,
    name          TEXT NOT NULL,
    description   TEXT NOT NULL,
@@ -63,19 +61,20 @@ CREATE TABLE IF NOT EXISTS conference (
    embedding     vector(1536)
 );
 
-CREATE INDEX IF NOT EXISTS idx_conference_starts ON conference (starts);
-CREATE INDEX IF NOT EXISTS idx_conference_ends ON conference (ends);
-CREATE INDEX IF NOT EXISTS idx_conference_hidden ON conference (hidden) WHERE hidden IS NULL;
-CREATE INDEX IF NOT EXISTS idx_conference_verified ON conference (verified) WHERE verified IS NULL;
+CREATE INDEX idx_conference_starts ON conference (starts);
+CREATE INDEX idx_conference_ends ON conference (ends);
+CREATE INDEX idx_conference_hidden ON conference (hidden) WHERE hidden IS NULL;
+CREATE INDEX idx_conference_verified ON conference (verified) WHERE verified IS NULL;
 
-CREATE TABLE IF NOT EXISTS poster (
+CREATE TABLE poster (
     pid          SERIAL PRIMARY KEY,
     cid          INTEGER REFERENCES conference(cid),
     uid          INTEGER REFERENCES "user"(uid) ON DELETE SET NULL,
     resumption   TEXT,
     logo         BYTEA,
     logotype     TEXT,        -- type of the logo (e.g., 'png', 'jpg', 'svg')
-    dimensions   TEXT DEFAULT '91.44x121.92', -- width x height, always centimeters
+    width        INTEGER DEFAULT NULL,
+    height       INTEGER DEFAULT NULL,
     units        TEXT NOT NULL DEFAULT 'cm' CHECK (units IN ('cm', 'mm', 'in')),
     description  TEXT,
     moreinfo     TEXT,
@@ -91,38 +90,15 @@ CREATE TABLE IF NOT EXISTS poster (
     embedding    vector(1536)
 );
 
-ALTER TABLE poster ADD COLUMN IF NOT EXISTS cid INTEGER REFERENCES conference(cid);
-ALTER TABLE poster ADD COLUMN IF NOT EXISTS resumption TEXT;
-
--- Older installations stored dimensions in inches. Convert only on upgrade.
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = current_schema() AND table_name = 'poster' AND column_name = 'units'
-    ) THEN
-        UPDATE poster SET dimensions =
-            (split_part(dimensions, 'x', 1)::numeric * 2.54)::text || 'x' ||
-            (split_part(dimensions, 'x', 2)::numeric * 2.54)::text
-        WHERE dimensions IS NOT NULL;
-        ALTER TABLE poster ADD COLUMN units TEXT NOT NULL DEFAULT 'in'
-            CHECK (units IN ('cm', 'mm', 'in'));
-    END IF;
-END
-$$;
-ALTER TABLE poster ALTER COLUMN units SET DEFAULT 'cm';
-ALTER TABLE poster ALTER COLUMN dimensions SET DEFAULT '91.44x121.92';
-
-CREATE INDEX IF NOT EXISTS idx_poster_uid ON poster (uid);
-CREATE INDEX IF NOT EXISTS idx_poster_searchable ON poster (searchable) WHERE searchable = 1;
--- CREATE INDEX IF NOT EXISTS idx_poster_position ON poster ("position");
-CREATE INDEX IF NOT EXISTS idx_poster_embedding_ivfflat ON poster
+CREATE INDEX idx_poster_uid ON poster (uid);
+CREATE INDEX idx_poster_searchable ON poster (searchable) WHERE searchable = 1;
+CREATE INDEX idx_poster_embedding_ivfflat ON poster
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 
 -- permissions to view or edit poster and user-specific configuration options, such as display layout
 
-CREATE TABLE IF NOT EXISTS userposter (
+CREATE TABLE userposter (
     uid       INTEGER NOT NULL REFERENCES "user"(uid) ON DELETE CASCADE,
     pid       INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
     editor     INTEGER NOT NULL CHECK (editor IN (0, 1)),
@@ -130,12 +106,12 @@ CREATE TABLE IF NOT EXISTS userposter (
     PRIMARY KEY (uid, pid)
 );
 
-CREATE INDEX IF NOT EXISTS idx_userposter_uid ON userposter (uid);
-CREATE INDEX IF NOT EXISTS idx_userposter_pid ON userposter (pid);
+CREATE INDEX idx_userposter_uid ON userposter (uid);
+CREATE INDEX idx_userposter_pid ON userposter (pid);
 
 -- records the purchase of a poster so that it can be downloaded
 
-CREATE TABLE IF NOT EXISTS purchase (
+CREATE TABLE purchase (
     pid       INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
     uid       INTEGER NOT NULL REFERENCES "user"(uid) ON DELETE CASCADE,
     amount    NUMERIC(10, 2) NOT NULL,
@@ -144,7 +120,7 @@ CREATE TABLE IF NOT EXISTS purchase (
     PRIMARY KEY (pid, uid)
 );
 
-CREATE TABLE IF NOT EXISTS download (
+CREATE TABLE download (
     did       SERIAL PRIMARY KEY,
     pid       INTEGER REFERENCES poster(pid) ON DELETE CASCADE,
     uid       INTEGER NOT NULL REFERENCES "user"(uid) ON DELETE CASCADE, 
@@ -152,9 +128,9 @@ CREATE TABLE IF NOT EXISTS download (
     created   TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_download_pid ON download (pid);
+CREATE INDEX idx_download_pid ON download (pid);
 
-CREATE TABLE IF NOT EXISTS show (
+CREATE TABLE show (
     cid         INTEGER NOT NULL REFERENCES conference(cid) ON DELETE CASCADE,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
     searchable  INTEGER NOT NULL CHECK (searchable IN (0, 1)),
@@ -162,10 +138,10 @@ CREATE TABLE IF NOT EXISTS show (
     UNIQUE (cid, pid)
 );
 
-CREATE INDEX IF NOT EXISTS idx_show_pid ON show (pid);
-CREATE INDEX IF NOT EXISTS idx_show_approved ON show (approved) WHERE approved IS NULL;
+CREATE INDEX idx_show_pid ON show (pid);
+CREATE INDEX idx_show_approved ON show (approved) WHERE approved IS NULL;
 
-CREATE TABLE IF NOT EXISTS source (
+CREATE TABLE source (
     sid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
     kind        TEXT NOT NULL CHECK (kind IN ('text', 'svg','mixed','image','chart','table','logo','moreinfo', 'qrcode')),
@@ -187,24 +163,20 @@ CREATE TABLE IF NOT EXISTS source (
     embedding   vector(1536)
 );
 
-CREATE INDEX IF NOT EXISTS idx_source_pid ON source (pid);
-CREATE INDEX IF NOT EXISTS idx_source_fileid ON source (fileid);
-CREATE INDEX IF NOT EXISTS idx_source_parent ON source (parent);
+CREATE INDEX idx_source_pid ON source (pid);
+CREATE INDEX idx_source_fileid ON source (fileid);
+CREATE INDEX idx_source_parent ON source (parent);
 
 -- Allow at most one source of each special kind per poster.
-ALTER TABLE source ALTER COLUMN parent DROP NOT NULL;
-ALTER TABLE source ADD COLUMN IF NOT EXISTS storage_uri TEXT;
-ALTER TABLE source ADD COLUMN IF NOT EXISTS summary TEXT;
-DROP INDEX IF EXISTS idx_source_pid_kind_unique;
 CREATE UNIQUE INDEX idx_source_pid_kind_unique ON source (pid, kind)
 WHERE kind IN ('logo', 'moreinfo', 'qrcode');
 
-CREATE INDEX IF NOT EXISTS idx_source_embedding_ivfflat ON source
+CREATE INDEX idx_source_embedding_ivfflat ON source
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 
 
-CREATE TABLE IF NOT EXISTS authors (
+CREATE TABLE authors (
     aid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
     name        TEXT NOT NULL,
@@ -214,19 +186,13 @@ CREATE TABLE IF NOT EXISTS authors (
     UNIQUE (pid, name)
 );
 
-ALTER TABLE authors ADD COLUMN IF NOT EXISTS errata TEXT;
+CREATE TYPE section_which AS ENUM(
+    'title', 'abstract', 'introduction', 'materials and methods', 'results',
+    'conclusion', 'future plans', 'literature cited', 'additional information',
+    'acknowledgements'
+);
 
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'section_which') THEN
-        CREATE TYPE section_which AS ENUM('title','abstract','introduction','materials and methods','results','conclusion', 'future plans', 'literature cited', 'additional information', 'acknowledgements');
-    END IF;
-END
-$$;
-
-ALTER TYPE section_which ADD VALUE IF NOT EXISTS 'acknowledgements';
-
-CREATE TABLE IF NOT EXISTS section (
+CREATE TABLE section (
     xid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
     which       section_which NOT NULL,
@@ -238,59 +204,7 @@ CREATE TABLE IF NOT EXISTS section (
 );
 
 
--- DO $$
--- BEGIN
---     IF EXISTS (
---         SELECT 1
---         FROM information_schema.columns
---         WHERE table_schema = current_schema()
---           AND table_name = 'extract'
---           AND column_name = 'pid'
---     ) AND NOT EXISTS (
---         SELECT 1
---         FROM information_schema.columns
---         WHERE table_schema = current_schema()
---           AND table_name = 'extract'
---           AND column_name = 'sid'
---     ) THEN
---         ALTER TABLE extract RENAME COLUMN pid TO sid;
---     END IF;
--- END
--- $$;
-
--- ALTER TABLE extract DROP CONSTRAINT IF EXISTS extract_kind_check;
--- UPDATE extract SET kind = 'mixed' WHERE kind = 'figure';
--- UPDATE extract SET kind = 'mixed' WHERE kind = 'text';
--- ALTER TABLE extract
--- ADD CONSTRAINT extract_kind_check
--- CHECK (kind IN ('svg','mixed','image'));
-
--- TODO: restore once the extract table is defined.
--- CREATE INDEX IF NOT EXISTS idx_extract_sid ON extract (sid);
-
--- CREATE TABLE IF NOT EXISTS reference (
---     rid         SERIAL PRIMARY KEY,
---     pid         INTEGER REFERENCES poster(pid) ON DELETE CASCADE,
---     eid         INTEGER REFERENCES extract(eid) ON DELETE CASCADE,
---     pageno      INTEGER,
---     bounding    JSONB
--- );
-
--- CREATE INDEX IF NOT EXISTS idx_reference_pid ON reference (pid);
--- CREATE INDEX IF NOT EXISTS idx_reference_eid ON reference (eid);
-
--- CREATE TABLE IF NOT EXISTS footnote (
---     fid         SERIAL PRIMARY KEY,
---     pid         INTEGER REFERENCES poster(pid) ON DELETE CASCADE,
---     xid         INTEGER REFERENCES content(xid) ON DELETE CASCADE,
---     text        TEXT NOT NULL,
---     CHECK (pid IS NOT NULL OR xid IS NOT NULL)
--- );
-
--- CREATE INDEX IF NOT EXISTS idx_footnote_pid ON footnote (pid);
--- CREATE INDEX IF NOT EXISTS idx_footnote_xid ON footnote (xid);
-
-CREATE TABLE IF NOT EXISTS keyterm (
+CREATE TABLE keyterm (
     cid         INTEGER REFERENCES conference(cid) ON DELETE CASCADE,
     pid         INTEGER REFERENCES poster(pid) ON DELETE CASCADE,
     text        TEXT NOT NULL,
@@ -298,9 +212,9 @@ CREATE TABLE IF NOT EXISTS keyterm (
     CHECK (cid IS NOT NULL OR pid IS NOT NULL)
 );
 
-CREATE INDEX IF NOT EXISTS idx_keyterm_pid ON keyterm (pid);
+CREATE INDEX idx_keyterm_pid ON keyterm (pid);
 
-CREATE TABLE IF NOT EXISTS attachment (
+CREATE TABLE attachment (
     tid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
     name        TEXT,
@@ -310,9 +224,9 @@ CREATE TABLE IF NOT EXISTS attachment (
     created     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_attachment_pid ON attachment (pid);
+CREATE INDEX idx_attachment_pid ON attachment (pid);
 
-CREATE TABLE IF NOT EXISTS feedback (
+CREATE TABLE feedback (
     fid         SERIAL PRIMARY KEY,
     cid         INTEGER REFERENCES conference(cid) ON DELETE CASCADE,
     pid         INTEGER REFERENCES poster(pid) ON DELETE CASCADE,
@@ -322,9 +236,9 @@ CREATE TABLE IF NOT EXISTS feedback (
     CHECK (cid IS NOT NULL OR pid IS NOT NULL)
 );
 
-CREATE INDEX IF NOT EXISTS idx_feedback_cid ON feedback (cid);
-CREATE INDEX IF NOT EXISTS idx_feedback_pid ON feedback (pid);
-CREATE INDEX IF NOT EXISTS idx_feedback_reviewed ON feedback (reviewed) WHERE reviewed IS NULL;
+CREATE INDEX idx_feedback_cid ON feedback (cid);
+CREATE INDEX idx_feedback_pid ON feedback (pid);
+CREATE INDEX idx_feedback_reviewed ON feedback (reviewed) WHERE reviewed IS NULL;
 
 -- Seed administration record (password: Fr33d0m)
 INSERT INTO administration (username, password, updated)
@@ -337,10 +251,7 @@ WHERE NOT EXISTS (SELECT 1 FROM administration WHERE username = 'root');
 
 -- Source and section vectors use NEW values so inserts and edits are indexed
 -- before the row is visible to queries.
-ALTER TABLE source ADD COLUMN IF NOT EXISTS search_vector tsvector;
-ALTER TABLE section ADD COLUMN IF NOT EXISTS search_vector tsvector;
-
-CREATE OR REPLACE FUNCTION trg_source_fts()
+CREATE FUNCTION trg_source_fts()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     NEW.search_vector :=
@@ -350,18 +261,13 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION trg_section_fts()
+CREATE FUNCTION trg_section_fts()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     NEW.search_vector := to_tsvector('english', coalesce(NEW.content, ''));
     RETURN NEW;
 END;
 $$;
-
-SET client_min_messages TO WARNING;
-DROP TRIGGER IF EXISTS source_fts_update ON source;
-DROP TRIGGER IF EXISTS section_fts_update ON section;
-RESET client_min_messages;
 
 CREATE TRIGGER source_fts_update
 BEFORE INSERT OR UPDATE OF text, description
@@ -373,19 +279,16 @@ BEFORE INSERT OR UPDATE OF content
 ON section
 FOR EACH ROW EXECUTE FUNCTION trg_section_fts();
 
-UPDATE source SET text = text;
-UPDATE section SET content = content;
-
-CREATE INDEX IF NOT EXISTS idx_source_fts ON source USING GIN (search_vector);
-CREATE INDEX IF NOT EXISTS idx_section_fts ON section USING GIN (search_vector);
+CREATE INDEX idx_source_fts ON source USING GIN (search_vector);
+CREATE INDEX idx_section_fts ON section USING GIN (search_vector);
 
 -- ── Conference ────────────────────────────────────────────────────────────
 
-CREATE INDEX IF NOT EXISTS idx_conference_fts ON conference USING GIN (search_vector);
+CREATE INDEX idx_conference_fts ON conference USING GIN (search_vector);
 
 -- Recompute the tsvector for a single conference.
 -- Weights: name=A, location=B, description=C, keyterms=A
-CREATE OR REPLACE FUNCTION conference_search_vector(cid_in INTEGER)
+CREATE FUNCTION conference_search_vector(cid_in INTEGER)
 RETURNS tsvector LANGUAGE sql STABLE AS $$
     SELECT
         setweight(to_tsvector('english', coalesce(c.name,        '')), 'A') ||
@@ -400,7 +303,7 @@ $$;
 
 -- Fired before insert/update of text columns; keeps search_vector current.
 -- Uses NEW so inserted rows are indexed before they are visible to queries.
-CREATE OR REPLACE FUNCTION trg_conference_fts()
+CREATE FUNCTION trg_conference_fts()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     NEW.search_vector :=
@@ -414,10 +317,6 @@ BEGIN
 END;
 $$;
 
-SET client_min_messages TO WARNING;
-DROP TRIGGER IF EXISTS conference_fts_update ON conference;
-RESET client_min_messages;
-
 CREATE TRIGGER conference_fts_update
 BEFORE INSERT OR UPDATE OF name, description, location
 ON conference
@@ -425,9 +324,9 @@ FOR EACH ROW EXECUTE FUNCTION trg_conference_fts();
 
 -- ── Poster ────────────────────────────────────────────────────────────────
 
-CREATE INDEX IF NOT EXISTS idx_poster_fts ON poster USING GIN (search_vector);
+CREATE INDEX idx_poster_fts ON poster USING GIN (search_vector);
 
-CREATE OR REPLACE FUNCTION poster_search_vector(pid_in INTEGER)
+CREATE FUNCTION poster_search_vector(pid_in INTEGER)
 RETURNS tsvector LANGUAGE sql STABLE AS $$
     SELECT
         setweight(to_tsvector('english', coalesce(p.description, '')), 'B') ||
@@ -448,7 +347,7 @@ RETURNS tsvector LANGUAGE sql STABLE AS $$
     FROM poster p WHERE p.pid = pid_in;
 $$;
 
-CREATE OR REPLACE FUNCTION trg_poster_fts()
+CREATE FUNCTION trg_poster_fts()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF TG_OP = 'UPDATE' THEN
@@ -461,7 +360,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION trg_poster_child_fts()
+CREATE FUNCTION trg_poster_child_fts()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF TG_OP != 'INSERT' THEN
@@ -476,12 +375,6 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS poster_fts_insert ON poster;
-DROP TRIGGER IF EXISTS poster_fts_update ON poster;
-DROP TRIGGER IF EXISTS section_poster_fts ON section;
-DROP TRIGGER IF EXISTS authors_poster_fts ON authors;
-DROP TRIGGER IF EXISTS keyterm_poster_fts ON keyterm;
-
 CREATE TRIGGER poster_fts_insert BEFORE INSERT ON poster
 FOR EACH ROW EXECUTE FUNCTION trg_poster_fts();
 CREATE TRIGGER poster_fts_update AFTER UPDATE OF description ON poster
@@ -493,167 +386,4 @@ FOR EACH ROW EXECUTE FUNCTION trg_poster_child_fts();
 CREATE TRIGGER keyterm_poster_fts AFTER INSERT OR UPDATE OR DELETE ON keyterm
 FOR EACH ROW EXECUTE FUNCTION trg_poster_child_fts();
 
-UPDATE poster SET search_vector = poster_search_vector(pid);
-
--- Legacy reference below uses the previous content/footnote schema and stays disabled.
--- -- Recompute the tsvector for a single poster.
--- -- Weights: title=A, subtitle/authors/content-titles=B,
--- --          poster-footnotes/footnote-rows=C, content-bodies=D, keyterms=A
--- CREATE OR REPLACE FUNCTION poster_search_vector(pid_in INTEGER)
--- RETURNS tsvector LANGUAGE sql STABLE AS $$
---     SELECT
---         setweight(to_tsvector('english', coalesce(p.title,     '')), 'A') ||
---         setweight(to_tsvector('english', coalesce(p.subtitle,  '')), 'B') ||
---         setweight(to_tsvector('english', coalesce(p.authors,   '')), 'B') ||
---         setweight(to_tsvector('english', coalesce(p.footnotes, '')), 'C') ||
---         -- keyterms associated with this poster
---         setweight(to_tsvector('english', coalesce(
---             (SELECT string_agg(text, ' ') FROM keyterm WHERE pid = pid_in), ''
---         )), 'A') ||
---         -- rows in the footnote table (poster-level and via content blocks)
---         setweight(to_tsvector('english', coalesce(
---             (SELECT string_agg(fn.text, ' ')
---                FROM footnote fn
---               WHERE fn.pid = pid_in
---                  OR fn.xid IN (SELECT xid FROM content WHERE pid = pid_in)), ''
---         )), 'C') ||
---         -- content block titles
---         setweight(to_tsvector('english', coalesce(
---             (SELECT string_agg(coalesce(cx.title, ''), ' ')
---                FROM content cx WHERE cx.pid = pid_in), ''
---         )), 'B') ||
---         -- content block bodies (subtitle, content text, footnotes field)
---         setweight(to_tsvector('english', coalesce(
---             (SELECT string_agg(
---                 coalesce(cx.subtitle,  '') || ' ' ||
---                 coalesce(cx.content,   '') || ' ' ||
---                 coalesce(cx.footnotes, ''),
---                 ' '
---              )
---                FROM content cx WHERE cx.pid = pid_in), ''
---         )), 'D')
---     FROM poster p
---     WHERE p.pid = pid_in;
--- $$;
-
--- -- Fired before insert/update of text columns on poster itself.
--- CREATE OR REPLACE FUNCTION trg_poster_fts()
--- RETURNS trigger LANGUAGE plpgsql AS $$
--- BEGIN
---     NEW.search_vector := poster_search_vector(NEW.pid);
---     RETURN NEW;
--- END;
--- $$;
-
--- SET client_min_messages TO WARNING;
--- DROP TRIGGER IF EXISTS poster_fts_update ON poster;
--- RESET client_min_messages;
-
--- CREATE TRIGGER poster_fts_update
--- BEFORE INSERT OR UPDATE OF title, subtitle, authors, footnotes
--- ON poster
--- FOR EACH ROW EXECUTE FUNCTION trg_poster_fts();
-
--- -- ── Cross-table triggers ──────────────────────────────────────────────────
-
--- -- Keyterms: a row may belong to a conference (cid) OR a poster (pid).
--- -- Refreshes whichever parent has a non-null foreign key.
--- CREATE OR REPLACE FUNCTION trg_keyterm_fts()
--- RETURNS trigger LANGUAGE plpgsql AS $$
--- DECLARE
---     target_cid INTEGER;
---     target_pid INTEGER;
--- BEGIN
---     IF TG_OP = 'DELETE' THEN
---         target_cid := OLD.cid;  target_pid := OLD.pid;
---     ELSE
---         target_cid := NEW.cid;  target_pid := NEW.pid;
---     END IF;
---     IF target_cid IS NOT NULL THEN
---         UPDATE conference
---            SET search_vector = conference_search_vector(target_cid)
---          WHERE cid = target_cid;
---     END IF;
---     IF target_pid IS NOT NULL THEN
---         UPDATE poster
---            SET search_vector = poster_search_vector(target_pid)
---          WHERE pid = target_pid;
---     END IF;
---     RETURN NULL;
--- END;
--- $$;
-
--- SET client_min_messages TO WARNING;
--- DROP TRIGGER IF EXISTS keyterm_fts_update ON keyterm;
--- RESET client_min_messages;
-
--- CREATE TRIGGER keyterm_fts_update
--- AFTER INSERT OR UPDATE OR DELETE ON keyterm
--- FOR EACH ROW EXECUTE FUNCTION trg_keyterm_fts();
-
--- -- Content blocks: refresh the owning poster whenever a block changes.
--- CREATE OR REPLACE FUNCTION trg_content_fts()
--- RETURNS trigger LANGUAGE plpgsql AS $$
--- DECLARE
---     target_pid INTEGER;
--- BEGIN
---     IF TG_OP = 'DELETE' THEN
---         target_pid := OLD.pid;
---     ELSE
---         target_pid := NEW.pid;
---     END IF;
---     UPDATE poster
---        SET search_vector = poster_search_vector(target_pid)
---      WHERE pid = target_pid;
---     RETURN NULL;
--- END;
--- $$;
-
--- SET client_min_messages TO WARNING;
--- DROP TRIGGER IF EXISTS content_fts_update ON content;
--- RESET client_min_messages;
-
--- CREATE TRIGGER content_fts_update
--- AFTER INSERT OR UPDATE OR DELETE ON content
--- FOR EACH ROW EXECUTE FUNCTION trg_content_fts();
-
--- -- Footnote rows: refresh via poster.pid directly, or via content.pid when
--- -- the footnote belongs to a content block (xid).
--- CREATE OR REPLACE FUNCTION trg_footnote_fts()
--- RETURNS trigger LANGUAGE plpgsql AS $$
--- DECLARE
---     target_pid INTEGER;
---     target_xid INTEGER;
--- BEGIN
---     IF TG_OP = 'DELETE' THEN
---         target_pid := OLD.pid;  target_xid := OLD.xid;
---     ELSE
---         target_pid := NEW.pid;  target_xid := NEW.xid;
---     END IF;
---     IF target_pid IS NOT NULL THEN
---         UPDATE poster
---            SET search_vector = poster_search_vector(target_pid)
---          WHERE pid = target_pid;
---     ELSIF target_xid IS NOT NULL THEN
---         UPDATE poster p
---            SET search_vector = poster_search_vector(c.pid)
---           FROM content c
---          WHERE c.xid = target_xid
---            AND p.pid = c.pid;
---     END IF;
---     RETURN NULL;
--- END;
--- $$;
-
--- SET client_min_messages TO WARNING;
--- DROP TRIGGER IF EXISTS footnote_fts_update ON footnote;
--- RESET client_min_messages;
-
--- CREATE TRIGGER footnote_fts_update
--- AFTER INSERT OR UPDATE OR DELETE ON footnote
--- FOR EACH ROW EXECUTE FUNCTION trg_footnote_fts();
-
--- ── Back-fill existing rows ───────────────────────────────────────────────
-
-UPDATE conference SET search_vector = conference_search_vector(cid);
--- UPDATE poster     SET search_vector = poster_search_vector(pid);
+-- New rows and edited text are indexed by the triggers above.
