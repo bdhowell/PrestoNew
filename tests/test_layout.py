@@ -37,6 +37,11 @@ class LayoutRouteTests(unittest.TestCase):
         mocked = patch.object(posters, "store", return_value=self.store)
         mocked.start()
         self.addCleanup(mocked.stop)
+        mocked = patch.object(routes, "balance_header_widths", AsyncMock(return_value={
+            "#title": 80.0, "#authors": 90.0,
+        }))
+        self.balancer = mocked.start()
+        self.addCleanup(mocked.stop)
 
         async def identity(connection: HTTPConnection) -> None:
             connection.state.user_id = self.uid
@@ -59,6 +64,25 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertIn("Experiment", document.get_element_by_id("methods").text_content())
         self.assertEqual(len(document.xpath('//*[@id="methods"]//h2')), 0)
         self.assertIn("Findings", document.get_element_by_id("conclusion").text_content())
+
+    def test_headers_include_measured_widths_for_every_template(self) -> None:
+        for template in posters.TEMPLATES:
+            with self.subTest(template=template):
+                self.store.get.return_value = replace(DRAFT, template=template)
+                document = html.fromstring(self.client.get("/layout/edit").text)
+                self.assertEqual(document.get_element_by_id("title").get("style"), "width: 80.000000%")
+                self.assertEqual(document.get_element_by_id("authors").get("style"), "width: 90.000000%")
+                self.assertAlmostEqual(self.balancer.await_args.args[1], DRAFT.inches[0] * 96)
+                self.assertEqual(
+                    document.find("body").get("style"), f"width: {DRAFT.inches[0] * 96:.6f}px",
+                )
+
+    def test_browser_render_failure_is_reported_explicitly(self) -> None:
+        self.balancer.side_effect = routes.PlaywrightError("Chromium unavailable")
+        with self.assertLogs("layout", "ERROR"):
+            response = self.client.get("/layout/edit")
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Your layout could not be loaded", response.text)
 
     def test_edit_route_selects_requested_owned_poster(self) -> None:
         self.store.get.return_value = replace(DRAFT, pid=12, template="central")

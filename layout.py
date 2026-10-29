@@ -11,12 +11,14 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from lxml import etree
 from lxml import html as dom
+from playwright.async_api import Error as PlaywrightError
 
 import common
 import content
 import elucidation
 import identity
 import posters
+from poster_rendering import balance_header_widths
 from common import clean_response
 from routers import wikkit
 from routers.content import STORAGE_ERRORS
@@ -120,7 +122,17 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
                 if len(body) and body[0].tag in ("h2", "h3"):
                     body.text = (body.text or "") + (body[0].tail or "")
                     body.remove(body[0])
-    return dom.tostring(document, encoding="unicode", doctype="<!DOCTYPE html>")
+    width, _ = poster.inches
+    body = document.find("body")
+    if body is None:
+        raise ValueError("Poster document has no body")
+    body.set("style", f"width: {width * 96:.6f}px")
+    rendered = etree.tostring(document, method="html", encoding="unicode", doctype="<!DOCTYPE html>")
+    widths = await balance_header_widths(rendered, width * 96)
+    for selector, percentage in widths.items():
+        element = document.get_element_by_id(selector.removeprefix("#"))
+        element.set("style", f"width: {percentage:.6f}%")
+    return etree.tostring(document, method="html", encoding="unicode", doctype="<!DOCTYPE html>")
 
 
 @router.get("")
@@ -167,7 +179,7 @@ async def edit_layout(
     template = poster.template if poster.template in posters.TEMPLATES else "arena"
     try:
         rendered = await layout(template, poster.pid, uid=uid, request=request)
-    except psycopg.Error:
+    except (psycopg.Error, PlaywrightError, OSError, ValueError):
         logger.exception("Could not render poster %s", poster.pid)
         raise HTTPException(503, "Your layout could not be loaded. Please try again.") from None
     return HTMLResponse(rendered, headers=PRIVATE)

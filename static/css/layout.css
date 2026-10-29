@@ -85,6 +85,9 @@ body {
     min-width: 0;
     text-align: center;
     overflow-wrap: anywhere;
+    width: 100%;
+    max-width: 100%;
+    justify-self: center;
 }
 
 .authors {
@@ -94,6 +97,9 @@ body {
     min-width: 0;
     text-align: center;
     overflow-wrap: anywhere;
+    width: 100%;
+    max-width: 100%;
+    align-self: center;
 }
 
 .section-parent {

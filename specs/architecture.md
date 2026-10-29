@@ -1123,6 +1123,22 @@ Implementation contract:
   and methods, conclusions to conclusion, citations to literature cited, and
   information to additional information. Authors come from the authors table
   and form a comma-separated, wrapping list beneath the title. Both are centered.
+- `poster_rendering.balance_text_width(page, selector)` uses Playwright's actual
+  rendered text rectangles to minimize normalized line-width variance without
+  adding lines. It searches widths at CSS-pixel precision, retaining the widest
+  equal-scoring result. Empty and single-line containers retain their full width.
+  `layout()` measures `#title` and `#authors` at the poster's physical width
+  (96 CSS pixels per inch), fixes the document body to that width, and embeds
+  percentage widths in the returned HTML. The editor displays this fixed-width
+  layout rather than reflowing to the browser viewport. CSS keeps both containers
+  centered within their original layout slots.
+  Measurement uses local stylesheets and waits for web fonts; scripts and other
+  network resources are excluded. Browser/font failures return an explicit 503,
+  rather than silently returning an unbalanced layout.
+  Install `requirements-content.txt` and run `bin/python -m playwright install chromium`
+  on the rendering host (Linux images may need `playwright install --with-deps chromium`).
+  Run `bin/python -m unittest tests.test_poster_rendering` for real Chromium tests.
+  The separate read-only preview is not an export renderer and is unchanged.
 - Stored section HTML is sanitized with the same allowlist as poster previews.
 - The last poster lookup is cached by owner and poster ID for two seconds;
   poster mutations invalidate it.
