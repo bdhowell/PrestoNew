@@ -19,11 +19,12 @@ p img:has(+ p) {
 body {
     background-color: var(--background-color);
     color: var(--text-color);
-    font-family: var(--body-font-face)
+    font-family: var(--body-font-face);
+    line-height: 1.6;
 }
 
 .layout {
-    --gutter: 1rem;
+    --gutter: 2rem;
 }
 
 .pane {
@@ -109,7 +110,7 @@ body {
     border-color: var(--border-color);
     border-width: var(--border-width);
     border-style: solid;
-    padding: 1rem;
+    padding: 2rem;
     vertical-align: middle;
     display: inline-block;
     background-color: white;
@@ -148,5 +149,5 @@ body {
 }
 
 .content {
-    margin: 1rem;
+    margin-top: 1rem;
 }

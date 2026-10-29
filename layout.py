@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from lxml import etree
 from lxml import html as dom
 
+import common
 import content
 import elucidation
 import identity
@@ -135,6 +136,8 @@ async def edit_layout(
     uid = getattr(request.state, "user_id", None)
     if type(uid) is not int:
         return RedirectResponse("/account/signin", status_code=303)
+
+    await common.resume(request)
 
     session = identity.session(request)
     selected_pid = pid if pid is not None else (
