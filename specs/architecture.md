@@ -1128,10 +1128,9 @@ Implementation contract:
   adding lines. It searches widths at CSS-pixel precision, retaining the widest
   equal-scoring result. Empty and single-line containers retain their full width.
   `layout()` measures `#title` and `#authors` at the poster's physical width
-  (96 CSS pixels per inch), fixes the document body to that width, and embeds
-  percentage widths in the returned HTML. The editor displays this fixed-width
-  layout rather than reflowing to the browser viewport. CSS keeps both containers
-  centered within their original layout slots.
+  (96 CSS pixels per inch), fixes `#poster-canvas` to that width and a minimum
+  physical poster height, and embeds percentage widths in the returned HTML.
+  CSS keeps both containers centered within their original layout slots.
   Measurement uses local stylesheets and waits for web fonts; scripts and other
   network resources are excluded. Browser/font failures return an explicit 503,
   rather than silently returning an unbalanced layout.
@@ -1139,6 +1138,17 @@ Implementation contract:
   on the rendering host (Linux images may need `playwright install --with-deps chromium`).
   Run `bin/python -m unittest tests.test_poster_rendering` for real Chromium tests.
   The separate read-only preview is not an export renderer and is unchanged.
+- All layout templates place `#poster-header` and `#layout` inside
+  `#poster-container`, with an internal canvas and scaled stage. The container
+  fills the viewport width and the height remaining between the menu and bottom
+  `#controls` bar. Only the container scrolls; menu and controls remain visible.
+  The right-aligned, labeled zoom slider starts at 100% and ranges down to the
+  scale that fits the entire poster without enlarging small posters.
+  `layout-zoom.js` scales the canvas without reflowing text and resizes its stage
+  to avoid unscaled overflow. Fit mode follows viewport, menu, font, image, and
+  content size changes. Physical dimensions remain on the canvas, not the body.
+  Layout grid columns share the space left after gutters to avoid overflowing
+  the poster width.
 - Stored section HTML is sanitized with the same allowlist as poster previews.
 - The last poster lookup is cached by owner and poster ID for two seconds;
   poster mutations invalidate it.

@@ -1,9 +1,14 @@
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
+from lxml import html
 from playwright.async_api import Error as PlaywrightError, async_playwright
 
+import layout
+import posters
 from poster_rendering import balance_header_widths, balance_text_width
+from tests.test_layout import DRAFT
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -145,3 +150,122 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 bounds = await element.bounding_box()
                 self.assertIsNotNone(bounds)
                 self.assertAlmostEqual(bounds["x"] + bounds["width"] / 2, 320, delta=0.1)
+
+    async def editor(self, template: str = "arena") -> None:
+        store = AsyncMock()
+        store.get.return_value = DRAFT
+        store.content.return_value = ([("title", "Poster title"), ("results", "<p>Results</p>")], [])
+        with patch.object(posters, "store", return_value=store), patch.object(
+            layout, "balance_header_widths", AsyncMock(return_value={"#title": 80, "#authors": 100}),
+        ):
+            rendered = await layout.layout(template, 11, uid=7)
+        document = html.document_fromstring(rendered)
+        for script in document.xpath("//script"):
+            script.getparent().remove(script)
+        for link in document.xpath("//link"):
+            href = link.get("href", "")
+            if href.startswith("/static/") and link.get("rel") == "stylesheet":
+                style = html.Element("style")
+                style.text = (ROOT / href.lstrip("/")).read_text()
+                link.getparent().replace(link, style)
+            else:
+                link.getparent().remove(link)
+        await self.page.set_content(html.tostring(document, encoding="unicode"))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-zoom.js"))
+        await self.page.wait_for_function(
+            "() => document.getElementById('poster-stage').style.height !== ''",
+        )
+
+    async def dimensions(self) -> dict:
+        return await self.page.evaluate("""() => {
+            const viewport = document.getElementById("poster-container");
+            const menu = document.querySelector(".basic-menu").getBoundingClientRect();
+            const controls = document.getElementById("controls").getBoundingClientRect();
+            const canvas = document.getElementById("poster-canvas").getBoundingClientRect();
+            const bounds = viewport.getBoundingClientRect();
+            return {
+                top: bounds.top, bottom: bounds.bottom, width: bounds.width,
+                menuBottom: menu.bottom, controlsTop: controls.top, controlsBottom: controls.bottom,
+                canvasWidth: canvas.width, canvasHeight: canvas.height,
+                scrollWidth: viewport.scrollWidth, clientWidth: viewport.clientWidth,
+                scrollHeight: viewport.scrollHeight, clientHeight: viewport.clientHeight,
+                bodyWidth: document.body.scrollWidth, bodyHeight: document.body.scrollHeight,
+                sliderMin: Number(document.getElementById("poster-zoom").min),
+            };
+        }""")
+
+    async def set_zoom(self, value: str) -> None:
+        await self.page.locator("#poster-zoom").evaluate("""(slider, value) => {
+            slider.value = value === "fit" ? slider.min : value;
+            slider.dispatchEvent(new Event("input", {bubbles: true}));
+        }""", value)
+
+    async def test_editor_viewport_zoom_and_fit_for_all_templates(self) -> None:
+        for template in posters.TEMPLATES:
+            with self.subTest(template=template):
+                await self.page.set_viewport_size({"width": 900, "height": 700})
+                await self.editor(template)
+                full = await self.dimensions()
+                self.assertAlmostEqual(full["canvasWidth"], DRAFT.inches[0] * 96, delta=0.1)
+                self.assertAlmostEqual(full["top"], full["menuBottom"], delta=0.1)
+                self.assertAlmostEqual(full["bottom"], full["controlsTop"], delta=0.1)
+                self.assertAlmostEqual(full["controlsBottom"], 700, delta=0.1)
+                self.assertAlmostEqual(full["width"], 900, delta=0.1)
+                self.assertEqual(full["bodyWidth"], 900)
+                self.assertEqual(full["bodyHeight"], 700)
+                title_width = await self.page.locator("#title").evaluate("element => element.offsetWidth")
+                await self.set_zoom("fit")
+                fit = await self.dimensions()
+                self.assertLessEqual(fit["scrollWidth"], fit["clientWidth"] + 1)
+                self.assertLessEqual(fit["scrollHeight"], fit["clientHeight"] + 1)
+                self.assertAlmostEqual(
+                    fit["canvasWidth"] / full["canvasWidth"], fit["sliderMin"] / 100, delta=1e-6,
+                )
+                self.assertEqual(
+                    await self.page.locator("#title").evaluate("element => element.offsetWidth"),
+                    title_width,
+                )
+                await self.set_zoom("50")
+                halfway = await self.dimensions()
+                self.assertAlmostEqual(halfway["canvasWidth"], full["canvasWidth"] / 2, delta=0.1)
+                await self.set_zoom("100")
+                self.assertAlmostEqual(
+                    (await self.dimensions())["canvasWidth"], full["canvasWidth"], delta=0.1,
+                )
+
+    async def test_fit_tracks_viewport_menu_and_content_resizing(self) -> None:
+        await self.editor()
+        await self.set_zoom("fit")
+        for width, height in ((360, 500), (1100, 800)):
+            await self.page.set_viewport_size({"width": width, "height": height})
+            await self.page.wait_for_timeout(100)
+            dimensions = await self.dimensions()
+            self.assertAlmostEqual(dimensions["top"], dimensions["menuBottom"], delta=0.1)
+            self.assertAlmostEqual(dimensions["bottom"], dimensions["controlsTop"], delta=0.1)
+            self.assertLessEqual(dimensions["scrollWidth"], dimensions["clientWidth"] + 1)
+            self.assertLessEqual(dimensions["scrollHeight"], dimensions["clientHeight"] + 1)
+        previous = (await self.dimensions())["sliderMin"]
+        await self.page.locator("#layout").evaluate("element => element.style.height = '6000px'")
+        await self.page.wait_for_timeout(100)
+        dimensions = await self.dimensions()
+        self.assertLess(dimensions["sliderMin"], previous)
+        self.assertLessEqual(dimensions["scrollHeight"], dimensions["clientHeight"] + 1)
+
+    async def test_header_measurement_handles_nested_zoom_canvas(self) -> None:
+        await self.editor()
+        await self.set_zoom("fit")
+        widths = await balance_header_widths(await self.page.content(), DRAFT.inches[0] * 96)
+        self.assertEqual(widths, {"#title": 100, "#authors": 100})
+
+    async def test_small_poster_is_not_enlarged_and_slider_is_disabled(self) -> None:
+        await self.editor()
+        await self.page.locator("#poster-canvas").evaluate("""element => {
+            element.style.width = "300px";
+            element.style.minHeight = "100px";
+            element.querySelector("#layout").style.display = "none";
+        }""")
+        await self.page.wait_for_function(
+            "() => document.getElementById('poster-zoom').disabled",
+        )
+        self.assertEqual((await self.dimensions())["sliderMin"], 100)
+        self.assertAlmostEqual((await self.dimensions())["canvasWidth"], 300, delta=0.1)

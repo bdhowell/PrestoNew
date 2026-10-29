@@ -74,8 +74,14 @@ class LayoutRouteTests(unittest.TestCase):
                 self.assertEqual(document.get_element_by_id("authors").get("style"), "width: 90.000000%")
                 self.assertAlmostEqual(self.balancer.await_args.args[1], DRAFT.inches[0] * 96)
                 self.assertEqual(
-                    document.find("body").get("style"), f"width: {DRAFT.inches[0] * 96:.6f}px",
+                    document.get_element_by_id("poster-canvas").get("style"),
+                    f"width: {DRAFT.inches[0] * 96:.6f}px; min-height: {DRAFT.inches[1] * 96:.6f}px",
                 )
+                self.assertIsNone(document.find("body").get("style"))
+                self.assertTrue(document.xpath('//*[@id="poster-container"]//*[@id="poster-header"]'))
+                self.assertTrue(document.xpath('//*[@id="poster-container"]//*[@id="layout"]'))
+                self.assertEqual(document.get_element_by_id("controls").getparent().tag, "body")
+                self.assertTrue(document.xpath('//script[@src="/static/javascript/layout-zoom.js"]'))
 
     def test_browser_render_failure_is_reported_explicitly(self) -> None:
         self.balancer.side_effect = routes.PlaywrightError("Chromium unavailable")

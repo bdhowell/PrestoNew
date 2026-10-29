@@ -1,8 +1,7 @@
 {% include "layouthead.html" %}
-    <div class="layout">
+    <div id="layout" class="layout">
         <div id="pane0" class="pane" data-sections="introduction,methods"></div>
         <div id="pane1" class="pane" data-sections="results" data-horizontal-resize="pane0,pane2" data-resize-affordance="left,right"></div>
         <div id="pane2" class="pane vertical" data-sections="conclusions,citations|acknowledgements|information"></div>
     </div>
-</body>
-</html>
+{% include "layoutfoot.html" %}

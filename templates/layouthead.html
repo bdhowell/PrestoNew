@@ -15,10 +15,14 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Aladin&family=Flamenco:wght@300;400&family=Google+Sans+Code:ital,wght,MONO@0,300..800,1;1,300..800,1&family=IBM+Plex+Mono:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;1,100;1,200;1,300;1,400;1,500;1,600;1,700&family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Montserrat:ital,wght@0,100..900;1,100..900&family=Open+Sans:ital,wght@0,300..800;1,300..800&family=Oswald:wght@200..700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Source+Code+Pro:ital,wght@0,200..900;1,200..900&family=Source+Sans+3:ital,wght@0,200..900;1,200..900&family=Space+Grotesk:wght@300..700&family=Unkempt:wght@400;700&family=Winky+Sans:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">    <script src="https://kit.fontawesome.com/938fc9d55b.js" crossorigin="anonymous"></script>
     {% include "page_assets.html" %}
+    <script src="/static/javascript/layout-zoom.js" defer></script>
 </head>
 <body class="{{ theme }} {{ fonts }}">
     {% include "menu.html" %}
-    <div class="poster-header">
+    <div id="poster-container" tabindex="0" aria-label="Scrollable poster">
+      <div id="poster-stage">
+       <div id="poster-canvas">
+    <div id="poster-header" class="poster-header">
         <div class="logo-title">
             <div id="logo" class="pane"></div>
             <div id="title" class="pane title" data-sections="title"></div>

@@ -122,11 +122,9 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
                 if len(body) and body[0].tag in ("h2", "h3"):
                     body.text = (body.text or "") + (body[0].tail or "")
                     body.remove(body[0])
-    width, _ = poster.inches
-    body = document.find("body")
-    if body is None:
-        raise ValueError("Poster document has no body")
-    body.set("style", f"width: {width * 96:.6f}px")
+    width, height = poster.inches
+    canvas = document.get_element_by_id("poster-canvas")
+    canvas.set("style", f"width: {width * 96:.6f}px; min-height: {height * 96:.6f}px")
     rendered = etree.tostring(document, method="html", encoding="unicode", doctype="<!DOCTYPE html>")
     widths = await balance_header_widths(rendered, width * 96)
     for selector, percentage in widths.items():

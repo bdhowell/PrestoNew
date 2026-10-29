@@ -33,9 +33,15 @@ async def balance_header_widths(rendered: str, width: float) -> dict[str, float]
     body = document.find("body")
     if body is None:
         raise ValueError("Poster document has no body")
+    headers = document.find_class("poster-header")
+    if not headers:
+        raise ValueError("Poster document has no header")
+    header = headers[0]
+    header.getparent().remove(header)
     for child in list(body):
-        if "poster-header" not in child.get("class", "").split():
-            body.remove(child)
+        body.remove(child)
+    body.append(header)
+    body.set("style", f"{body.get('style', '')}; width: {width}px")
     for image in body.xpath(".//img"):
         image.getparent().remove(image)
     for link in document.xpath("//link"):

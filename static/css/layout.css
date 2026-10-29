@@ -21,6 +21,53 @@ body {
     color: var(--text-color);
     font-family: var(--body-font-face);
     line-height: 1.6;
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+body > .basic-menu {
+    flex: none;
+}
+
+#poster-container {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    overflow: auto;
+}
+
+#poster-stage {
+    position: relative;
+    overflow: hidden;
+}
+
+#poster-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: top left;
+}
+
+#controls {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0.35rem 0.75rem;
+    font: 0.875rem/1.5 system-ui, sans-serif;
+}
+
+#poster-zoom {
+    width: min(12rem, 45vw);
+}
+
+#poster-zoom-value {
+    min-width: 4.5rem;
+    text-align: right;
 }
 
 .layout {
