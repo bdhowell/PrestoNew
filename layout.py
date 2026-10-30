@@ -172,7 +172,7 @@ async def edit_layout(
         poster = await posters.store().get(uid, selected_pid)
     except psycopg.Error:
         logger.exception("Could not load poster layout for poster %s", selected_pid)
-        raise HTTPException(503, "Your poster could not be loaded. Please try again.") from None
+        raise HTTPException(503, "Your poster could not be loaded.") from None
     if poster is None:
         if pid is not None:
             raise HTTPException(404, "Poster not found")
@@ -191,7 +191,7 @@ async def edit_layout(
         rendered = await layout(template, poster.pid, uid=uid, request=request)
     except (psycopg.Error, PlaywrightError, OSError, ValueError):
         logger.exception("Could not render poster %s", poster.pid)
-        raise HTTPException(503, "Your layout could not be loaded. Please try again.") from None
+        raise HTTPException(503, "Your layout could not be loaded.") from None
     return HTMLResponse(rendered, headers=PRIVATE)
 
 
@@ -212,7 +212,7 @@ async def update_content(request: Request) -> JSONResponse:
         )
     except psycopg.Error:
         logger.exception("Could not save poster section %s", which)
-        raise HTTPException(503, "Your changes could not be saved. Please try again.") from None
+        raise HTTPException(503, "Your changes could not be saved.") from None
     if not saved:
         raise HTTPException(409, "This poster can no longer be edited.")
     return JSONResponse({"ok": True})
@@ -232,7 +232,7 @@ async def update_theme(request: Request) -> JSONResponse:
         saved = await posters.store().set_theme(uid_for(request), poster.pid, theme)
     except psycopg.Error:
         logger.exception("Could not save poster theme for poster %s", pid)
-        raise HTTPException(503, "Your theme could not be saved. Please try again.") from None
+        raise HTTPException(503, "Your theme could not be saved.") from None
     if not saved:
         raise HTTPException(409, "This poster can no longer be edited.")
     return JSONResponse({"ok": True})
