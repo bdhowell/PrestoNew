@@ -73,6 +73,17 @@ class LayoutRouteTests(unittest.TestCase):
             ["materials and methods"],
         )
 
+    def test_section_headings_use_full_names(self) -> None:
+        document = html.fromstring(self.client.get("/layout/layout").text)
+        self.assertEqual(
+            document.xpath('//*[@id="methods"]//div[@class="header"]/text()'),
+            ["Materials and Methods"],
+        )
+        self.assertEqual(
+            document.xpath('//*[@id="citations"]//div[@class="header"]/text()'),
+            ["Literature Cited"],
+        )
+
     def test_section_content_is_saved_to_its_database_section(self) -> None:
         self.store.save_section.return_value = True
         response = self.client.post(

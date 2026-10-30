@@ -122,7 +122,10 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
                     attrib={"class": "section vertical" if vertical else "section"},
                 )
                 heading = etree.SubElement(section, "div", attrib={"class": "header"})
-                heading.text = item.title()
+                heading.text = {
+                    "methods": "Materials and Methods",
+                    "citations": "Literature Cited",
+                }.get(item, item.title())
                 body = etree.SubElement(
                     section, "div", attrib={
                         "class": "content",
