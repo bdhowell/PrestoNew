@@ -213,7 +213,15 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         colors = await self.page.locator(".theme-preview").evaluate_all("""previews =>
             previews.map(preview => getComputedStyle(preview).backgroundColor)""")
         self.assertEqual(len(set(colors)), len(colors))
-        await self.page.locator("input[value='greens']").check()
+        await self.page.locator(".theme-preview.greens").click()
+        self.assertTrue(await self.page.locator("input[value='greens']").is_checked())
+        self.assertEqual(await self.page.locator("input[value='greens']").evaluate(
+            "input => getComputedStyle(input).clipPath",
+        ), "inset(50%)")
+        await self.page.locator("input[value='greens']").focus()
+        await self.page.keyboard.press("ArrowLeft")
+        self.assertTrue(await self.page.locator("input[value='reds']").is_checked())
+        await self.page.locator(".theme-preview.greens").click()
         self.assertEqual(await self.page.locator("body").get_attribute("class"), "blues technical")
         await self.page.locator("#theme-apply").click()
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
@@ -232,7 +240,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         ])
         await self.page.locator("#theme").click()
         self.assertTrue(await self.page.locator("input[value='greens']").is_checked())
-        await self.page.locator("input[value='reds']").check()
+        await self.page.locator(".theme-preview.reds").click()
         await self.page.keyboard.press("Escape")
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
         self.assertEqual(await self.page.locator("body").get_attribute("class"), "technical greens")
@@ -259,7 +267,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.page.locator("#theme-dialog").evaluate(
             "dialog => dialog.scrollWidth <= dialog.clientWidth",
         ))
-        await self.page.locator("input[value='reds']").check()
+        await self.page.locator(".theme-preview.reds").click()
         await self.page.locator("#theme-apply").click()
         self.assertTrue(await self.page.locator("#theme-dialog").is_visible())
         self.assertIn("Storage unavailable.", await self.page.locator("#theme-status").inner_text())

@@ -393,6 +393,7 @@ body > .basic-menu {
     --border-radius: 0;
     --border-color: initial;
     --text-color: initial;
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -400,6 +401,17 @@ body > .basic-menu {
     border: 2px solid #ddd;
     border-radius: 0.5rem;
     cursor: pointer;
+}
+
+.theme-option input[type="radio"] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
 }
 
 .theme-option:has(input:checked) {

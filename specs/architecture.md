@@ -1167,7 +1167,9 @@ Implementation contract:
 - Stored section HTML is sanitized with the same allowlist as poster previews.
 - The layout toolbar's Theme button opens a modal dialog listing the installed
   themes from `themes.css`. Each option previews a section on its poster background
-  using the renderer's section styles and the current fonts. Cancel or Escape
+  using the renderer's section styles and the current fonts. Preview cards are
+  clickable selectors; visually hidden radios preserve keyboard selection and
+  accessible names, with card outlines indicating focus and selection. Cancel or Escape
   discards the selection. Apply saves via `POST /layout/theme` with an explicit
   poster ID and installed theme name, then updates only the body's theme class.
   Saving enforces same-origin requests, ownership, and draft status, invalidates
