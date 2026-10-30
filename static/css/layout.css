@@ -20,7 +20,7 @@ body {
     background-color: black;
     color: var(--text-color);
     font-family: var(--body-font-face);
-    font-size: 2rem;
+    font-size: 1.2rem;
     line-height: 1.6;
     height: 100vh;
     height: 100dvh;
@@ -67,15 +67,62 @@ body > .basic-menu {
 #controls {
     flex: none;
     display: flex;
+    flex-wrap: wrap;
+    background: #2f2766;
+    border-top: 2px solid black;
+    color: white;
     align-items: center;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    padding: 0.35rem 0.75rem;
-    font: 0.875rem/1.5 system-ui, sans-serif;
+    justify-content: flex-start;
+    gap: 0.75rem;
+    min-height: 4rem;
+    padding: 0.875rem 1rem;
+    font: 1rem/1.5 system-ui, sans-serif;
+}
+
+#editor-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem;
+    margin-right: auto;
+    min-width: 0;
+}
+
+#editor-controls button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    border: 1px solid #8e85c2;
+    border-radius: 0.5rem;
+    background: #443a80;
+    color: #fff;
+    font: 1.125rem/1 system-ui, sans-serif;
+    cursor: pointer;
+}
+
+#editor-controls button.gap {
+    margin-left: 0.5rem;
+}
+
+#editor-controls button:hover {
+    background: #5b4e9e;
+    border-color: #c4bdeb;
+}
+
+#editor-controls button:active {
+    background: #211a4d;
+}
+
+#editor-controls button:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 3px;
 }
 
 #poster-zoom {
     width: min(12rem, 45vw);
+    accent-color: #c4bdeb;
 }
 
 #poster-zoom-value {

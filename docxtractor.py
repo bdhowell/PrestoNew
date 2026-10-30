@@ -45,7 +45,8 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, BinaryIO, Callable
+from typing import Any, BinaryIO
+from collections.abc import Callable
 from uuid import uuid4
 
 SUPPORTED = {'.pdf', '.docx', '.pptx', '.xlsx', '.xlsm', '.md', '.pages', '.numbers', '.key'}
@@ -85,7 +86,9 @@ def _reference_key(match: re.Match) -> tuple[str, str]:
 
 
 def _build_manifest(document: Any, directory: Path) -> dict[str, Any]:
-    from docling_core.types.doc import PictureItem, TableItem, TextItem
+    from docling_core.types.doc.items.picture.picture import PictureItem
+    from docling_core.types.doc.items.table.table import TableItem
+    from docling_core.types.doc.items.text import TextItem
 
     elements: list[dict[str, Any]] = []
     source_texts: list[dict[str, Any]] = []

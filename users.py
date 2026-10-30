@@ -139,7 +139,7 @@ class UserStore:
                         username    TEXT NOT NULL UNIQUE,
                         email       TEXT NOT NULL UNIQUE,
                         password    TEXT NOT NULL,
-                        superuser   INTEGER NOT NULL DEFAULT 0 CHECK (superuser IN (0, 1)),
+                        superuser   BOOLEAN NOT NULL DEFAULT FALSE,
                         pwd_updated TIMESTAMPTZ NOT NULL,
                         recovery    TIMESTAMPTZ,
                         created     TIMESTAMPTZ NOT NULL,
