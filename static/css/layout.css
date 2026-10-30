@@ -387,7 +387,8 @@ body > .basic-menu {
     margin-top: 1rem;
 }
 
-#theme-dialog {
+#theme-dialog,
+#font-dialog {
     margin: auto;
     width: min(58rem, calc(100% - 2rem));
     max-height: calc(100dvh - 2rem);
@@ -399,18 +400,21 @@ body > .basic-menu {
     font: 1rem/1.5 system-ui, sans-serif;
 }
 
-#theme-dialog::backdrop {
+#theme-dialog::backdrop,
+#font-dialog::backdrop {
     background: rgb(0 0 0 / 65%);
 }
 
-#theme-options {
+#theme-options,
+#font-options {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
     gap: 1rem;
     border: 0;
 }
 
-#theme-options legend {
+#theme-options legend,
+#font-options legend {
     margin-bottom: 0.5rem;
     font-weight: 600;
 }
@@ -480,7 +484,30 @@ body > .basic-menu {
     margin-top: 0.5rem;
 }
 
-#theme-status {
+.font-preview {
+    display: block;
+    flex: 1;
+    padding: 1rem;
+    background: #f5f5f5;
+    color: #222;
+    font-family: var(--body-font-face);
+}
+
+.font-preview .header {
+    font-size: 1.25rem;
+}
+
+.font-preview .content {
+    display: block;
+    margin: 0.5rem 0;
+}
+
+.font-preview code {
+    font-family: var(--monospace-font-face);
+}
+
+#theme-status,
+#font-status {
     margin-top: 1rem;
 }
 

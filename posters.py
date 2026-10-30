@@ -381,6 +381,22 @@ class PosterStore:
         self.invalidate(uid, pid)
         return saved
 
+    async def set_fonts(self, uid: int, pid: int, fonts: str) -> bool:
+        if fonts not in installed_fonts():
+            raise ValueError("Unknown poster font set")
+        self.invalidate(uid, pid)
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "UPDATE poster p SET fonts = %s, updated = now() "
+                "WHERE p.uid = %s AND p.pid = %s AND NOT EXISTS "
+                "(SELECT 1 FROM purchase b WHERE b.pid = p.pid) RETURNING p.pid",
+                (fonts, uid, pid),
+            )
+            saved = await cursor.fetchone() is not None
+        self.invalidate(uid, pid)
+        return saved
+
     async def set_dimensions(
         self, uid: int, pid: int, width: float, height: float, units: str,
     ) -> bool:

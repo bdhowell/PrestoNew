@@ -33,6 +33,7 @@ On-going chats are stored in Postgres to allow review and continuation between s
 
 ### Layout and composition
 
+- The Font toolbar button opens a dialog with heading, body, and code previews for each installed font set. Apply saves the selection to the draft poster; Cancel leaves it unchanged.
 - Content blocks can be dragged between regions on a poster.
 - Blocks can be resized from the left, right, or bottom, with snapping to common panel proportions.
 - Layout adjustments are automatic, and alignment cues briefly appear when items line up.

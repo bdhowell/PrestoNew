@@ -176,6 +176,59 @@ class LayoutRouteTests(unittest.TestCase):
         document = html.fromstring(self.client.get("/layout/edit?pid=11").text)
         self.assertIn("greens", document.find("body").get("class").split())
 
+    def test_font_dialog_lists_installed_sets_and_saves_current_poster(self) -> None:
+        document = html.fromstring(self.client.get("/layout/edit").text)
+        self.assertEqual(
+            document.xpath('//*[@id="font-options"]//input/@value'),
+            posters.installed_fonts(),
+        )
+        self.assertEqual(document.get_element_by_id("font-dialog").get("data-pid"), "11")
+        self.assertEqual(document.get_element_by_id("font").get("aria-controls"), "font-dialog")
+        for option in posters.installed_fonts():
+            preview = document.xpath(f'//*[@id="font-options"]//span[@class="font-preview {option}"]')
+            self.assertEqual(len(preview), 1)
+            self.assertTrue(preview[0].xpath('.//span[@class="header"]'))
+            self.assertTrue(preview[0].xpath('.//span[@class="content"]'))
+            self.assertTrue(preview[0].xpath(".//code"))
+        self.store.set_fonts.return_value = True
+        self.session["poster_id"] = 99
+        response = self.client.post("/layout/fonts", json={"pid": 11, "fonts": "technical"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        self.store.set_fonts.assert_awaited_once_with(7, 11, "technical")
+        self.store.get.return_value = replace(DRAFT, theme="blues", fonts="technical")
+        document = html.fromstring(self.client.get("/layout/edit?pid=11").text)
+        self.assertEqual(document.find("body").get("class").split(), ["blues", "technical"])
+
+    def test_font_save_rejects_invalid_unowned_and_purchased_posters(self) -> None:
+        for data in (
+            {"pid": 11, "fonts": "missing"}, {"pid": 11, "fonts": ["modern"]},
+            {"pid": True, "fonts": "modern"}, {"fonts": "modern"},
+            {"pid": 0, "fonts": "modern"}, {"pid": 11},
+        ):
+            with self.subTest(data=data):
+                self.assertEqual(self.client.post("/layout/fonts", json=data).status_code, 422)
+        data = {"pid": 11, "fonts": "modern"}
+        self.assertEqual(self.client.post(
+            "/layout/fonts", json=data, headers={"Origin": "https://elsewhere.test"},
+        ).status_code, 403)
+        self.uid = None
+        self.assertEqual(self.client.post("/layout/fonts", json=data).status_code, 401)
+        self.uid = 7
+        self.store.get.return_value = None
+        self.assertEqual(self.client.post("/layout/fonts", json=data).status_code, 404)
+        self.store.get.return_value = replace(DRAFT, purchased=True)
+        self.assertEqual(self.client.post("/layout/fonts", json=data).status_code, 409)
+        self.store.set_fonts.assert_not_awaited()
+
+    def test_font_save_reports_storage_errors_and_conflicts(self) -> None:
+        data = {"pid": 11, "fonts": "modern"}
+        self.store.set_fonts.return_value = False
+        self.assertEqual(self.client.post("/layout/fonts", json=data).status_code, 409)
+        self.store.set_fonts.side_effect = psycopg.OperationalError("offline")
+        with self.assertLogs("layout", "ERROR"):
+            self.assertEqual(self.client.post("/layout/fonts", json=data).status_code, 503)
+
     def test_theme_save_rejects_invalid_unowned_and_purchased_posters(self) -> None:
         for data in (
             {"pid": 11, "theme": "missing"}, {"pid": 11, "theme": ["basic"]},

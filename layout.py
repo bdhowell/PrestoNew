@@ -93,6 +93,7 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
         theme=poster.theme if poster.theme in posters.installed_themes() else "",
         fonts=poster.fonts if poster.fonts in posters.installed_fonts() else "",
         themes=posters.installed_themes(),
+        font_sets=posters.installed_fonts(),
     )
     document = dom.document_fromstring(raw)
     if poster.logo:
@@ -213,6 +214,26 @@ async def update_content(request: Request) -> JSONResponse:
     except psycopg.Error:
         logger.exception("Could not save poster section %s", which)
         raise HTTPException(503, "Your changes could not be saved.") from None
+    if not saved:
+        raise HTTPException(409, "This poster can no longer be edited.")
+    return JSONResponse({"ok": True})
+
+
+@router.post("/fonts")
+async def update_fonts(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    fonts = data.get("fonts")
+    pid = data.get("pid")
+    if not isinstance(fonts, str) or fonts not in posters.installed_fonts():
+        raise HTTPException(422, "Choose an installed poster font set.")
+    if type(pid) is not int or pid <= 0:
+        raise HTTPException(422, "Choose a valid poster.")
+    try:
+        poster = await owned(request, pid, draft=True)
+        saved = await posters.store().set_fonts(uid_for(request), poster.pid, fonts)
+    except psycopg.Error:
+        logger.exception("Could not save poster font set for poster %s", pid)
+        raise HTTPException(503, "Your font set could not be saved.") from None
     if not saved:
         raise HTTPException(409, "This poster can no longer be edited.")
     return JSONResponse({"ok": True})

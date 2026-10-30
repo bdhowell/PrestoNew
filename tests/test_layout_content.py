@@ -1,7 +1,10 @@
 import unittest
 from pathlib import Path
 
+from jinja2 import Environment
 from playwright.async_api import async_playwright
+
+import posters
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -14,6 +17,102 @@ FORMATTING = {
     "subscript": "sub",
     "code": "code",
 }
+
+
+class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        playwright = await async_playwright().start()
+        self.addAsyncCleanup(playwright.stop)
+        browser = await playwright.chromium.launch()
+        self.addAsyncCleanup(browser.close)
+        self.page = await browser.new_page()
+        await self.page.route(
+            "https://presto.test/**", lambda route: route.fulfill(body="<!doctype html>"),
+        )
+        await self.page.goto("https://presto.test/")
+        footer = Environment(autoescape=True).from_string(
+            (ROOT / "templates/layoutfoot.html").read_text(),
+        ).render(poster={"pid": 11}, themes=posters.installed_themes(),
+                 font_sets=posters.installed_fonts())
+        await self.page.set_content('<body class="blues elegant">' + footer)
+        for stylesheet in ("layout", "fonts", "themes"):
+            await self.page.add_style_tag(path=str(ROOT / f"static/css/{stylesheet}.css"))
+        await self.page.evaluate("""() => {
+            window.savedRequests = [];
+            window.fetch = async (url, options) => {
+                window.savedRequests.push({url, data: JSON.parse(options.body)});
+                return {ok: true, json: async () => ({ok: true})};
+            };
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-theme.js"))
+
+    async def test_cancel_escape_and_apply_preserve_other_appearance_setting(self) -> None:
+        for button, setting, current, target, other in (
+            ("font", "fonts", "elegant", "technical", "blues"),
+            ("theme", "theme", "blues", "greens", "technical"),
+        ):
+            with self.subTest(button=button):
+                await self.page.locator(f"#{button}").click()
+                self.assertTrue(await self.page.locator(f'input[value="{current}"]').is_checked())
+                await self.page.locator(f'label:has(input[value="{target}"])').click()
+                await self.page.locator(f"#{button}-cancel").click()
+                self.assertEqual(await self.page.evaluate("window.savedRequests.length"), 0)
+                self.assertIn(current, (await self.page.locator("body").get_attribute("class")).split())
+                await self.page.locator(f"#{button}").click()
+                self.assertTrue(await self.page.locator(f'input[value="{current}"]').is_checked())
+                await self.page.keyboard.press("Escape")
+                self.assertFalse(await self.page.locator(f"#{button}-dialog").is_visible())
+                await self.page.locator(f"#{button}").click()
+                await self.page.locator(f'label:has(input[value="{target}"])').click()
+                await self.page.locator(f"#{button}-apply").click()
+                await self.page.wait_for_function(
+                    f"!document.getElementById('{button}-dialog').open",
+                )
+                self.assertEqual(
+                    set((await self.page.locator("body").get_attribute("class")).split()),
+                    {target, other},
+                )
+                self.assertEqual(await self.page.evaluate("window.savedRequests.pop()"), {
+                    "url": f"/layout/{setting}", "data": {"pid": 11, setting: target},
+                })
+
+    async def test_failed_save_stays_open_and_can_be_retried(self) -> None:
+        await self.page.evaluate("""() => {
+            window.fetch = async () => ({
+                ok: false, json: async () => ({detail: 'Storage unavailable.'})
+            });
+        }""")
+        await self.page.locator("#font").click()
+        await self.page.locator('label:has(input[value="modern"])').click()
+        await self.page.locator("#font-apply").click()
+        self.assertEqual(
+            await self.page.locator("#font-status").inner_text(),
+            "Storage unavailable. Please try again.",
+        )
+        self.assertTrue(await self.page.locator("#font-dialog").is_visible())
+        self.assertTrue(await self.page.locator("#font-apply").is_enabled())
+        self.assertEqual(await self.page.locator("body").get_attribute("class"), "blues elegant")
+        await self.page.evaluate("""() => {
+            window.fetch = async () => ({ok: true, json: async () => ({ok: true})});
+        }""")
+        await self.page.locator("#font-apply").click()
+        await self.page.wait_for_function("!document.getElementById('font-dialog').open")
+        self.assertEqual(await self.page.locator("body").get_attribute("class"), "blues modern")
+
+    async def test_font_previews_use_their_own_fonts_and_fit_small_screens(self) -> None:
+        await self.page.locator("#font").click()
+        for option in posters.installed_fonts():
+            fonts = await self.page.locator(f".font-preview.{option}").evaluate("""element => ({
+                body: getComputedStyle(element).fontFamily,
+                heading: getComputedStyle(element.querySelector('.header')).fontFamily,
+                code: getComputedStyle(element.querySelector('code')).fontFamily,
+            })""")
+            self.assertEqual(len(set(fonts.values())), 3)
+        await self.page.set_viewport_size({"width": 360, "height": 640})
+        bounds = await self.page.locator("#font-dialog").bounding_box()
+        self.assertGreaterEqual(bounds["x"], 0)
+        self.assertLessEqual(bounds["x"] + bounds["width"], 360)
+        self.assertLessEqual(bounds["height"], 640)
 
 
 class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
@@ -36,6 +135,7 @@ class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.page.evaluate("""() => {
             document.getElementById('theme-dialog').remove();
+            document.getElementById('font-dialog').remove();
             window.savedRequests = [];
             window.fetch = async (url, options) => {
                 window.savedRequests.push(JSON.parse(options.body));

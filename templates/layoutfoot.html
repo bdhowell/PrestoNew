@@ -7,25 +7,25 @@
             <button id="bold" aria-label="Bold" title="Bold"><i class="fa-solid fa-bold"></i></button>
             <button id="italic" aria-label="Italic" title="Italic"><i class="fa-solid fa-italic"></i></button>
             <button id="underline" aria-label="Underline" title="Underline"><i class="fa-solid fa-underline"></i></button>
-            <button id="strikethrough" aria-label="Strikethrough" title="Strikethrough"><i class="fa-solid fa-strikethrough"></i></button> |
-            <button id="extended" aria-label="Extended controls" title="More text settings" aria-expanded="false" aria-controls="extended-controls"><i class="fa-solid fa-ellipsis-vertical"></i></button> |
+            <button id="strikethrough" aria-label="Strikethrough" title="Strikethrough"><i class="fa-solid fa-strikethrough"></i></button>
+            <button id="plaintext" aria-label="Plain Text" title="Plain Text"><i class="fa-solid fa-text-slash"></i></button>
+            | <button id="extended" aria-label="Extended controls" title="More text settings" aria-expanded="false" aria-controls="extended-controls"><i class="fa-solid fa-ellipsis-vertical"></i></button>
             <div id="extended-controls" class="extended-controls" role="group" aria-label="Extended text controls" hidden>
-                <button id="code" aria-label="Code" title="Code"><i class="fa-solid fa-code"></i></button>
+                <button id="code" aria-label="Code" title="Code"><i class="fa-solid fa-code"></i></button> 
                 <button id="superscript" aria-label="Superscript" title="Superscript"><i class="fa-solid fa-superscript"></i></button>
                 <button id="subscript" aria-label="Subscript" title="Subscript"><i class="fa-solid fa-subscript"></i></button>
                 <button id="ullist" aria-label="Unordered List" title="Unordered List"><i class="fa-solid fa-list-ul"></i></button>
-                <button id="ollist" aria-label="Ordered List" title="Ordered List"><i class="fa-solid fa-list-ol"></i></button> |
-                <button id="plaintext" aria-label="Plain Text" title="Plain Text"><i class="fa-solid fa-text-slash"></i></button>
+                <button id="ollist" aria-label="Ordered List" title="Ordered List"><i class="fa-solid fa-list-ol"></i></button>
             </div>
-            <button id="cut" aria-label="Cut" title="Cut"><i class="fa-solid fa-cut"></i></button>
+            | <button id="cut" aria-label="Cut" title="Cut"><i class="fa-solid fa-cut"></i></button>
             <button id="copy" aria-label="Copy" title="Copy"><i class="fa-solid fa-copy"></i></button>
-            <button id="paste" aria-label="Paste" title="Paste"><i class="fa-solid fa-paste"></i></button> |
-            <button id="image" aria-label="Image" title="Image"><i class="fa-solid fa-image"></i></button>
+            <button id="paste" aria-label="Paste" title="Paste"><i class="fa-solid fa-paste"></i></button>
+            | <button id="image" aria-label="Image" title="Image"><i class="fa-solid fa-image"></i></button>
             <button id="chart-line" aria-label="Chart" title="Chart"><i class="fa-solid fa-chart-line"></i></button>
-            <button id="square-root-variable" aria-label="Formula" title="Formula"><i class="fa-solid fa-square-root-variable"></i></button>  |
-            <button id="font" aria-label="Font" title="Font"><i class="fa-solid fa-font"></i></button>
-            <button id="theme" aria-label="Theme" title="Theme" aria-haspopup="dialog" aria-controls="theme-dialog"><i class="fa-solid fa-palette"></i></button> |
-            <button id="undo" aria-label="Undo" title="Undo"><i class="fa-solid fa-arrow-rotate-left"></i></button>
+<!--            <button id="square-root-variable" aria-label="Formula" title="Formula"><i class="fa-solid fa-square-root-variable"></i></button> -->
+            | <button id="font" aria-label="Font" title="Font" aria-haspopup="dialog" aria-controls="font-dialog"><i class="fa-solid fa-font"></i></button>
+            <button id="theme" aria-label="Theme" title="Theme" aria-haspopup="dialog" aria-controls="theme-dialog"><i class="fa-solid fa-palette"></i></button>
+            | <button id="undo" aria-label="Undo" title="Undo"><i class="fa-solid fa-arrow-rotate-left"></i></button>
             <button id="redo" aria-label="Redo" title="Redo"><i class="fa-solid fa-arrow-rotate-right"></i></button>
             <output id="content-save-status" role="status" aria-live="polite"></output>
         </div>
@@ -36,6 +36,33 @@
             <output id="poster-zoom-value" for="poster-zoom">100%</output>
         </div>
     </div>
+    <dialog id="font-dialog" aria-labelledby="font-dialog-title" data-pid="{{ poster.pid }}">
+        <form id="font-form">
+            <h2 id="font-dialog-title">Choose a font set</h2>
+            <p>Preview heading, body, and code text in each font set.</p>
+            <fieldset id="font-options">
+                <legend>Available font sets</legend>
+                {% for option in font_sets %}
+                <label class="theme-option">
+                    <span class="theme-option-name">
+                        <input type="radio" name="fonts" value="{{ option }}" required>
+                        {{ option | capitalize }}
+                    </span>
+                    <span class="font-preview {{ option }}" aria-hidden="true">
+                        <span class="header">Research findings</span>
+                        <span class="content">Explore the results of our latest experiment.</span>
+                        <code>results = analyze(data)</code>
+                    </span>
+                </label>
+                {% endfor %}
+            </fieldset>
+            <p id="font-status" role="status" aria-live="polite"></p>
+            <div class="theme-dialog-actions">
+                <button id="font-cancel" type="button">Cancel</button>
+                <button id="font-apply" type="submit">Apply font set</button>
+            </div>
+        </form>
+    </dialog>
     <dialog id="theme-dialog" aria-labelledby="theme-dialog-title" data-pid="{{ poster.pid }}">
         <form id="theme-form">
             <h2 id="theme-dialog-title">Choose a theme</h2>
