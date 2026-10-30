@@ -454,6 +454,41 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 }""")
                 self.assertAlmostEqual(layout_bottom + bottom_margin, content_bottom, delta=1)
 
+    async def test_methods_clips_overflow_inside_its_pane_when_body_font_grows(self) -> None:
+        for template in posters.TEMPLATES:
+            await self.editor(template)
+            await self.page.locator("#methods .content").evaluate("""element => {
+                element.innerHTML = "<p>Detailed experimental methods and observations. </p>"
+                    .repeat(20);
+            }""")
+            for font_size in ("1.2rem", "2.0rem"):
+                for zoom in ("100", "fit"):
+                    with self.subTest(template=template, font_size=font_size, zoom=zoom):
+                        await self.page.locator("body").evaluate(
+                            "(element, size) => element.style.fontSize = size", font_size,
+                        )
+                        await self.set_zoom(zoom)
+                        bounds = await self.page.locator("#methods").evaluate("""section => {
+                            const pane = section.parentElement;
+                            return {
+                                bottom: section.getBoundingClientRect().bottom,
+                                resultsBottom: document.getElementById("results")
+                                    .getBoundingClientRect().bottom,
+                                paneBottom: pane.getBoundingClientRect().bottom,
+                                height: pane.clientHeight, scrollHeight: pane.scrollHeight,
+                                overflow: getComputedStyle(section).overflow,
+                                clipped: section.scrollHeight > section.clientHeight,
+                                fit: document.getElementById("poster-content").style.transform,
+                            };
+                        }""")
+                        self.assertAlmostEqual(bounds["bottom"], bounds["resultsBottom"], delta=1)
+                        self.assertAlmostEqual(bounds["bottom"], bounds["paneBottom"], delta=1)
+                        self.assertLessEqual(bounds["scrollHeight"], bounds["height"] + 1)
+                        self.assertEqual(bounds["overflow"], "hidden")
+                        if template == "arena":
+                            self.assertEqual(bounds["fit"], "scale(1)")
+                            self.assertEqual(bounds["clipped"], font_size == "2.0rem")
+
     async def test_panes_fill_grid_rows_and_horizontal_panes_anchor_to_bottom(self) -> None:
         for template in posters.TEMPLATES:
             for gutter in ("1rem", "6rem"):

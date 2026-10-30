@@ -20,7 +20,7 @@ body {
     background-color: black;
     color: var(--text-color);
     font-family: var(--body-font-face);
-    font-size: 1.2rem;
+    font-size: 2.0rem;
     line-height: 1.6;
     height: 100vh;
     height: 100dvh;
@@ -91,6 +91,7 @@ body > .basic-menu {
     gap: 0.375rem;
     margin-right: auto;
     min-width: 0;
+    color: #8e85c2;
 }
 
 #editor-controls button {
@@ -107,9 +108,9 @@ body > .basic-menu {
     cursor: pointer;
 }
 
-#editor-controls button.gap {
+/* #editor-controls button.gap {
     margin-left: 0.75rem;
-}
+} */
 
 #editor-controls button:hover {
     background: #5b4e9e;
@@ -229,9 +230,15 @@ body > .basic-menu {
     overflow: hidden;
 }
 
+#methods {
+    flex-shrink: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
 .header {
     font-family: var(--heading-font-face);
-    font-size: 3.5rem;
+    font-size: 3rem;
     display: flex;
     align-items: center;
     width: 100%;
@@ -239,6 +246,10 @@ body > .basic-menu {
 
 .header:empty {
     width: 0;
+}
+
+#poster-header {
+    margin-top: 1.5rem;
 }
 
 .poster-header {
@@ -281,9 +292,8 @@ body > .basic-menu {
 
 .authors {
     font-family: var(--heading-font-face);
-    font-size: 3rem;
+    font-size: 2.75rem;
     flex: 1;
-    line-height: 1.15;
     min-width: 0;
     text-align: center;
     overflow-wrap: anywhere;

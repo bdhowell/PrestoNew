@@ -1147,7 +1147,9 @@ Implementation contract:
   The inner `#poster-content` fills the area inside the margins and shrinks as
   needed to fit overflowing content, independently of viewport zoom. Non-horizontal
   panes stretch vertically, with sections and grouped sections sharing the
-  remaining height after gutters. Horizontal panes arrange sections in a row
+  remaining height after gutters. The Methods section can shrink within its pane
+  and clips excess text rather than growing into the gutter when body text is
+  enlarged. Horizontal panes arrange sections in a row
   anchored to the bottom of `#layout`, spanning all columns in a second grid row
   that takes 20% of the available layout height after subtracting the row gutter.
   The first row takes the remaining 80%. With a horizontal pane, the layout has
