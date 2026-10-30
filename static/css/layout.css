@@ -34,13 +34,17 @@ body > .basic-menu {
 }
 
 #poster-container {
+    display: flex;
     flex: 1;
     min-height: 0;
     width: 100%;
     overflow: auto;
+    overflow-anchor: none;
 }
 
 #poster-stage {
+    flex: none;
+    margin: auto;
     position: relative;
     overflow: hidden;
 }
@@ -137,9 +141,9 @@ body > .basic-menu {
 }
 
 #layout {
-    margin-right: calc(2 * var(--gutter));
-    margin-left: calc(2 * var(--gutter));
-    margin-bottom: calc(2 * var(--gutter));
+    margin-right: var(--gutter);
+    margin-left: var(--gutter);
+    margin-bottom: var(--gutter);
 }
 
 .pane {
@@ -228,8 +232,9 @@ body > .basic-menu {
 
 .authors {
     font-family: var(--heading-font-face);
-    font-size: 4rem;
+    font-size: 3rem;
     flex: 1;
+    line-height: 1.15;
     min-width: 0;
     text-align: center;
     overflow-wrap: anywhere;

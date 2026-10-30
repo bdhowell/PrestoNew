@@ -185,6 +185,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
             const bounds = viewport.getBoundingClientRect();
             return {
                 top: bounds.top, bottom: bounds.bottom, width: bounds.width,
+                canvasLeft: canvas.left - bounds.left, canvasTop: canvas.top - bounds.top,
                 menuBottom: menu.bottom, controlsTop: controls.top, controlsBottom: controls.bottom,
                 canvasWidth: canvas.width, canvasHeight: canvas.height,
                 scrollWidth: viewport.scrollWidth, clientWidth: viewport.clientWidth,
@@ -252,6 +253,89 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(dimensions["sliderMin"], previous, delta=0.01)
         self.assertLessEqual(dimensions["scrollHeight"], dimensions["clientHeight"] + 1)
         await self.assert_content_bounds()
+
+    async def test_zoom_centers_poster_without_clipping_scrollable_edges(self) -> None:
+        for template in posters.TEMPLATES:
+            with self.subTest(template=template):
+                await self.page.set_viewport_size({"width": 900, "height": 700})
+                await self.editor(template)
+                for zoom in ("100", "50", "fit"):
+                    await self.set_zoom(zoom)
+                    dimensions = await self.dimensions()
+                    for offset, size, available in (
+                        ("canvasLeft", "canvasWidth", "clientWidth"),
+                        ("canvasTop", "canvasHeight", "clientHeight"),
+                    ):
+                        if dimensions[size] <= dimensions[available]:
+                            self.assertAlmostEqual(
+                                dimensions[offset],
+                                (dimensions[available] - dimensions[size]) / 2,
+                                delta=1,
+                            )
+                        else:
+                            self.assertLessEqual(dimensions[offset], 1)
+                            self.assertGreaterEqual(
+                                dimensions[offset] + dimensions[size], dimensions[available] - 1,
+                            )
+                await self.set_zoom("100")
+                await self.page.locator("#poster-container").evaluate("""element => {
+                    element.scrollLeft = element.scrollWidth;
+                    element.scrollTop = element.scrollHeight;
+                }""")
+                await self.set_zoom("fit")
+                dimensions = await self.dimensions()
+                self.assertAlmostEqual(
+                    dimensions["canvasLeft"],
+                    (dimensions["clientWidth"] - dimensions["canvasWidth"]) / 2,
+                    delta=1,
+                )
+                self.assertAlmostEqual(
+                    dimensions["canvasTop"],
+                    (dimensions["clientHeight"] - dimensions["canvasHeight"]) / 2,
+                    delta=1,
+                )
+
+    async def test_zoom_keeps_poster_center_fixed_in_both_directions(self) -> None:
+        for width, height in ((900, 700), (500, 900)):
+            with self.subTest(viewport=(width, height)):
+                await self.page.set_viewport_size({"width": width, "height": height})
+                await self.editor()
+                await self.set_zoom("fit")
+                for zoom in ("30", "50", "75", "100", "75", "50", "30", "fit"):
+                    await self.set_zoom(zoom)
+                    dimensions = await self.dimensions()
+                    self.assertAlmostEqual(
+                        dimensions["canvasLeft"] + dimensions["canvasWidth"] / 2,
+                        dimensions["clientWidth"] / 2,
+                        delta=2,
+                    )
+                    self.assertAlmostEqual(
+                        dimensions["canvasTop"] + dimensions["canvasHeight"] / 2,
+                        dimensions["clientHeight"] / 2,
+                        delta=2,
+                    )
+
+    async def test_zoom_preserves_panned_viewport_center(self) -> None:
+        await self.page.set_viewport_size({"width": 900, "height": 700})
+        await self.editor()
+        await self.page.locator("#poster-container").evaluate("""element => {
+            const canvas = document.getElementById("poster-canvas").getBoundingClientRect();
+            element.scrollLeft = canvas.width * 0.4 - element.clientWidth / 2;
+            element.scrollTop = canvas.height * 0.4 - element.clientHeight / 2;
+        }""")
+        for zoom in ("75", "50", "75", "100"):
+            await self.set_zoom(zoom)
+            dimensions = await self.dimensions()
+            self.assertAlmostEqual(
+                dimensions["canvasLeft"] + dimensions["canvasWidth"] * 0.4,
+                dimensions["clientWidth"] / 2,
+                delta=2,
+            )
+            self.assertAlmostEqual(
+                dimensions["canvasTop"] + dimensions["canvasHeight"] * 0.4,
+                dimensions["clientHeight"] / 2,
+                delta=2,
+            )
 
     async def test_layout_bottom_margin_is_preserved_when_content_overflows(self) -> None:
         for template in posters.TEMPLATES:

@@ -11,6 +11,7 @@
     let scale = 1;
     let fitting = false;
     let pending = false;
+    let zoomAnchor = null;
 
     function fitContent() {
         const style = getComputedStyle(canvas);
@@ -79,9 +80,33 @@
     }
 
     slider.addEventListener("input", () => {
+        const bounds = viewport.getBoundingClientRect();
+        const before = canvas.getBoundingClientRect();
+        const unchanged = zoomAnchor
+            && viewport.clientWidth === zoomAnchor.viewportWidth
+            && viewport.clientHeight === zoomAnchor.viewportHeight
+            && ["left", "top", "width", "height"]
+            .every(key => before[key] === zoomAnchor.bounds[key]);
+        // Retain fractional coordinates across slider steps despite scroll rounding.
+        const centerX = unchanged ? zoomAnchor.x
+            : (bounds.left + viewport.clientWidth / 2 - before.left) / before.width;
+        const centerY = unchanged ? zoomAnchor.y
+            : (bounds.top + viewport.clientHeight / 2 - before.top) / before.height;
         scale = Number(slider.value) / 100;
         fitting = scale <= Number(slider.min) / 100 + 1e-8;
         update();
+        const after = canvas.getBoundingClientRect();
+        viewport.scrollLeft += after.left + centerX * after.width
+            - bounds.left - viewport.clientWidth / 2;
+        viewport.scrollTop += after.top + centerY * after.height
+            - bounds.top - viewport.clientHeight / 2;
+        zoomAnchor = {
+            x: after.width <= viewport.clientWidth ? 0.5 : centerX,
+            y: after.height <= viewport.clientHeight ? 0.5 : centerY,
+            bounds: canvas.getBoundingClientRect(),
+            viewportWidth: viewport.clientWidth,
+            viewportHeight: viewport.clientHeight,
+        };
     });
     const observer = new ResizeObserver(schedule);
     for (const element of [

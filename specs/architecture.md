@@ -1137,7 +1137,12 @@ Implementation contract:
   The right-aligned, labeled zoom slider starts at 100% and ranges down to the
   scale that fits the entire poster without enlarging small posters.
   `layout-zoom.js` scales the canvas without reflowing text and resizes its stage
-  to avoid unscaled overflow. Fit mode follows viewport, menu, font, image, and
+  to avoid unscaled overflow. The stage is centered on each axis where it fits
+  in the viewport; larger dimensions stay start-aligned and fully scrollable.
+  Slider zoom preserves the poster point at the viewport center on both axes,
+  clamping only at scroll boundaries. Browser scroll anchoring is disabled so
+  it does not interfere with this positioning.
+  Fit mode follows viewport, menu, font, image, and
   content size changes. Physical dimensions remain on the canvas, not the body.
   The inner `#poster-content` fills the area inside the margins and shrinks as
   needed to fit overflowing content, independently of viewport zoom. Non-horizontal
