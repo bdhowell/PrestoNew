@@ -106,6 +106,7 @@ class LayoutRouteTests(unittest.TestCase):
         markup = (
             "<b>Bold</b> <i>Italic</i> <code>Code</code> <u>Underline</u> "
             "<strike>Strike</strike> <sup>Up</sup> <sub>Down</sub>"
+            "<ul><li>Bullet</li></ul><ol><li>Number</li></ol>"
         )
         self.store.save_section.return_value = True
         response = self.client.post(
@@ -115,7 +116,7 @@ class LayoutRouteTests(unittest.TestCase):
         self.store.save_section.assert_awaited_once_with(7, 11, "results", markup)
         self.store.content.return_value = ([("results", markup)], [])
         document = html.fromstring(self.client.get("/layout/edit").text)
-        for tag in ("b", "i", "code", "u", "strike", "sup", "sub"):
+        for tag in ("b", "i", "code", "u", "strike", "sup", "sub", "ul", "ol"):
             self.assertEqual(len(document.xpath(f'//*[@id="results"]//{tag}')), 1)
 
     def test_headers_include_measured_widths_for_every_template(self) -> None:

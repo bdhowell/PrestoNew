@@ -4,6 +4,14 @@
     const toolbar = document.getElementById("editor-controls");
     if (!toolbar) return;
 
+    const extended = document.getElementById("extended");
+    const extendedControls = document.getElementById("extended-controls");
+    if (extended && extendedControls) {
+        extended.addEventListener("click", () => {
+            extendedControls.hidden = !extendedControls.hidden;
+            extended.setAttribute("aria-expanded", String(!extendedControls.hidden));
+        });
+    }
     const commands = {
         bold: "bold",
         italic: "italic",
@@ -11,6 +19,8 @@
         strikethrough: "strikeThrough",
         superscript: "superscript",
         subscript: "subscript",
+        ullist: "insertUnorderedList",
+        ollist: "insertOrderedList",
         code: null,
         plaintext: "removeFormat",
     };
@@ -273,6 +283,15 @@
                     : error.message;
         }
         update();
+    });
+
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && extended && extendedControls && !extendedControls.hidden) {
+            extendedControls.hidden = true;
+            extended.setAttribute("aria-expanded", "false");
+            if (extendedControls.contains(document.activeElement)) extended.focus();
+            event.preventDefault();
+        }
     });
 
     document.addEventListener("input", event => {

@@ -1406,6 +1406,11 @@ Each `.content` section is editable. Save its sanitized HTML to the correspondin
 
 The bottom editor controls format selections within editable `.content` sections:
 bold, italic, inline code, underline, strikethrough, superscript, and subscript.
+The More text settings button toggles an initially hidden tray above the bottom
+controls, floating over the poster without resizing it. The tray contains code,
+superscript, subscript, bulleted and numbered list toggles, and Plain Text.
+Escape closes the tray. List toggles apply to the current paragraph or selected
+paragraphs, reflect the active list type, and use the same autosave as typing.
 Plain Text removes inline formatting and links from selected text without changing
 the surrounding content. Formatting changes use the same autosave as typing.
 Controls are disabled outside an editable section; Plain Text requires a selection.

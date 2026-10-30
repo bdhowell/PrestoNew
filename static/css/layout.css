@@ -71,6 +71,8 @@ body > .basic-menu {
  }
 
 #controls {
+    position: relative;
+    z-index: 1;
     flex: none;
     display: flex;
     flex-wrap: wrap;
@@ -93,6 +95,25 @@ body > .basic-menu {
     margin-right: auto;
     min-width: 0;
     color: #8e85c2;
+}
+
+#extended-controls {
+    position: absolute;
+    bottom: calc(100% + 2px);
+    left: 1rem;
+    max-width: calc(100% - 2rem);
+    padding: 0.75rem;
+    border: 1px solid #8e85c2;
+    border-radius: 0.5rem 0.5rem 0 0;
+    background: #2f2766;
+    box-shadow: 0 -0.25rem 1rem #0006;
+}
+
+#extended-controls:not([hidden]) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem;
 }
 
 #editor-controls button {
@@ -162,6 +183,11 @@ body > .basic-menu {
 
 .content code {
     font-family: var(--monospace-font-face, monospace);
+}
+
+.content ul,
+.content ol {
+    padding-left: 1.5em;
 }
 
 .layout {

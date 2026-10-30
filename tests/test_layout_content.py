@@ -35,6 +35,7 @@ class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
             + (ROOT / "templates/layoutfoot.html").read_text()
         )
         await self.page.evaluate("""() => {
+            document.getElementById('theme-dialog').remove();
             window.savedRequests = [];
             window.fetch = async (url, options) => {
                 window.savedRequests.push(JSON.parse(options.body));
@@ -51,6 +52,100 @@ class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
             selection.removeAllRanges();
             selection.addRange(range);
         }""")
+        self.assertTrue(await self.page.locator("#extended-controls").is_hidden())
+        self.assertEqual(await self.page.locator("#extended").get_attribute("aria-expanded"), "false")
+        await self.page.locator("#extended").click()
+
+    async def test_extended_tray_toggles_without_resizing_or_losing_selection(self) -> None:
+        await self.load_editor()
+        await self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
+        await self.page.locator("#extended").click()
+        tray = self.page.locator("#extended-controls")
+        self.assertTrue(await tray.is_hidden())
+        self.assertEqual(await self.page.locator("#extended").get_attribute("aria-expanded"), "false")
+        for width in (1600, 900, 360):
+            with self.subTest(width=width):
+                await self.page.set_viewport_size({"width": width, "height": 700})
+                before = await self.page.locator("#controls").bounding_box()
+                await self.page.locator("#extended").click()
+                self.assertTrue(await tray.is_visible())
+                self.assertEqual(
+                    await self.page.locator("#extended").get_attribute("aria-expanded"), "true",
+                )
+                self.assertEqual(await self.page.locator("#controls").bounding_box(), before)
+                bounds = await tray.bounding_box()
+                self.assertLessEqual(bounds["y"] + bounds["height"], before["y"])
+                self.assertGreaterEqual(bounds["x"], 0)
+                self.assertLessEqual(bounds["x"] + bounds["width"], width)
+                self.assertEqual(await self.page.evaluate("getSelection().toString()"), "Sample text")
+                await self.page.locator("#extended").click()
+                self.assertTrue(await tray.is_hidden())
+
+        await self.page.locator("#extended").focus()
+        await self.page.keyboard.press("Enter")
+        await self.page.locator("#code").focus()
+        await self.page.keyboard.press("Escape")
+        self.assertTrue(await tray.is_hidden())
+        self.assertEqual(await self.page.locator(":focus").get_attribute("id"), "extended")
+        self.assertEqual(await self.page.evaluate("window.savedRequests"), [])
+
+    async def test_list_buttons_toggle_switch_and_save(self) -> None:
+        for button, tag, other in (("ullist", "ul", "ollist"), ("ollist", "ol", "ullist")):
+            with self.subTest(button=button):
+                await self.load_editor()
+                await self.page.locator(f"#{button}").click()
+                self.assertEqual(await self.page.locator(".content").inner_html(),
+                                 f"<{tag}><li>Sample text</li></{tag}>")
+                self.assertEqual(
+                    await self.page.locator(f"#{button}").get_attribute("aria-pressed"), "true",
+                )
+                await self.page.wait_for_function(
+                    "document.getElementById('content-save-status').textContent === 'Changes saved.'"
+                )
+                self.assertEqual(await self.page.evaluate("window.savedRequests.at(-1)"), {
+                    "section": "results", "content": f"<{tag}><li>Sample text</li></{tag}>",
+                })
+                await self.page.locator(f"#{other}").click()
+                self.assertEqual(await self.page.locator(f".content {tag}").count(), 0)
+                self.assertEqual(
+                    await self.page.locator(f"#{button}").get_attribute("aria-pressed"), "false",
+                )
+                self.assertEqual(
+                    await self.page.locator(f"#{other}").get_attribute("aria-pressed"), "true",
+                )
+                await self.page.locator(f"#{other}").click()
+                self.assertEqual(await self.page.locator(".content li").count(), 0)
+                self.assertEqual(await self.page.locator(".content").inner_text(), "Sample text")
+
+    async def test_lists_apply_to_selected_paragraphs_and_caret(self) -> None:
+        for button, tag in (("ullist", "ul"), ("ollist", "ol")):
+            with self.subTest(button=button):
+                await self.load_editor()
+                await self.page.locator(".content").evaluate("""element => {
+                    element.innerHTML = '<p>First</p><p>Second</p><p>Outside</p>';
+                    const range = document.createRange();
+                    range.setStart(element.children[0].firstChild, 0);
+                    range.setEnd(element.children[1].firstChild, 6);
+                    getSelection().removeAllRanges();
+                    getSelection().addRange(range);
+                }""")
+                await self.page.locator(f"#{button}").click()
+                self.assertEqual(
+                    await self.page.locator(f".content {tag} li").all_text_contents(),
+                    ["First", "Second"],
+                )
+                self.assertEqual(
+                    await self.page.locator(".content > p:last-child").inner_text(), "Outside",
+                )
+                await self.load_editor()
+                await self.page.locator(".content").evaluate("""element => {
+                    getSelection().collapse(element.firstChild, 0);
+                }""")
+                await self.page.locator(f"#{button}").click()
+                await self.page.keyboard.type("typed ")
+                self.assertEqual(
+                    await self.page.locator(f".content {tag} li").inner_text(), "typed Sample text",
+                )
 
     async def test_buttons_format_toggle_and_save_the_selected_text(self) -> None:
         for button, tag in FORMATTING.items():
@@ -213,7 +308,7 @@ class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
         }""")
         await self.page.wait_for_function("document.getElementById('bold').disabled")
         await self.page.locator("#poster-zoom").focus()
-        for button in (*FORMATTING, "plaintext", "cut", "copy", "paste"):
+        for button in (*FORMATTING, "ullist", "ollist", "plaintext", "cut", "copy", "paste"):
             self.assertTrue(await self.page.locator(f"#{button}").is_disabled())
         self.assertEqual(await self.page.evaluate("window.savedRequests"), [])
 
