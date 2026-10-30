@@ -454,6 +454,140 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 }""")
                 self.assertAlmostEqual(layout_bottom + bottom_margin, content_bottom, delta=1)
 
+    async def test_panes_fill_grid_rows_and_horizontal_panes_anchor_to_bottom(self) -> None:
+        for template in posters.TEMPLATES:
+            for gutter in ("1rem", "6rem"):
+                for footer_lines in (1, 8):
+                    with self.subTest(template=template, gutter=gutter, footer_lines=footer_lines):
+                        await self.editor(template)
+                        await self.page.locator("#poster-canvas").evaluate(
+                            "(element, gutter) => element.style.setProperty('--gutter', gutter)",
+                            gutter,
+                        )
+                        await self.page.locator("#pane3 .content").evaluate_all(
+                            """(elements, lines) => elements.forEach(element => {
+                                element.innerHTML = "Footer<br>".repeat(lines);
+                            })""",
+                            footer_lines,
+                        )
+                        for zoom in ("100", "fit"):
+                            await self.set_zoom(zoom)
+                            bounds = await self.page.locator("#layout").evaluate("""layout => {
+                                const rect = layout.getBoundingClientRect();
+                                const scale = rect.width / layout.offsetWidth;
+                                const gutter = parseFloat(getComputedStyle(layout).rowGap) * scale;
+                                const panes = [...layout.children].map(pane => ({
+                                    top: pane.getBoundingClientRect().top,
+                                    bottom: pane.getBoundingClientRect().bottom,
+                                    horizontal: pane.classList.contains("horizontal"),
+                                }));
+                                return {
+                                    bottom: rect.bottom, gutter,
+                                    panes: panes.map(pane => ({
+                                        ...pane,
+                                        nextTop: Math.min(rect.bottom + gutter,
+                                            ...panes.filter(next => next.top > pane.top + 1)
+                                                .map(next => next.top)),
+                                    })),
+                                };
+                            }""")
+                            for pane in bounds["panes"]:
+                                if pane["horizontal"]:
+                                    self.assertAlmostEqual(pane["bottom"], bounds["bottom"], delta=1)
+                                else:
+                                    self.assertAlmostEqual(
+                                        pane["bottom"], pane["nextTop"] - bounds["gutter"], delta=1,
+                                    )
+
+    async def test_horizontal_pane_uses_twenty_percent_of_available_layout_height(self) -> None:
+        await self.editor("arena")
+        for gutter in ("1rem", "6rem"):
+            await self.page.locator("#poster-canvas").evaluate(
+                "(element, gutter) => element.style.setProperty('--gutter', gutter)", gutter,
+            )
+            available_height = None
+            for lines in (1, 100):
+                await self.page.locator("#pane3 .content").evaluate_all(
+                    """(elements, lines) => elements.forEach(element => {
+                        element.innerHTML = "Footer<br>".repeat(lines);
+                    })""", lines,
+                )
+                for zoom in ("100", "fit"):
+                    await self.set_zoom(zoom)
+                    bounds = await self.page.locator("#layout").evaluate("""layout => {
+                        const footer = layout.querySelector(".pane.horizontal");
+                        const rect = footer.getBoundingClientRect();
+                        const scale = rect.height / footer.offsetHeight;
+                        return {
+                            available: layout.clientHeight
+                                - parseFloat(getComputedStyle(layout).rowGap),
+                            height: footer.offsetHeight,
+                            sections: [...footer.children].map(section => ({
+                                height: section.getBoundingClientRect().height / scale,
+                                overflow: getComputedStyle(section).overflowY,
+                                clientHeight: section.clientHeight,
+                                scrollHeight: section.scrollHeight,
+                            })),
+                        };
+                    }""")
+                    if available_height is None:
+                        available_height = bounds["available"]
+                    self.assertAlmostEqual(bounds["available"], available_height, delta=1)
+                    self.assertAlmostEqual(bounds["height"], bounds["available"] * 0.2, delta=1)
+                    for section in bounds["sections"]:
+                        self.assertAlmostEqual(section["height"], bounds["height"], delta=1)
+                        self.assertEqual(section["overflow"], "hidden")
+                        if lines == 100:
+                            self.assertGreater(section["scrollHeight"], section["clientHeight"])
+
+    async def test_upper_panes_fill_layout_with_and_without_footer(self) -> None:
+        await self.editor("arena")
+        for footer_present in (True, False):
+            if not footer_present:
+                await self.page.locator("#pane3").evaluate("pane => pane.remove()")
+            for height in (2500, 3500):
+                await self.page.locator("#layout").evaluate(
+                    "(element, height) => element.style.height = `${height}px`", height,
+                )
+                await self.set_zoom("100")
+                bounds = await self.page.locator("#layout").evaluate("""layout => {
+                    const footer = layout.querySelector(".pane.horizontal");
+                    return {
+                        height: layout.clientHeight,
+                        gutter: parseFloat(getComputedStyle(layout).rowGap),
+                        footerHeight: footer ? footer.offsetHeight : 0,
+                        footerBottom: footer ? footer.offsetTop + footer.offsetHeight : null,
+                        panes: [...layout.querySelectorAll(".pane:not(.horizontal)")]
+                            .map(pane => ({
+                                top: pane.offsetTop - layout.offsetTop,
+                                bottom: pane.offsetTop - layout.offsetTop + pane.offsetHeight,
+                            })),
+                        footerTop: footer ? footer.offsetTop : null,
+                        layoutTop: layout.offsetTop,
+                    };
+                }""")
+                if footer_present:
+                    self.assertAlmostEqual(
+                        bounds["footerHeight"],
+                        (bounds["height"] - bounds["gutter"]) * 0.2, delta=1,
+                    )
+                    self.assertAlmostEqual(
+                        bounds["footerBottom"] - bounds["layoutTop"], bounds["height"], delta=1,
+                    )
+                    self.assertAlmostEqual(
+                        bounds["footerTop"] - bounds["layoutTop"],
+                        bounds["height"] - bounds["footerHeight"], delta=1,
+                    )
+                for pane in bounds["panes"]:
+                    self.assertAlmostEqual(pane["top"], 0, delta=1)
+                    self.assertAlmostEqual(
+                        pane["bottom"],
+                        bounds["height"] - (
+                            bounds["footerHeight"] + bounds["gutter"] if footer_present else 0
+                        ),
+                        delta=1,
+                    )
+
     async def test_overflowing_content_shrinks_without_changing_poster_dimensions(self) -> None:
         for template in posters.TEMPLATES:
             with self.subTest(template=template):

@@ -1147,7 +1147,16 @@ Implementation contract:
   The inner `#poster-content` fills the area inside the margins and shrinks as
   needed to fit overflowing content, independently of viewport zoom. Non-horizontal
   panes stretch vertically, with sections and grouped sections sharing the
-  remaining height after gutters. Horizontal panes arrange sections in a row.
+  remaining height after gutters. Horizontal panes arrange sections in a row
+  anchored to the bottom of `#layout`, spanning all columns in a second grid row
+  that takes 20% of the available layout height after subtracting the row gutter.
+  The first row takes the remaining 80%. With a horizontal pane, the layout has
+  a zero preferred height and grows into the space left below the poster header,
+  rather than sizing itself from its contents. The horizontal pane and its sections
+  stretch to fill their row and clip overflowing content. Without a horizontal
+  pane, no footer row is reserved; a single row of panes stretches to the bottom
+  of `#layout`.
+  Other subsequent rows use their content height.
   `#layout` has left, right, and bottom margins of `2 * var(--gutter)`.
   Content fitting includes the layout's trailing bottom margin explicitly, since
   scroll height can omit that margin when the flex layout overflows.
