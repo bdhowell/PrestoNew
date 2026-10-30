@@ -50,7 +50,7 @@ SOURCES_DIR="sources/"
 
 SOURCE_TEXT_MIN_LENGTH=4096
 
-CHAT_WINDOW_TRANSITION=330 # milliseconds
+CHAT_WINDOW_TRANSITION=440 # milliseconds
 CHAT_INPUT_TRANSITION=500 # milliseconds
 
 SYSTEM_PURGE_ENABLED=true # allow /system/purge endpoint to be used locally only

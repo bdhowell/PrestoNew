@@ -115,6 +115,95 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(bounds["height"], 640)
 
 
+class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        playwright = await async_playwright().start()
+        self.addAsyncCleanup(playwright.stop)
+        browser = await playwright.chromium.launch()
+        self.addAsyncCleanup(browser.close)
+        self.page = await browser.new_page()
+        await self.page.route(
+            "https://presto.test/**", lambda route: route.fulfill(body="<!doctype html>"),
+        )
+        await self.page.goto("https://presto.test/")
+        await self.page.set_content('<body><button id="wikkit">Wikkit</button></body>')
+        await self.page.add_style_tag(path=str(ROOT / "static/css/router.css"))
+        await self.page.evaluate("""() => {
+            class MockWebSocket extends EventTarget {
+                constructor() {
+                    super();
+                    this.readyState = MockWebSocket.CONNECTING;
+                }
+                send() {}
+                close() {}
+            }
+            MockWebSocket.CONNECTING = 0;
+            MockWebSocket.OPEN = 1;
+            window.WebSocket = MockWebSocket;
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+
+    async def test_handle_appearance_matches_on_public_and_layout_pages(self) -> None:
+        await self.page.add_style_tag(path=str(ROOT / "static/css/main.css"))
+        await self.page.locator("body").evaluate("element => element.className = 'wikkit-page'")
+        handle = self.page.locator("#chatbot .chatbot-handle")
+        appearance = """element => {
+            const style = getComputedStyle(element);
+            const icon = getComputedStyle(element, '::before');
+            return {
+                fontFamily: style.fontFamily,
+                fontSize: style.fontSize,
+                fontWeight: style.fontWeight,
+                lineHeight: style.lineHeight,
+                height: element.getBoundingClientRect().height,
+                color: style.color,
+                background: style.backgroundColor,
+                icon: icon.backgroundImage,
+                iconWidth: icon.width,
+                iconHeight: icon.height,
+            };
+        }"""
+        public = await handle.evaluate(appearance)
+        self.assertEqual(public["fontSize"], "32px")
+        self.assertEqual(public["lineHeight"], "51.2px")
+        self.assertIn("/static/graphics/wikkit.svg", public["icon"])
+        self.assertEqual(public["iconWidth"], "28px")
+        self.assertEqual(public["iconHeight"], "28px")
+
+        await self.page.locator("body").evaluate("element => element.className = ''")
+        await self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
+        self.assertEqual(await handle.evaluate(appearance), public)
+
+    async def test_wikkit_button_toggles_chatbot_visibility_and_accessibility(self) -> None:
+        chatbot = self.page.locator("#chatbot")
+        button = self.page.locator("#wikkit")
+
+        self.assertEqual(
+            await chatbot.evaluate("element => getComputedStyle(element).transitionDuration"),
+            "0.44s, 0s",
+        )
+        self.assertEqual(await chatbot.evaluate("element => getComputedStyle(element).visibility"), "visible")
+        await button.click()
+        self.assertTrue(
+            await chatbot.evaluate("element => element.classList.contains('chat-hidden')"),
+        )
+        self.assertTrue(await chatbot.evaluate("element => element.inert"))
+        self.assertEqual(await chatbot.get_attribute("aria-hidden"), "true")
+        await self.page.wait_for_function(
+            "getComputedStyle(document.getElementById('chatbot')).visibility === 'hidden'",
+        )
+
+        await button.click()
+        self.assertFalse(
+            await chatbot.evaluate("element => element.classList.contains('chat-hidden')"),
+        )
+        self.assertFalse(await chatbot.evaluate("element => element.inert"))
+        self.assertIsNone(await chatbot.get_attribute("aria-hidden"))
+        await self.page.wait_for_function(
+            "getComputedStyle(document.getElementById('chatbot')).visibility === 'visible'",
+        )
+
+
 class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.playwright = await async_playwright().start()

@@ -46,7 +46,7 @@ class WikkitPageTests(unittest.TestCase):
         self.assertNotIn("<iframe", response.text)
         self.assertNotIn('id="chatbot"', response.text)  # Created by the client.
         self.assertIn('data-socket="/wikkit/ws"', response.text)
-        self.assertIn('data-chat-window-transition="330"', response.text)
+        self.assertIn('data-chat-window-transition="440"', response.text)
         self.assertIn('data-chat-input-transition="500"', response.text)
         self.assertIn('src="/static/javascript/wikkit.js"', response.text)
         self.assertIn('href="/static/css/router.css"', response.text)

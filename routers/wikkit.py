@@ -64,7 +64,7 @@ def navigation_url(url: str | None) -> str:
 
 
 def chat_window_transition_ms() -> int:
-    duration = int(os.environ.get("CHAT_WINDOW_TRANSITION", "330"))
+    duration = int(os.environ.get("CHAT_WINDOW_TRANSITION", "440"))
     if duration < 0:
         raise ValueError("CHAT_WINDOW_TRANSITION must be non-negative.")
     return duration

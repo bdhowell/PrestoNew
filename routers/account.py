@@ -318,6 +318,8 @@ I&rsquo;ve sent a fresh confirmation link to <strong>{html.escape(user.email)}</
 </p>
 """
         return _reply(False, says, status_code=403)
+ 
+    says = ""
     if user is not None and valid:
         identity.sign_in(request, user)
 
@@ -326,6 +328,15 @@ I&rsquo;ve sent a fresh confirmation link to <strong>{html.escape(user.email)}</
 Let&rsquo;s get back to work on your poster!
 </p>
 """
+
+        says += """
+<p>
+I can shorten, lengthen, or adjust the fit of any section of your poster.
+I can change the tone of any section to better suit your message. 
+I can also help you add images to sections of your poster—although I recommend you limit them to <em>Results</em>, and maybe <em>Methods and Materials</em>.
+</p>
+"""
+
         return _reply(
             True, says, redirect=await resumption_page(request), command={"does": "clear-chat"},
             signed_in=True,
