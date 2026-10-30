@@ -55,6 +55,7 @@ body > .basic-menu {
 }
 
 #poster-content {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: var(--gutter);
@@ -103,7 +104,7 @@ body > .basic-menu {
 }
 
 #editor-controls button.gap {
-    margin-left: 0.5rem;
+    margin-left: 0.75rem;
 }
 
 #editor-controls button:hover {
@@ -133,6 +134,12 @@ body > .basic-menu {
 .layout {
     flex: 1 0 auto;
     grid-template-rows: minmax(min-content, 1fr);
+}
+
+#layout {
+    margin-right: calc(2 * var(--gutter));
+    margin-left: calc(2 * var(--gutter));
+    margin-bottom: calc(2 * var(--gutter));
 }
 
 .pane {

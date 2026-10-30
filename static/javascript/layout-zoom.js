@@ -5,6 +5,7 @@
     const stage = document.getElementById("poster-stage");
     const canvas = document.getElementById("poster-canvas");
     const content = document.getElementById("poster-content");
+    const layout = document.getElementById("layout");
     const slider = document.getElementById("poster-zoom");
     const output = document.getElementById("poster-zoom-value");
     let scale = 1;
@@ -21,8 +22,12 @@
         function overflowRatio(fit) {
             content.style.width = `${width / fit}px`;
             content.style.height = `${height / fit}px`;
+            // scrollHeight can omit the trailing margin of an overflowing flex item.
+            const layoutBottom = layout.offsetTop + layout.offsetHeight
+                + parseFloat(getComputedStyle(layout).marginBottom);
             return Math.min(
-                1, content.clientWidth / content.scrollWidth, content.clientHeight / content.scrollHeight,
+                1, content.clientWidth / content.scrollWidth,
+                content.clientHeight / Math.max(content.scrollHeight, Math.ceil(layoutBottom)),
             );
         }
         let fit = 1;
@@ -80,7 +85,7 @@
     });
     const observer = new ResizeObserver(schedule);
     for (const element of [
-        viewport, canvas, document.getElementById("poster-header"), document.getElementById("layout"),
+        viewport, canvas, document.getElementById("poster-header"), layout,
     ]) {
         observer.observe(element);
     }

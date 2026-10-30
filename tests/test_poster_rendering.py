@@ -253,6 +253,35 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(dimensions["scrollHeight"], dimensions["clientHeight"] + 1)
         await self.assert_content_bounds()
 
+    async def test_layout_bottom_margin_is_preserved_when_content_overflows(self) -> None:
+        for template in posters.TEMPLATES:
+            with self.subTest(template=template):
+                await self.editor(template)
+                await self.page.locator("#layout").evaluate(
+                    "element => element.style.height = '6000px'",
+                )
+                await self.page.wait_for_function(
+                    "() => document.getElementById('poster-content').style.transform !== 'scale(1)'",
+                )
+                for zoom in ("100", "fit"):
+                    await self.set_zoom(zoom)
+                    bounds = await self.page.evaluate("""() => {
+                        const content = document.getElementById("poster-content");
+                        const layout = document.getElementById("layout");
+                        const area = content.getBoundingClientRect();
+                        const rect = layout.getBoundingClientRect();
+                        const scale = area.height / content.offsetHeight;
+                        const margin = 2 * parseFloat(getComputedStyle(layout).gap) * scale;
+                        return {
+                            gap: area.bottom - rect.bottom,
+                            left: rect.left - area.left,
+                            right: area.right - rect.right,
+                            margin,
+                        };
+                    }""")
+                    for side in ("gap", "left", "right"):
+                        self.assertGreaterEqual(bounds[side], bounds["margin"] - 1)
+
     async def assert_content_bounds(self) -> None:
         bounds = await self.page.evaluate("""() => {
             const canvas = document.getElementById("poster-canvas");
@@ -278,7 +307,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 bottom: Math.max(...rectangles.map(rect => rect.bottom)),
             };
         }""")
-        self.assertAlmostEqual(bounds["padding"], 2 * bounds["gutter"], delta=0.1)
+        self.assertAlmostEqual(bounds["padding"], 5 * bounds["gutter"], delta=0.1)
         for side in ("left", "top"):
             self.assertGreaterEqual(bounds[side], bounds["area"][side] - 1)
         for side in ("right", "bottom"):
@@ -310,7 +339,12 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 content_bottom = await self.page.locator("#poster-content").evaluate(
                     "element => element.getBoundingClientRect().bottom",
                 )
-                self.assertAlmostEqual(layout_bottom, content_bottom, delta=1)
+                bottom_margin = await self.page.locator("#layout").evaluate("""element => {
+                    const content = document.getElementById("poster-content");
+                    const scale = content.getBoundingClientRect().height / content.offsetHeight;
+                    return parseFloat(getComputedStyle(element).marginBottom) * scale;
+                }""")
+                self.assertAlmostEqual(layout_bottom + bottom_margin, content_bottom, delta=1)
 
     async def test_overflowing_content_shrinks_without_changing_poster_dimensions(self) -> None:
         for template in posters.TEMPLATES:
@@ -329,8 +363,12 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                     const height = element.style.height;
                     element.style.width = `${parseFloat(width) / 1.01}px`;
                     element.style.height = `${parseFloat(height) / 1.01}px`;
+                    const layout = document.getElementById("layout");
+                    const bottom = layout.offsetTop + layout.offsetHeight
+                        + parseFloat(getComputedStyle(layout).marginBottom);
                     const overflows = element.scrollWidth > element.clientWidth
-                        || element.scrollHeight > element.clientHeight;
+                        || element.scrollHeight > element.clientHeight
+                        || bottom > element.clientHeight;
                     element.style.width = width;
                     element.style.height = height;
                     return overflows;
@@ -391,6 +429,9 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                     image.alt = "Large research image";
                     element.append(image);
                 }""")
+                await self.page.evaluate(
+                    "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+                )
                 await self.page.wait_for_function(
                     "() => document.getElementById('poster-content').style.transform !== 'scale(1)'",
                 )

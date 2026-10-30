@@ -1122,7 +1122,7 @@ Implementation contract:
   (96 CSS pixels per inch), fixes `#poster-canvas` to that width and the exact
   physical poster height, and embeds percentage widths in the returned HTML.
   CSS keeps both containers centered within their original layout slots, measured
-  inside the canvas margins of `2 * var(--gutter)` on every side.
+  inside the canvas padding of `5 * var(--gutter)` on every side.
   Measurement uses local stylesheets and waits for web fonts; scripts and other
   network resources are excluded. Browser/font failures return an explicit 503,
   rather than silently returning an unbalanced layout.
@@ -1143,6 +1143,9 @@ Implementation contract:
   needed to fit overflowing content, independently of viewport zoom. Non-horizontal
   panes stretch vertically, with sections and grouped sections sharing the
   remaining height after gutters. Horizontal panes arrange sections in a row.
+  `#layout` has left, right, and bottom margins of `2 * var(--gutter)`.
+  Content fitting includes the layout's trailing bottom margin explicitly, since
+  scroll height can omit that margin when the flex layout overflows.
   Layout grid columns share the space left after gutters to avoid overflowing
   the poster width.
 - Stored section HTML is sanitized with the same allowlist as poster previews.
