@@ -188,6 +188,16 @@ class ElucidationRouteTests(unittest.TestCase):
         self.analyze.assert_not_awaited()
         self.sources.save_elucidation.assert_not_awaited()
 
+    def test_analysis_cannot_skip_pending_extraction_even_with_enough_existing_text(self) -> None:
+        self.sources.source_text.side_effect = content.SourceConflictError(
+            "Please finish reading your files at /content/extract before running analysis."
+        )
+        response = self.client.post("/content/elucidate", json={})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("/content/extract", response.json()["detail"])
+        self.analyze.assert_not_awaited()
+        self.sources.save_elucidation.assert_not_awaited()
+
     def test_analysis_failures_do_not_save_and_database_failures_do_not_redirect(self) -> None:
         self.analyze.side_effect = elucidation.ElucidationError("Analysis was incomplete.")
         with self.assertLogs("routers.content", "ERROR"):
@@ -226,8 +236,8 @@ class ElucidationStoreTests(unittest.IsolatedAsyncioTestCase):
         store = content.SourceStore()
         connection = AsyncMock()
         connection.execute.return_value.fetchall.return_value = [
-            (1, "study.md", "Research", "text/markdown"),
-            (2, "data.xlsx", "<table><tr><td>A &amp; B</td></tr></table>", content.FORMATS[".xlsx"][0]),
+            (1, "study.md", "Research", "text/markdown", True),
+            (2, "data.xlsx", "<table><tr><td>A &amp; B</td></tr></table>", content.FORMATS[".xlsx"][0], True),
         ]
         with patch.object(store, "_connect", AsyncMock(return_value=connection)):
             snapshot = await store.source_text(7, 11)
@@ -237,9 +247,20 @@ class ElucidationStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("p.uid = %s AND p.pid = %s AND s.parent IS NULL", statement)
         self.assertEqual(params, (7, 11))
         first_hash = snapshot.fingerprint
-        connection.execute.return_value.fetchall.return_value[0] = (1, "study.md", "Changed", "text/markdown")
+        connection.execute.return_value.fetchall.return_value[0] = (1, "study.md", "Changed", "text/markdown", True)
         with patch.object(store, "_connect", AsyncMock(return_value=connection)):
             self.assertNotEqual((await store.source_text(7, 11)).fingerprint, first_hash)
+
+    async def test_source_snapshot_rejects_pending_files_even_with_enough_existing_text(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        connection.execute.return_value.fetchall.return_value = [
+            (1, "study.md", "Research" * 1000, "text/markdown", True),
+            (2, "new.md", None, "text/markdown", False),
+        ]
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            with self.assertRaises(content.SourceConflictError):
+                await store.source_text(7, 11)
 
     async def test_save_is_transactional_and_preserves_author_metadata_and_all_sections(self) -> None:
         store = content.SourceStore()

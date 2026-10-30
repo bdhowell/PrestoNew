@@ -221,7 +221,7 @@ def extract_document(
     """
     from docling.datamodel.service.options import ConvertDocumentsOptions
     from docling.service_client import DoclingServiceClient, StatusWatcherKind
-    from docling_core.types.doc import ImageRefMode
+    from docling_core.types.doc.base import ImageRefMode
 
     if timeout <= 0:
         raise ValueError('timeout must be positive')

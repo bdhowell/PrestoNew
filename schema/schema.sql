@@ -149,6 +149,7 @@ CREATE TABLE source (
     text        TEXT,
     description TEXT,
     summary     TEXT,
+    extracted   BOOLEAN NOT NULL DEFAULT TRUE,
     size        INTEGER NOT NULL,
     height      INTEGER,
     width       INTEGER,

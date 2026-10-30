@@ -725,9 +725,12 @@ Write a local function that takes a Python text or binary object and produces a 
   upload greeting; all visits show the supported-format and completion guidance.
 - The page supports file selection and whole-page drag and drop. Each file is
   sent separately to `POST /content/upload` as `application/octet-stream`, with
-  a percent-encoded basename in `X-Filename`. Each response refreshes the table
-  with the original and all extracted children as soon as processing completes.
-  Failures are displayed per file without hiding other results.
+  a percent-encoded basename in `X-Filename`. Transfers overlap, and users can
+  select or drop more files while earlier transfers are still running.
+  Each response confirms the original is saved; it does not wait for Docling
+  extraction, summaries or image descriptions. Out-of-order responses are merged
+  without losing uploaded rows. Failures are displayed per file without hiding
+  other results. Finishing is blocked until all active transfers settle.
 - Supported extensions: PDF, DOCX, PPTX, XLSX, XLSM, PNG, TIF/TIFF, JPG/JPEG,
   Pages, Numbers, Keynote (`.key`), and Markdown (`.md`). RTF is not supported.
   iWork files must be
@@ -745,7 +748,8 @@ Write a local function that takes a Python text or binary object and produces a 
   resource bundle, preserving images for local PNG extraction. Embedded image
   export is not requested from the service. Picture descriptions/classification,
   chart extraction and formula enrichment are
-  enabled. Text and LaTeX are retained; tables also retain HTML cell data.
+  enabled. This work runs on the separate `/content/extract` reading page after
+  uploads finish. Text and LaTeX are retained; tables also retain HTML cell data.
   Temporary opt-in reduced-feature operation is available by setting
   `DOCLING_ENABLE_ENRICHMENT=false` (default `true`). This disables Docling
   formula enrichment, picture descriptions and chart-data extraction when
@@ -767,8 +771,11 @@ Write a local function that takes a Python text or binary object and produces a 
   receive model-generated descriptions. Configure `DOCLING_SERVICE_URL`,
   optionally `DOCLING_SERVICE_API_KEY`, and `OPENAI_API_KEY`;
   `OPENAI_POSTER_MODEL` defaults to `gpt-4.1`. Source analysis uses no browsing
-  tools or shared prompt cache. Model/converter failures do not silently save
-  an unprocessed file as success.
+  tools or shared prompt cache. Model/converter failures are reported on the
+  reading page, with a retry control. Originals remain saved for retry.
+  `source.extracted` is false for new uploads and becomes true atomically with
+  extracted metadata and children. Completed files are skipped on retry/reload;
+  failed transactions remove only newly written extraction assets, not originals.
 - A filename or description containing "logo" marks a graphic as a logo
   candidate. The largest pixel area wins; replacing the logo retains the
   previous graphic as an ordinary image.
@@ -789,15 +796,24 @@ Write a local function that takes a Python text or binary object and produces a 
   metadata. It initializes the maintained local database; it is not an upgrade
   script. Install `requirements-content.txt` for storage and processing dependencies.
 
-  This also adds `source.summary`, allows top-level sources with a null
+  Existing installations must run `schema/source-extraction.sql` before deploying
+  this flow. It adds `source.extracted` and marks pre-existing sources as already
+  extracted, preserving their completed work. The migration is safe to repeat.
+
+  The current schema also adds `source.summary`, allows top-level sources with a null
   `parent`, and updates the special-kind uniqueness index. Retry the upload
   after the migration completes. The reduced-feature Docling warning is
   independent of database schema compatibility.
   Run `bin/python -m unittest tests.test_content tests.test_posters tests.test_wikkit`; set
   `POSTERS_TEST_DATABASE_URL` for isolated PostgreSQL integration tests.
-- `POST /content/finished` checks the current owner-scoped draft. No content or
-  insufficient readable source text returns HTTP 409 and Wikkit's specified
-  message, without a redirect. `SOURCE_TEXT_MIN_LENGTH` defaults to **4000**;
+- `POST /content/finished` checks that the current owner-scoped draft has uploads,
+  then redirects to `/content/extract`. Empty uploads return HTTP 409 with
+  Wikkit's message. The reading page tells users uploading has finished and
+  Wikkit is reading through their content. It calls owner-checked, same-origin
+  `POST /content/extract/{sid}` once per pending original, then
+  `POST /content/extracted` to validate readable text. This last endpoint rejects
+  pending files and insufficient content with HTTP 409; no analysis runs early.
+  `SOURCE_TEXT_MIN_LENGTH` defaults to **4000**;
   exactly the minimum passes. Spreadsheet/table HTML markup, summaries and
   descriptions are not counted, and child text is not counted twice.
   The Finished button and Wikkit's `I'm Finished` chat button invoke this same
@@ -805,8 +821,8 @@ Write a local function that takes a Python text or binary object and produces a 
   `common.clean_response()` against `finished`, `imfinished`, `done`,
   `imdone` and `alldone`; matches run the page's `finished-uploading` command,
   and other replies receive normal intent handling. The upload page waits for
-  these replies without "Are you still there?" reminders. Success navigates to
-  `/content/elucidate`, where Wikkit says "Terrific ... We're making great
+  these replies without "Are you still there?" reminders. Successful extraction
+  and text validation navigate to `/content/elucidate`, where Wikkit says "Terrific ... We're making great
   progress."
 - **Deferred:** optional source deletion/download controls.
   The incomplete `go-back` intent below does not

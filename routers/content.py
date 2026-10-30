@@ -1,4 +1,4 @@
-"""Upload original source files for the selected, owner-checked draft."""
+"""Upload, extract and analyze source files for an owner-checked draft."""
 
 import logging
 import os
@@ -28,7 +28,8 @@ from routers.wikkit import check_origin, read_json, render_page
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/content", tags=["content"])
 INTRO = (
-    "<p>Let&rsquo;s start by uploading your source content so I can start examining it. "
+    "<p>Let&rsquo;s start by uploading your source content. I&rsquo;ll read through it "
+    "once you&rsquo;ve finished uploading. "
     "You can always upload additional content later if needed, or delete content you "
     "no longer want to include.</p>"
 )
@@ -142,6 +143,69 @@ async def finished(request: Request) -> JSONResponse:
     await read_json(request)
     try:
         uid, pid = await selected_draft(request)
+        items = await content.store().list_sources(uid, pid)
+    except STORAGE_ERRORS:
+        logger.exception("Could not check source uploads")
+        raise HTTPException(503, "Your uploads could not be checked. Please try again.") from None
+    if not items:
+        return JSONResponse({
+            "ok": False,
+            "say": f"<p>{identity.display_name(request)}, you can&rsquo;t have a poster without any content! "
+                   "Please give me some material to work with.</p>"
+                   "<p>I can&rsquo;t magic a complete poster out of thin air.</p>",
+        }, status_code=409)
+    return JSONResponse({"ok": True, "redirect": "/content/extract"})
+
+
+@router.get("/extract")
+async def extract_page(request: Request) -> Response:
+    if getattr(request.state, "user_id", None) is None:
+        return RedirectResponse("/account/signin", status_code=303)
+    try:
+        uid, pid = await selected_draft(request)
+        items = await content.store().list_sources(uid, pid)
+    except STORAGE_ERRORS:
+        logger.exception("Could not load content for extraction")
+        raise HTTPException(503, "Your content could not be loaded. Please try again.") from None
+    return render_page(
+        request, "content/extract.html", "content-extract",
+        f"<p>{identity.display_name(request)}, your content has finished uploading.</p>"
+        "<p>I&rsquo;m reading through it now, extracting the text, tables, and images "
+        "I can use for your poster. Please keep this page open while I work.</p>"
+        + conversion_notice(),
+        pending=[{"sid": item.sid, "filename": item.filename}
+                 for item in items if item.parent is None and not item.extracted],
+    )
+
+
+@router.post("/extract/{sid}")
+async def extract_file(request: Request, sid: int) -> JSONResponse:
+    await read_json(request)
+    try:
+        uid, pid = await selected_draft(request)
+        await content.store().extract(uid, pid, sid)
+    except content.SourceConflictError as error:
+        raise HTTPException(409, str(error)) from None
+    except ValueError as error:
+        logger.exception("Invalid source content during extraction")
+        raise HTTPException(422, str(error)) from None
+    except source_processing.ProcessingError as error:
+        logger.exception("Could not extract source %s", sid)
+        raise HTTPException(503, str(error)) from None
+    except STORAGE_ERRORS:
+        logger.exception("Could not extract source %s", sid)
+        raise HTTPException(503, "Your file could not be read. Please try again.") from None
+    return JSONResponse({"ok": True})
+
+
+@router.post("/extracted")
+async def extracted(request: Request) -> JSONResponse:
+    await read_json(request)
+    try:
+        uid, pid = await selected_draft(request)
+        items = await content.store().list_sources(uid, pid)
+        if any(not item.extracted for item in items if item.parent is None):
+            raise HTTPException(409, "Some files still need to be read. Please reload the reading page.")
         count, length = await content.store().completion(uid, pid)
     except STORAGE_ERRORS:
         logger.exception("Could not validate uploaded source content")
@@ -163,7 +227,9 @@ async def finished(request: Request) -> JSONResponse:
             "say": f"<p>I&rsquo;m sorry, {name}, but I need more content to work with.</p>"
                    "<p>I&rsquo;m unable to conjure enough content to create a useful poster.</p>",
         }, status_code=409)
-    return JSONResponse({"ok": True, "redirect": "/content/elucidate"})
+    return JSONResponse({
+        "ok": True, "redirect": "/content/elucidate", "say": size_warning(items),
+    })
 
 @router.get("/elucidate")
 async def elucidate_page(request: Request) -> Response:

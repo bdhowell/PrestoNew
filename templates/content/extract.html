@@ -1,0 +1,11 @@
+{% extends "page.html" %}
+{% block title %}Reading content - {{ app_name() }}{% endblock %}
+{% block content %}
+<h1>Reading your source content</h1>
+<p>Your files have finished uploading. Wikkit is reading through your content.</p>
+<p id="extraction-status" role="status" aria-live="polite">Preparing to read your files.</p>
+<p>Keep this page open while Wikkit extracts text, tables, and images for your poster.</p>
+<button id="retry-extraction" type="button" hidden>Try again</button>
+<p><a href="/content/upload">Back to source uploads</a></p>
+<script id="extraction-files" type="application/json">{{ pending | tojson }}</script>
+{% endblock %}

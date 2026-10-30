@@ -367,11 +367,15 @@ def parse_dimensions(text: str, default_units: str) -> tuple[float, float, str]:
     if match is None:
         raise ValueError("Enter height x width, with units cm, mm, or in (for example, 36 in x 48 in).")
     first, second = match[2], match[4]
-    units = (second or first or default_units).lower()
-    if units == '"':
-        units = "in"
-    width = float(match[3]) * SCALE[(second or units).lower()]
-    height = float(match[1]) * SCALE[(first or units).lower()]
+    if first == '"':
+        first = "in"
+    if second == '"':
+        second = "in"
+    units = second or first or default_units
+    second = (second or units).lower()
+    first = (first or units).lower()
+    width = float(match[3]) * SCALE[second]
+    height = float(match[1]) * SCALE[first]
     if not all(math.isfinite(value) for value in (width, height)):
         raise ValueError("Poster dimensions must be finite numbers.")
     return width, height, units

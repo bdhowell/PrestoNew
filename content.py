@@ -125,6 +125,7 @@ class Source:
     width: int | None = None
     height: int | None = None
     kind: str = "mixed"
+    extracted: bool = True
     depth: int = 0
 
     @property
@@ -239,7 +240,7 @@ class SourceStore(PosterStore):
 
     _SOURCE_COLUMNS = (
         "s.sid, coalesce(s.filename, parent.filename, 'Untitled source'), s.mimetype, "
-        "s.size, s.added::text, s.parent, s.description, s.width, s.height, s.kind"
+        "s.size, s.added::text, s.parent, s.description, s.width, s.height, s.kind, s.extracted"
     )
 
     async def list_sources(self, uid: int, pid: int) -> list[Source]:
@@ -269,20 +270,9 @@ class SourceStore(PosterStore):
 
     async def add(self, uid: int, pid: int, filename: str, data: bytes) -> Source:
         mimetype, kind = validate_file(filename, data)
+        width = height = None
         if kind == "image":
             width, height = await run_in_threadpool(processing.image_dimensions, data)
-            processed = processing.Processed(
-                width=width, height=height,
-                description=await processing.describe_image(data),
-            )
-        else:
-            processed = await run_in_threadpool(processing.extract, filename, data)
-            processed.summary = await processing.summarize(processed.text)
-        for asset in processed.assets:
-            if asset.width is not None and not asset.description:
-                asset.description = await processing.describe_image(asset.data)
-        for warning in processed.warnings:
-            logger.warning("Source conversion warning for %s: %s", filename, warning)
         files = SourceFiles()
         connection = await self._connect()
         written: list[str] = []
@@ -300,14 +290,11 @@ class SourceStore(PosterStore):
                 if await cursor.fetchone() is None:
                     raise ValueError("This poster is no longer available for uploads.")
                 original = processing.Asset(
-                    filename, data, mimetype, kind, processed.text, processed.description,
-                    processed.width, processed.height,
+                    filename, data, mimetype, kind, width=width, height=height,
                 )
                 result = await self._insert_source(
-                    connection, files, written, pid, original, None, processed.summary,
+                    connection, files, written, pid, original, None, extracted=False,
                 )
-                for asset in processed.assets:
-                    await self._insert_source(connection, files, written, pid, asset, result.sid)
         except BaseException:
             for uri in written:
                 try:
@@ -317,9 +304,68 @@ class SourceStore(PosterStore):
             raise
         return result
 
+    async def extract(self, uid: int, pid: int, sid: int) -> None:
+        files = SourceFiles()
+        connection = await self._connect()
+        written: list[str] = []
+        try:
+            async with connection:
+                # Serialize extraction and edits for this poster, including retries in other tabs.
+                cursor = await connection.execute(
+                    "SELECT p.pid FROM poster p WHERE p.uid = %s AND p.pid = %s AND NOT EXISTS "
+                    "(SELECT 1 FROM purchase b WHERE b.pid = p.pid) FOR UPDATE", (uid, pid),
+                )
+                if await cursor.fetchone() is None:
+                    raise SourceConflictError("This poster is no longer available for extraction.")
+                cursor = await connection.execute(
+                    "SELECT filename, storage_uri, kind, extracted FROM source "
+                    "WHERE pid = %s AND sid = %s AND parent IS NULL FOR UPDATE", (pid, sid),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    raise SourceConflictError("Source file not found for this poster.")
+                filename, uri, kind, extracted = row
+                if extracted:
+                    return
+                data = await run_in_threadpool(files.read, uri)
+                if kind in ("image", "logo"):
+                    width, height = await run_in_threadpool(processing.image_dimensions, data)
+                    result = processing.Processed(
+                        width=width, height=height,
+                        description=await processing.describe_image(data),
+                    )
+                else:
+                    result = await run_in_threadpool(processing.extract, filename, data)
+                    result.summary = await processing.summarize(result.text)
+                for asset in result.assets:
+                    if asset.width is not None and not asset.description:
+                        asset.description = await processing.describe_image(asset.data)
+                for warning in result.warnings:
+                    logger.warning("Source conversion warning for %s: %s", filename, warning)
+                original = processing.Asset(
+                    filename, data, "", kind, result.text, result.description,
+                    result.width, result.height,
+                )
+                kind = await self._asset_kind(connection, pid, original)
+                await connection.execute(
+                    "UPDATE source SET text = %s, summary = %s, description = %s, "
+                    "width = %s, height = %s, kind = %s, extracted = TRUE WHERE sid = %s",
+                    (result.text or None, result.summary or None, result.description or None,
+                     result.width, result.height, kind, sid),
+                )
+                for asset in result.assets:
+                    await self._insert_source(connection, files, written, pid, asset, sid)
+        except BaseException:
+            for uri in written:
+                try:
+                    await run_in_threadpool(files.delete, uri)
+                except (OSError, GoogleAPIError, GoogleAuthError):
+                    logger.exception("Could not remove failed extraction asset %s", uri)
+            raise
+
     async def _insert_source(
         self, connection: psycopg.AsyncConnection, files: SourceFiles, written: list[str], pid: int,
-        asset: processing.Asset, parent: int | None, summary: str = "",
+        asset: processing.Asset, parent: int | None, summary: str = "", extracted: bool = True,
     ) -> Source:
         digest = source_hash(asset.data)
         if asset.width is not None or parent is not None:
@@ -331,33 +377,37 @@ class SourceStore(PosterStore):
             row = await cursor.fetchone()
             if row is not None:
                 return Source(*row)
-        kind = asset.kind
+        kind = await self._asset_kind(connection, pid, asset) if extracted else asset.kind
+        fileid = uuid4()
+        uri = await run_in_threadpool(files.put, fileid, asset.data, asset.mimetype)
+        written.append(uri)
+        cursor = await connection.execute(
+            "INSERT INTO source (pid, kind, parent, filename, mimetype, size, fileid, hash, "
+            "storage_uri, text, summary, description, width, height, extracted) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "RETURNING sid, filename, mimetype, size, added::text, parent, description, width, height, kind, extracted",
+            (pid, kind, parent, asset.filename, asset.mimetype, len(asset.data), fileid,
+             digest, uri, asset.text or None, summary or None, asset.description or None,
+             asset.width, asset.height, extracted),
+        )
+        row = await cursor.fetchone()
+        assert row is not None
+        return Source(*row)
+
+    async def _asset_kind(
+        self, connection: psycopg.AsyncConnection, pid: int, asset: processing.Asset,
+    ) -> str:
         if asset.width is not None and "logo" in (asset.filename + " " + asset.description).lower():
             cursor = await connection.execute(
                 "SELECT sid, coalesce(width, 0) * coalesce(height, 0)::bigint "
                 "FROM source WHERE pid = %s AND kind = 'logo'", (pid,),
             )
             logo = await cursor.fetchone()
-            area = asset.width * (asset.height or 0)
-            if logo is None or area > logo[1]:
+            if logo is None or asset.width * (asset.height or 0) > logo[1]:
                 if logo is not None:
                     await connection.execute("UPDATE source SET kind = 'image' WHERE sid = %s", (logo[0],))
-                kind = "logo"
-        fileid = uuid4()
-        uri = await run_in_threadpool(files.put, fileid, asset.data, asset.mimetype)
-        written.append(uri)
-        cursor = await connection.execute(
-            "INSERT INTO source (pid, kind, parent, filename, mimetype, size, fileid, hash, "
-            "storage_uri, text, summary, description, width, height) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-            "RETURNING sid, filename, mimetype, size, added::text, parent, description, width, height, kind",
-            (pid, kind, parent, asset.filename, asset.mimetype, len(asset.data), fileid,
-             digest, uri, asset.text or None, summary or None, asset.description or None,
-             asset.width, asset.height),
-        )
-        row = await cursor.fetchone()
-        assert row is not None
-        return Source(*row)
+                return "logo"
+        return asset.kind
 
     async def completion(self, uid: int, pid: int) -> tuple[int, int]:
         connection = await self._connect()
@@ -382,12 +432,14 @@ class SourceStore(PosterStore):
             async with connection:
                 return await self.source_text(uid, pid, connection)
         cursor = await connection.execute(
-            "SELECT s.sid, s.filename, s.text, s.mimetype FROM source s JOIN poster p USING (pid) "
+            "SELECT s.sid, s.filename, s.text, s.mimetype, s.extracted FROM source s JOIN poster p USING (pid) "
             "WHERE p.uid = %s AND p.pid = %s AND s.parent IS NULL ORDER BY s.added, s.sid",
             (uid, pid),
         )
         rows = await cursor.fetchall()
-        texts = [readable_text(text, mimetype) for _, _, text, mimetype in rows if text]
+        if any(not extracted for _, _, _, _, extracted in rows):
+            raise SourceConflictError("Please finish reading your files at /content/extract before running analysis.")
+        texts = [readable_text(text, mimetype) for _, _, text, mimetype, _ in rows if text]
         return SourceText(
             len(rows), "\n\n".join(text for text in texts if text),
             source_hash(json.dumps(rows, ensure_ascii=True)), sum(len(text) for text in texts),

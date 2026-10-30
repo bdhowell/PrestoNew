@@ -133,7 +133,7 @@ class ContentRouteTests(unittest.TestCase):
         with self.assertLogs("routers.content", "ERROR"):
             self.assertEqual(self.client.get("/content/upload").status_code, 503)
 
-    def test_finish_checks_empty_no_text_and_exact_configured_threshold(self) -> None:
+    def test_extracted_checks_empty_no_text_and_exact_configured_threshold(self) -> None:
         with patch.dict(os.environ, {"SOURCE_TEXT_MIN_LENGTH": "4000"}):
             for count, length, message in (
                 (0, 0, "you can&rsquo;t have a poster without any content!"),
@@ -141,16 +141,16 @@ class ContentRouteTests(unittest.TestCase):
                 (1, 3999, "I&rsquo;m unable to conjure enough content to create a useful poster."),
             ):
                 self.sources.completion.return_value = (count, length)
-                response = self.client.post("/content/finished", json={})
+                response = self.client.post("/content/extracted", json={})
                 self.assertEqual(response.status_code, 409)
                 self.assertNotIn("redirect", response.json())
                 self.assertIn("&lt;Ada&gt;", response.json()["say"])
                 self.assertIn(message, response.json()["say"])
             for length in (4000, 4001):
                 self.sources.completion.return_value = (1, length)
-                response = self.client.post("/content/finished", json={})
+                response = self.client.post("/content/extracted", json={})
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.json(), {"ok": True, "redirect": "/content/elucidate"})
+                self.assertEqual(response.json(), {"ok": True, "redirect": "/content/elucidate", "say": ""})
         self.sources.completion.assert_awaited_with(7, 11)
 
     def test_finish_requires_same_origin_json_and_editable_owner(self) -> None:
@@ -160,15 +160,70 @@ class ContentRouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/content/finished", json={}).status_code, 409)
         self.sources.completion.assert_not_awaited()
 
-    def test_finished_default_minimum_is_four_thousand_and_errors_are_visible(self) -> None:
+    def test_extracted_default_minimum_is_four_thousand_and_errors_are_visible(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             self.sources.completion.return_value = (1, 3999)
-            self.assertEqual(self.client.post("/content/finished", json={}).status_code, 409)
+            self.assertEqual(self.client.post("/content/extracted", json={}).status_code, 409)
             self.sources.completion.return_value = (1, 4000)
-            self.assertEqual(self.client.post("/content/finished", json={}).status_code, 200)
+            self.assertEqual(self.client.post("/content/extracted", json={}).status_code, 200)
         self.sources.completion.side_effect = psycopg.OperationalError("down")
         with self.assertLogs("routers.content", "ERROR"):
-            self.assertEqual(self.client.post("/content/finished", json={}).status_code, 503)
+            self.assertEqual(self.client.post("/content/extracted", json={}).status_code, 503)
+
+    def test_finished_uploads_go_to_reading_page_before_text_validation(self) -> None:
+        self.assertEqual(self.client.post("/content/finished", json={}).status_code, 409)
+        self.sources.list_sources.return_value = [replace(ITEM, extracted=False)]
+        response = self.client.post("/content/finished", json={})
+        self.assertEqual(response.json(), {"ok": True, "redirect": "/content/extract"})
+        self.sources.completion.assert_not_awaited()
+
+    def test_reading_page_lists_only_pending_originals_and_announces_upload_completion(self) -> None:
+        self.sources.list_sources.return_value = [
+            replace(ITEM, extracted=False), replace(ITEM, sid=2),
+            replace(ITEM, sid=3, parent=1, extracted=False),
+        ]
+        response = self.client.get("/content/extract")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("your content has finished uploading", response.text)
+        self.assertIn("reading through it now", response.text)
+        self.assertIn("/static/javascript/pages/content-extract.js", response.text)
+        self.assertIn('"sid": 1', response.text)
+        self.assertNotIn('"sid": 2', response.text)
+        self.assertNotIn('"sid": 3', response.text)
+        self.assertNotIn("<paper>.pdf", response.text)
+        self.uid = None
+        response = self.client.get("/content/extract", follow_redirects=False)
+        self.assertEqual(response.headers["location"], "/account/signin")
+
+    def test_extraction_is_owner_checked_and_reports_failures(self) -> None:
+        response = self.client.post("/content/extract/1", json={})
+        self.assertEqual(response.json(), {"ok": True})
+        self.sources.extract.assert_awaited_once_with(7, 11, 1)
+        for error, code in (
+            (content.SourceConflictError("Source not found"), 409),
+            (source_processing.ProcessingError("Docling is unavailable"), 503),
+            (OSError("missing original"), 503),
+            (ValueError("Invalid source"), 422),
+        ):
+            self.sources.extract.side_effect = error
+            if code == 409:
+                self.assertEqual(self.client.post("/content/extract/1", json={}).status_code, code)
+            else:
+                with self.assertLogs("routers.content", "ERROR"):
+                    self.assertEqual(self.client.post("/content/extract/1", json={}).status_code, code)
+
+    def test_extraction_rejects_cross_origin_non_json_and_unowned_poster(self) -> None:
+        for url in ("/content/extract/1", "/content/extracted"):
+            self.assertEqual(self.client.post(url, json={}, headers={"Origin": "https://evil.example"}).status_code, 403)
+            self.assertEqual(self.client.post(url, content="").status_code, 415)
+        self.posters.get.return_value = None
+        self.assertEqual(self.client.post("/content/extract/1", json={}).status_code, 404)
+        self.sources.extract.assert_not_awaited()
+
+    def test_completion_cannot_skip_pending_extraction(self) -> None:
+        self.sources.list_sources.return_value = [replace(ITEM, extracted=False)]
+        self.assertEqual(self.client.post("/content/extracted", json={}).status_code, 409)
+        self.sources.completion.assert_not_awaited()
 
     def test_processing_service_configuration_errors_are_reported_explicitly(self) -> None:
         self.sources.add.side_effect = source_processing.ProcessingError("DOCLING_SERVICE_URL is required")
@@ -421,7 +476,10 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         statement, params = connection.execute.await_args_list[2].args
         self.assertEqual(params[:6], (11, "text", None, "file.md", "text/markdown", 4))
         self.assertIsInstance(params[6], uuid.UUID)
-        self.assertEqual(params[7:11], (content.source_hash(b"text"), "/sources/1/test", "text", "Summary"))
+        self.assertEqual(params[7:11], (content.source_hash(b"text"), "/sources/1/test", None, None))
+        self.assertIs(params[-1], False)
+        content.processing.extract.assert_not_called()
+        content.processing.summarize.assert_not_awaited()
 
     async def test_foreign_or_purchased_poster_never_writes_a_file(self) -> None:
         store = content.SourceStore()
@@ -479,14 +537,14 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
     async def test_children_record_document_parent_and_all_files_rollback_on_failure(self) -> None:
         store = content.SourceStore()
         connection = AsyncMock()
-        owner, poster, inserted, missing = AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
-        owner.fetchone.return_value = (7,)
+        poster, original, updated, missing = AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
         poster.fetchone.return_value = (11,)
-        inserted.fetchone.return_value = (1, "file.md", "text/markdown", 4, "now")
+        original.fetchone.return_value = ("file.md", "/sources/document", "text", False)
         missing.fetchone.return_value = None
-        connection.execute.side_effect = [owner, poster, inserted, missing, psycopg.OperationalError("down")]
+        connection.execute.side_effect = [poster, original, updated, missing, psycopg.OperationalError("down")]
         files = Mock()
-        files.put.side_effect = ["/sources/document", "/sources/child"]
+        files.read.return_value = b"text"
+        files.put.return_value = "/sources/child"
         processed = source_processing.Processed(text="text", assets=[
             source_processing.Asset("formula.txt", b"e=mc^2", "text/plain", "image", text="e=mc^2"),
         ])
@@ -494,10 +552,72 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(store, "_connect", AsyncMock(return_value=connection)), \
                 patch.object(content, "SourceFiles", return_value=files):
             with self.assertRaises(psycopg.OperationalError):
-                await store.add(7, 11, "file.md", b"text")
+                await store.extract(7, 11, 1)
         child_params = connection.execute.await_args_list[-1].args[1]
         self.assertEqual(child_params[2], 1)
-        self.assertEqual([call.args[0] for call in files.delete.call_args_list], ["/sources/document", "/sources/child"])
+        self.assertEqual([call.args[0] for call in files.delete.call_args_list], ["/sources/child"])
+
+    async def test_extraction_updates_saved_original_and_can_be_retried_without_reprocessing(self) -> None:
+        for already_extracted in (False, True):
+            with self.subTest(already_extracted=already_extracted):
+                store = content.SourceStore()
+                connection = AsyncMock()
+                poster, original, updated = AsyncMock(), AsyncMock(), AsyncMock()
+                poster.fetchone.return_value = (11,)
+                original.fetchone.return_value = ("file.md", "/sources/document", "text", already_extracted)
+                connection.execute.side_effect = [poster, original, updated]
+                files = Mock()
+                files.read.return_value = b"text"
+                content.processing.extract.reset_mock()
+                content.processing.summarize.reset_mock()
+                with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                        patch.object(content, "SourceFiles", return_value=files):
+                    await store.extract(7, 11, 1)
+                files.put.assert_not_called()
+                if already_extracted:
+                    files.read.assert_not_called()
+                    content.processing.extract.assert_not_called()
+                else:
+                    files.read.assert_called_once_with("/sources/document")
+                    content.processing.extract.assert_called_once_with("file.md", b"text")
+                    content.processing.summarize.assert_awaited_once_with("text")
+                    statement, params = connection.execute.await_args_list[-1].args
+                    self.assertIn("extracted = TRUE", statement)
+                    self.assertEqual(params, ("text", "Summary", None, None, None, "text", 1))
+
+    async def test_failed_conversion_keeps_original_for_retry(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        poster, original = AsyncMock(), AsyncMock()
+        poster.fetchone.return_value = (11,)
+        original.fetchone.return_value = ("file.md", "/sources/document", "text", False)
+        connection.execute.side_effect = [poster, original]
+        files = Mock()
+        files.read.return_value = b"text"
+        processing_error = source_processing.ProcessingError("down")
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                patch.object(content, "SourceFiles", return_value=files), \
+                patch.object(content.processing, "extract", side_effect=processing_error):
+            with self.assertRaises(source_processing.ProcessingError) as raised:
+                await store.extract(7, 11, 1)
+        self.assertIs(raised.exception, processing_error)
+        self.assertEqual(connection.execute.await_count, 2)
+        files.delete.assert_not_called()
+
+    async def test_missing_or_uneditable_source_never_reads_storage(self) -> None:
+        for poster_row, source_row in ((None, None), ((11,), None)):
+            store = content.SourceStore()
+            connection = AsyncMock()
+            poster, original = AsyncMock(), AsyncMock()
+            poster.fetchone.return_value = poster_row
+            original.fetchone.return_value = source_row
+            connection.execute.side_effect = [poster, original]
+            files = Mock()
+            with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                    patch.object(content, "SourceFiles", return_value=files):
+                with self.assertRaises(content.SourceConflictError):
+                    await store.extract(7, 11, 1)
+            files.read.assert_not_called()
 
     async def test_spreadsheet_markup_does_not_count_toward_text_threshold(self) -> None:
         connection = AsyncMock()
@@ -755,7 +875,71 @@ class ContentDatabaseTests(unittest.TestCase):
             self.assertEqual(asyncio.run(self.store.list_sources(8, pid)), [])
             rows = self.connection.execute("SELECT parent, storage_uri FROM source WHERE pid = %s", (pid,)).fetchall()
             self.assertTrue(all(parent is None and Path(uri).is_file() for parent, uri in rows))
-            self.connection.execute((ROOT / "schema/schema.sql").read_text())
+            self.assertFalse(first.extracted)
+            self.assertFalse(second.extracted)
+            self.assertEqual(asyncio.run(self.store.completion(7, pid)), (2, 0))
+            asyncio.run(self.store.extract(7, pid, first.sid))
+            asyncio.run(self.store.extract(7, pid, second.sid))
+            self.assertEqual(asyncio.run(self.store.completion(7, pid)), (2, 11))
+            self.assertTrue(all(item.extracted for item in asyncio.run(self.store.list_sources(7, pid))))
+            self.connection.execute((ROOT / "schema/source-extraction.sql").read_text())
+
+    def test_concurrent_retries_extract_once_and_preserve_original_on_failure(self) -> None:
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SOURCES_DIR": directory, "GCS_BUCKET": ""}):
+            item = asyncio.run(self.store.add(7, pid, "research.md", b"research"))
+            uri = self.connection.execute("SELECT storage_uri FROM source WHERE sid = %s", (item.sid,)).fetchone()[0]
+            with patch.object(content.processing, "extract", side_effect=source_processing.ProcessingError("offline")):
+                with self.assertRaises(source_processing.ProcessingError):
+                    asyncio.run(self.store.extract(7, pid, item.sid))
+            self.assertEqual(Path(uri).read_bytes(), b"research")
+            self.assertFalse(asyncio.run(self.store.list_sources(7, pid))[0].extracted)
+            with patch.object(content.processing, "extract", return_value=source_processing.Processed(text="research")) as extract, \
+                    patch.object(content.processing, "summarize", AsyncMock(return_value="Summary")):
+                async def retry_concurrently() -> None:
+                    await asyncio.gather(
+                        self.store.extract(7, pid, item.sid),
+                        self.store.extract(7, pid, item.sid),
+                    )
+
+                asyncio.run(retry_concurrently())
+            extract.assert_called_once()
+            self.assertEqual(asyncio.run(self.store.completion(7, pid)), (1, 8))
+
+    def test_migration_preserves_existing_extracted_sources(self) -> None:
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        self.connection.execute("ALTER TABLE source DROP COLUMN extracted")
+        try:
+            self.connection.execute(
+                "INSERT INTO source (pid, kind, text, size, mimetype) VALUES (%s, 'text', 'existing', 8, 'text/markdown')",
+                (pid,),
+            )
+        finally:
+            self.connection.execute((ROOT / "schema/source-extraction.sql").read_text())
+        self.connection.execute((ROOT / "schema/source-extraction.sql").read_text())
+        self.assertTrue(asyncio.run(self.store.list_sources(7, pid))[0].extracted)
+
+    def test_image_description_and_logo_classification_are_deferred_until_extraction(self) -> None:
+        from PIL import Image
+        image = io.BytesIO()
+        Image.new("RGB", (300, 400)).save(image, format="PNG")
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(os.environ, {"SOURCES_DIR": directory, "GCS_BUCKET": ""}), \
+                patch.object(content.processing, "describe_image", AsyncMock(return_value="A research logo")) as describe:
+            item = asyncio.run(self.store.add(7, pid, "graphic.png", image.getvalue()))
+            describe.assert_not_awaited()
+            self.assertFalse(item.extracted)
+            self.assertEqual(item.kind, "image")
+            asyncio.run(self.store.extract(7, pid, item.sid))
+            describe.assert_awaited_once_with(image.getvalue())
+            sources = asyncio.run(self.store.list_sources(7, pid))
+            self.assertEqual(len(sources), 1)
+            self.assertEqual(sources[0].sid, item.sid)
+            self.assertEqual(sources[0].kind, "logo")
+            self.assertEqual(sources[0].description, "A research logo")
+            self.assertEqual((sources[0].width, sources[0].height), (300, 400))
+            self.assertTrue(sources[0].extracted)
 
 
 if __name__ == "__main__":
