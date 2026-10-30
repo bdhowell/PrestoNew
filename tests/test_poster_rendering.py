@@ -206,6 +206,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(template=template):
                 await self.page.set_viewport_size({"width": 900, "height": 700})
                 await self.editor(template)
+                await self.set_zoom("100")
                 full = await self.dimensions()
                 self.assertAlmostEqual(full["canvasWidth"], DRAFT.inches[0] * 96, delta=0.1)
                 self.assertAlmostEqual(full["canvasHeight"], DRAFT.inches[1] * 96, delta=0.1)
@@ -234,6 +235,29 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertAlmostEqual(
                     (await self.dimensions())["canvasWidth"], full["canvasWidth"], delta=0.1,
                 )
+
+    async def test_editor_initially_fits_and_centers_poster(self) -> None:
+        for width, height in ((900, 700), (360, 500), (1100, 800)):
+            for template in posters.TEMPLATES:
+                with self.subTest(viewport=(width, height), template=template):
+                    await self.page.set_viewport_size({"width": width, "height": height})
+                    await self.editor(template)
+                    dimensions = await self.dimensions()
+                    self.assertLess(dimensions["sliderMin"], 100)
+                    self.assertAlmostEqual(
+                        dimensions["canvasWidth"] / (DRAFT.inches[0] * 96),
+                        dimensions["sliderMin"] / 100, delta=1e-6,
+                    )
+                    self.assertLessEqual(dimensions["scrollWidth"], dimensions["clientWidth"] + 1)
+                    self.assertLessEqual(dimensions["scrollHeight"], dimensions["clientHeight"] + 1)
+                    self.assertAlmostEqual(
+                        dimensions["canvasLeft"] + dimensions["canvasWidth"] / 2,
+                        dimensions["clientWidth"] / 2, delta=1,
+                    )
+                    self.assertAlmostEqual(
+                        dimensions["canvasTop"] + dimensions["canvasHeight"] / 2,
+                        dimensions["clientHeight"] / 2, delta=1,
+                    )
 
     async def test_fit_tracks_viewport_menu_and_content_resizing(self) -> None:
         await self.editor()

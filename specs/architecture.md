@@ -1368,6 +1368,22 @@ On the first tap or click, show each section's name in large bold type centered 
 On the second tap or click, hide the section names and, if over a section, set the section as contentEditable="true" and activate the pop-up editor as described, set the previous section, if any, as contentEditable="false"
 Each `.content` section is editable. Save its sanitized HTML to the corresponding database section after 300 ms without input.
 
+The bottom editor controls format selections within editable `.content` sections:
+bold, italic, inline code, underline, strikethrough, superscript, and subscript.
+Plain Text removes inline formatting and links from selected text without changing
+the surrounding content. Formatting changes use the same autosave as typing.
+Controls are disabled outside an editable section; Plain Text requires a selection.
+The save status follows Redo. Zoom controls are grouped at the right edge, with
+the percentage readout using the same outer inset as the Bold button on the left.
+The existing Cut and Copy controls copy selected text with its formatting; Cut
+also deletes the selection and autosaves. Paste inserts clipboard HTML (restricted
+to the supported HTML allowlist) or plain text at the selection and autosaves.
+Common inline span styles are converted to supported formatting tags. Browsers
+with only `clipboard.readText` support paste plain text instead.
+Cut and Copy require a nonempty selection. Toolbar clipboard access requires
+browser permission and a secure context; failures are shown in the status area
+with guidance to use the keyboard shortcut instead.
+
 Clicking a .item activates a draggable pop-up window of editing tools:
 - The tools are organized into groiups
 	- Cut, Copy, Paste

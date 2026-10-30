@@ -102,6 +102,22 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.store.save_section.assert_not_awaited()
 
+    def test_editor_formatting_survives_saving_and_rendering(self) -> None:
+        markup = (
+            "<b>Bold</b> <i>Italic</i> <code>Code</code> <u>Underline</u> "
+            "<strike>Strike</strike> <sup>Up</sup> <sub>Down</sub>"
+        )
+        self.store.save_section.return_value = True
+        response = self.client.post(
+            "/layout/content", json={"section": "results", "content": markup},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.store.save_section.assert_awaited_once_with(7, 11, "results", markup)
+        self.store.content.return_value = ([("results", markup)], [])
+        document = html.fromstring(self.client.get("/layout/edit").text)
+        for tag in ("b", "i", "code", "u", "strike", "sup", "sub"):
+            self.assertEqual(len(document.xpath(f'//*[@id="results"]//{tag}')), 1)
+
     def test_headers_include_measured_widths_for_every_template(self) -> None:
         for template in posters.TEMPLATES:
             with self.subTest(template=template):

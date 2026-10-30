@@ -9,8 +9,9 @@
             <button id="underline" aria-label="Underline" title="Underline"><i class="fa-solid fa-underline"></i></button>
             <button id="strikethrough" aria-label="Strikethrough" title="Strikethrough"><i class="fa-solid fa-strikethrough"></i></button>
             <button id="code" aria-label="Code" title="Code"><i class="fa-solid fa-code"></i></button>
-            <button id="superscript" class="gap" aria-label="Superscript" title="Superscript"><i class="fa-solid fa-superscript"></i></button>
+            <button id="superscript" aria-label="Superscript" title="Superscript"><i class="fa-solid fa-superscript"></i></button>
             <button id="subscript" aria-label="Subscript" title="Subscript"><i class="fa-solid fa-subscript"></i></button>
+            <button id="plaintext" aria-label="Plain Text" title="Plain Text"><i class="fa-solid fa-text-slash"></i></button>
             <button id="image" class="gap" aria-label="Image" title="Image"><i class="fa-solid fa-image"></i></button>
             <button id="chart-line" aria-label="Chart" title="Chart"><i class="fa-solid fa-chart-line"></i></button>
             <button id="square-root-variable" aria-label="Formula" title="Formula"><i class="fa-solid fa-square-root-variable"></i></button>
@@ -19,12 +20,14 @@
             <button id="paste" aria-label="Paste" title="Paste"><i class="fa-solid fa-paste"></i></button>
             <button id="undo" class="gap" aria-label="Undo" title="Undo"><i class="fa-solid fa-arrow-rotate-left"></i></button>
             <button id="redo" aria-label="Redo" title="Redo"><i class="fa-solid fa-arrow-rotate-right"></i></button>
+            <output id="content-save-status" role="status" aria-live="polite"></output>
         </div>
-        <label for="poster-zoom">Zoom</label>
-        <input id="poster-zoom" type="range" min="1" max="100" step="any" value="100"
-               aria-label="Poster zoom percentage" aria-describedby="poster-zoom-value">
-        <output id="poster-zoom-value" for="poster-zoom">100%</output>
-        <output id="content-save-status" role="status" aria-live="polite"></output>
+        <div id="zoom-controls">
+            <label for="poster-zoom">Zoom</label>
+            <input id="poster-zoom" type="range" min="1" max="100" step="any" value="100"
+                   aria-label="Poster zoom percentage" aria-describedby="poster-zoom-value">
+            <output id="poster-zoom-value" for="poster-zoom">100%</output>
+        </div>
     </div>
 </body>
 </html>

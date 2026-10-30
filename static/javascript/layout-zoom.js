@@ -9,7 +9,7 @@
     const slider = document.getElementById("poster-zoom");
     const output = document.getElementById("poster-zoom-value");
     let scale = 1;
-    let fitting = false;
+    let fitting = true;
     let pending = false;
     let zoomAnchor = null;
 
