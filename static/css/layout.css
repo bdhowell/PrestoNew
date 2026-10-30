@@ -135,6 +135,10 @@ body > .basic-menu {
     text-align: right;
 }
 
+#content-save-status {
+    min-width: 12rem;
+}
+
 .layout {
     flex: 1 0 auto;
     grid-template-rows: minmax(min-content, 1fr);

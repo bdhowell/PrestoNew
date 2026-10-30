@@ -333,6 +333,28 @@ class PosterStore:
             authors = await cursor.fetchall()
         return sections, authors
 
+    async def save_section(self, uid: int, pid: int, which: str, value: str) -> bool:
+        self.invalidate(uid, pid)
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "INSERT INTO section (pid, which, content, updated, embedding) "
+                "SELECT p.pid, %s::section_which, %s, now(), NULL FROM poster p "
+                "WHERE p.uid = %s AND p.pid = %s "
+                "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
+                "ON CONFLICT (pid, which) DO UPDATE SET content = excluded.content, "
+                "updated = excluded.updated, embedding = NULL RETURNING xid",
+                (which, value, uid, pid),
+            )
+            if await cursor.fetchone() is None:
+                return False
+            await connection.execute(
+                "UPDATE poster SET updated = now(), embedding = NULL "
+                "WHERE uid = %s AND pid = %s", (uid, pid),
+            )
+        self.invalidate(uid, pid)
+        return True
+
     async def conference_details(self, uid: int, pid: int) -> tuple[str, dict]:
         connection = await self._connect()
         async with connection:

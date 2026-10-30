@@ -1366,6 +1366,7 @@ On a double tap or double click, display a pop-up window which shows:
 
 On the first tap or click, show each section's name in large bold type centered over its section.
 On the second tap or click, hide the section names and, if over a section, set the section as contentEditable="true" and activate the pop-up editor as described, set the previous section, if any, as contentEditable="false"
+Each `.content` section is editable. Save its sanitized HTML to the corresponding database section after 300 ms without input.
 
 Clicking a .item activates a draggable pop-up window of editing tools:
 - The tools are organized into groiups

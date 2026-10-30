@@ -33,6 +33,11 @@ ALIASES = {
     "methods": "materials and methods", "conclusions": "conclusion",
     "citations": "literature cited", "information": "additional information",
 }
+SECTION_WHICH = frozenset({
+    "title", "abstract", "introduction", "materials and methods", "results",
+    "conclusion", "future plans", "literature cited", "additional information",
+    "acknowledgements",
+})
 
 
 def uid_for(request: Request) -> int:
@@ -116,7 +121,13 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
                 )
                 heading = etree.SubElement(section, "div", attrib={"class": "header"})
                 heading.text = item.title()
-                body = etree.SubElement(section, "div", attrib={"class": "content"})
+                body = etree.SubElement(
+                    section, "div", attrib={
+                        "class": "content",
+                        "contenteditable": "true",
+                        "data-section": ALIASES.get(item, item),
+                    },
+                )
                 append_html(body, value)
                 # Elucidation stores its own heading; the layout supplies it instead.
                 if len(body) and body[0].tag in ("h2", "h3"):
@@ -181,6 +192,29 @@ async def edit_layout(
         logger.exception("Could not render poster %s", poster.pid)
         raise HTTPException(503, "Your layout could not be loaded. Please try again.") from None
     return HTMLResponse(rendered, headers=PRIVATE)
+
+
+@router.post("/content")
+async def update_content(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    which = data.get("section")
+    value = data.get("content")
+    if not isinstance(which, str) or which not in SECTION_WHICH:
+        raise HTTPException(422, "Choose a valid poster section.")
+    if not isinstance(value, str) or len(value) > 100_000:
+        raise HTTPException(422, "Poster section content is invalid or too long.")
+
+    try:
+        poster = await owned(request, draft=True)
+        saved = await posters.store().save_section(
+            uid_for(request), poster.pid, which, elucidation.clean_html(value),
+        )
+    except psycopg.Error:
+        logger.exception("Could not save poster section %s", which)
+        raise HTTPException(503, "Your changes could not be saved. Please try again.") from None
+    if not saved:
+        raise HTTPException(409, "This poster can no longer be edited.")
+    return JSONResponse({"ok": True})
 
 
 @router.get("/qrcode")

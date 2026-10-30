@@ -600,6 +600,18 @@ class PosterDatabaseTests(unittest.TestCase):
             self.assertIsNone(asyncio.run(self.store.get(7, pid)).resumption)
             self.assertEqual(asyncio.run(account.resumption_page(request)), "/posters/list")
 
+    def test_save_section_persists_content_and_rejects_foreign_or_purchased_posters(self) -> None:
+        pid = self.create("Research")
+        self.assertTrue(asyncio.run(self.store.save_section(7, pid, "results", "<p>Quasar evidence</p>")))
+        sections, _ = asyncio.run(self.store.content(7, pid))
+        self.assertIn(("results", "<p>Quasar evidence</p>"), sections)
+        self.assertEqual(asyncio.run(self.store.list(7, "quasar"))[0].pid, pid)
+        self.assertFalse(asyncio.run(self.store.save_section(8, pid, "results", "Private")))
+        self.purchase(pid)
+        self.assertFalse(asyncio.run(self.store.save_section(7, pid, "results", "Purchased")))
+        sections, _ = asyncio.run(self.store.content(7, pid))
+        self.assertIn(("results", "<p>Quasar evidence</p>"), sections)
+
     def test_fts_tracks_description_sections_authors_and_keyterms(self) -> None:
         pid = self.create("Ocean science")
         private = self.create("Ocean science", uid=8)

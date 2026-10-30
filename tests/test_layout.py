@@ -64,6 +64,43 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertIn("Experiment", document.get_element_by_id("methods").text_content())
         self.assertEqual(len(document.xpath('//*[@id="methods"]//h2')), 0)
         self.assertIn("Findings", document.get_element_by_id("conclusion").text_content())
+        self.assertEqual(
+            document.xpath('//*[@id="methods"]//div[@class="content"]/@contenteditable'),
+            ["true"],
+        )
+        self.assertEqual(
+            document.xpath('//*[@id="methods"]//div[@class="content"]/@data-section'),
+            ["materials and methods"],
+        )
+
+    def test_section_content_is_saved_to_its_database_section(self) -> None:
+        self.store.save_section.return_value = True
+        response = self.client.post(
+            "/layout/content",
+            json={"section": "materials and methods", "content": "<p>Updated</p>"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        self.store.save_section.assert_awaited_once_with(
+            7, 11, "materials and methods", "<p>Updated</p>",
+        )
+
+    def test_section_save_rejects_invalid_input_and_cross_origin_requests(self) -> None:
+        for data in (
+            {"section": "not a section", "content": "text"},
+            {"section": "results", "content": 123},
+            {"section": "results", "content": "x" * 100_001},
+        ):
+            with self.subTest(data=data):
+                response = self.client.post("/layout/content", json=data)
+                self.assertEqual(response.status_code, 422)
+        response = self.client.post(
+            "/layout/content",
+            json={"section": "results", "content": "text"},
+            headers={"Origin": "https://elsewhere.test"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.store.save_section.assert_not_awaited()
 
     def test_headers_include_measured_widths_for_every_template(self) -> None:
         for template in posters.TEMPLATES:
