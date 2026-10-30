@@ -38,6 +38,7 @@
     --text-color: #000000;
     --border-color: #004080;
     --border-width: 3px;
+    --border-radius: 3rem;
 }
 
 .reds {
@@ -56,4 +57,5 @@
     --text-color: #000000;
     --border-color: #004000;
     --border-width: 3px;
+    --border-radius: 3rem;
 }

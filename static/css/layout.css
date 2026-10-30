@@ -295,6 +295,7 @@ body > .basic-menu {
 .section-parent {
     border-color: var(--border-color);
     border-width: var(--border-width);
+    border-radius: var(--border-radius);
     border-style: solid;
     display: flex;
     flex-direction: row;
@@ -305,6 +306,7 @@ body > .basic-menu {
     color: var(--text-color);
     border-color: var(--border-color);
     border-width: var(--border-width);
+    border-radius: var(--border-radius);
     border-style: solid;
     padding: 3rem 5rem 5rem 5rem;
     vertical-align: middle;
