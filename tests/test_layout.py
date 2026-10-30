@@ -158,6 +158,47 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertTrue(document.xpath('//link[@href="/static/css/themes.css"]'))
         self.assertTrue(document.xpath('//link[@href="/static/css/fonts.css"]'))
 
+    def test_theme_dialog_lists_installed_themes_and_saves_current_poster(self) -> None:
+        document = html.fromstring(self.client.get("/layout/edit").text)
+        self.assertEqual(
+            document.xpath('//*[@id="theme-options"]//input/@value'),
+            posters.installed_themes(),
+        )
+        self.assertEqual(document.get_element_by_id("theme-dialog").get("data-pid"), "11")
+        self.store.set_theme.return_value = True
+        self.session["poster_id"] = 99
+        response = self.client.post("/layout/theme", json={"pid": 11, "theme": "greens"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        self.store.set_theme.assert_awaited_once_with(7, 11, "greens")
+        self.store.get.return_value = replace(DRAFT, theme="greens")
+        document = html.fromstring(self.client.get("/layout/edit?pid=11").text)
+        self.assertIn("greens", document.find("body").get("class").split())
+
+    def test_theme_save_rejects_invalid_unowned_and_purchased_posters(self) -> None:
+        for data in (
+            {"pid": 11, "theme": "missing"}, {"pid": 11, "theme": ["basic"]},
+            {"pid": True, "theme": "basic"}, {"theme": "basic"},
+        ):
+            self.assertEqual(self.client.post("/layout/theme", json=data).status_code, 422)
+        data = {"pid": 11, "theme": "basic"}
+        self.assertEqual(self.client.post(
+            "/layout/theme", json=data, headers={"Origin": "https://elsewhere.test"},
+        ).status_code, 403)
+        self.store.get.return_value = None
+        self.assertEqual(self.client.post("/layout/theme", json=data).status_code, 404)
+        self.store.get.return_value = replace(DRAFT, purchased=True)
+        self.assertEqual(self.client.post("/layout/theme", json=data).status_code, 409)
+        self.store.set_theme.assert_not_awaited()
+
+    def test_theme_save_reports_storage_errors_and_conflicts(self) -> None:
+        data = {"pid": 11, "theme": "basic"}
+        self.store.set_theme.return_value = False
+        self.assertEqual(self.client.post("/layout/theme", json=data).status_code, 409)
+        self.store.set_theme.side_effect = psycopg.OperationalError("offline")
+        with self.assertLogs("layout", "ERROR"):
+            self.assertEqual(self.client.post("/layout/theme", json=data).status_code, 503)
+
     def test_authors_are_comma_separated_below_the_centered_title(self) -> None:
         self.store.content.return_value = (
             [("title", "Research")],

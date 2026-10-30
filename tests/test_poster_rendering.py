@@ -195,6 +195,83 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
             };
         }""")
 
+    async def test_theme_dialog_previews_selects_and_saves_without_changing_fonts(self) -> None:
+        await self.editor()
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-theme.js"))
+        await self.page.evaluate("""() => {
+            document.body.className = "blues technical";
+            window.themeRequests = [];
+            window.fetch = async (url, options) => {
+                window.themeRequests.push({url, data: JSON.parse(options.body)});
+                return {ok: true, json: async () => ({ok: true})};
+            };
+        }""")
+        await self.page.locator("#theme").click()
+        self.assertTrue(await self.page.locator("#theme-dialog").is_visible())
+        self.assertTrue(await self.page.locator("input[value='blues']").is_checked())
+        self.assertEqual(await self.page.locator(".theme-preview").count(), len(posters.installed_themes()))
+        colors = await self.page.locator(".theme-preview").evaluate_all("""previews =>
+            previews.map(preview => getComputedStyle(preview).backgroundColor)""")
+        self.assertEqual(len(set(colors)), len(colors))
+        await self.page.locator("input[value='greens']").check()
+        self.assertEqual(await self.page.locator("body").get_attribute("class"), "blues technical")
+        await self.page.locator("#theme-apply").click()
+        self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
+        self.assertEqual(await self.page.locator("body").get_attribute("class"), "technical greens")
+        styles = await self.page.evaluate("""() => {
+            const preview = getComputedStyle(document.querySelector(".theme-preview.greens .section"));
+            const section = getComputedStyle(document.querySelector("#results"));
+            return ["color", "backgroundColor", "borderColor", "fontFamily"].map(
+                property => [preview[property], section[property]],
+            );
+        }""")
+        for preview, section in styles:
+            self.assertEqual(preview, section)
+        self.assertEqual(await self.page.evaluate("window.themeRequests"), [
+            {"url": "/layout/theme", "data": {"pid": 11, "theme": "greens"}},
+        ])
+        await self.page.locator("#theme").click()
+        self.assertTrue(await self.page.locator("input[value='greens']").is_checked())
+        await self.page.locator("input[value='reds']").check()
+        await self.page.keyboard.press("Escape")
+        self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
+        self.assertEqual(await self.page.locator("body").get_attribute("class"), "technical greens")
+        await self.page.locator("#theme").click()
+        await self.page.locator("#theme-cancel").click()
+        self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
+        self.assertEqual(await self.page.evaluate("window.themeRequests.length"), 1)
+
+    async def test_theme_dialog_save_failure_allows_retry_and_small_screens(self) -> None:
+        await self.editor()
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-theme.js"))
+        await self.page.evaluate("""() => {
+            document.body.className = "basic modern";
+            window.fetch = async () => ({
+                ok: false, json: async () => ({detail: "Storage unavailable."}),
+            });
+        }""")
+        await self.page.set_viewport_size({"width": 360, "height": 500})
+        await self.page.locator("#theme").click()
+        bounds = await self.page.locator("#theme-dialog").bounding_box()
+        self.assertIsNotNone(bounds)
+        self.assertGreaterEqual(bounds["x"], 0)
+        self.assertLessEqual(bounds["x"] + bounds["width"], 360)
+        self.assertTrue(await self.page.locator("#theme-dialog").evaluate(
+            "dialog => dialog.scrollWidth <= dialog.clientWidth",
+        ))
+        await self.page.locator("input[value='reds']").check()
+        await self.page.locator("#theme-apply").click()
+        self.assertTrue(await self.page.locator("#theme-dialog").is_visible())
+        self.assertIn("Storage unavailable.", await self.page.locator("#theme-status").inner_text())
+        self.assertEqual(await self.page.locator("body").get_attribute("class"), "basic modern")
+        self.assertTrue(await self.page.locator("#theme-apply").is_enabled())
+        await self.page.evaluate("""() => {
+            window.fetch = async () => ({ok: true, json: async () => ({ok: true})});
+        }""")
+        await self.page.locator("#theme-apply").click()
+        self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
+        self.assertEqual(await self.page.locator("body").get_attribute("class"), "modern reds")
+
     async def set_zoom(self, value: str) -> None:
         await self.page.locator("#poster-zoom").evaluate("""(slider, value) => {
             slider.value = value === "fit" ? slider.min : value;

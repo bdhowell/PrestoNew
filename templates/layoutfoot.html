@@ -21,7 +21,7 @@
             <button id="undo" aria-label="Undo" title="Undo"><i class="fa-solid fa-arrow-rotate-left"></i></button>
             <button id="redo" aria-label="Redo" title="Redo"><i class="fa-solid fa-arrow-rotate-right"></i></button> |
             <button id="font" aria-label="Font" title="Font"><i class="fa-solid fa-font"></i></button>
-            <button id="theme" aria-label="Theme" title="Theme"><i class="fa-solid fa-palette"></i></button>
+            <button id="theme" aria-label="Theme" title="Theme" aria-haspopup="dialog" aria-controls="theme-dialog"><i class="fa-solid fa-palette"></i></button>
             <output id="content-save-status" role="status" aria-live="polite"></output>
         </div>
         <div id="zoom-controls">
@@ -31,5 +31,33 @@
             <output id="poster-zoom-value" for="poster-zoom">100%</output>
         </div>
     </div>
+    <dialog id="theme-dialog" aria-labelledby="theme-dialog-title" data-pid="{{ poster.pid }}">
+        <form id="theme-form">
+            <h2 id="theme-dialog-title">Choose a theme</h2>
+            <p>Preview a section against each theme's poster background.</p>
+            <fieldset id="theme-options">
+                <legend>Available themes</legend>
+                {% for option in themes %}
+                <label class="theme-option">
+                    <span class="theme-option-name">
+                        <input type="radio" name="theme" value="{{ option }}" required>
+                        {{ option | capitalize }}
+                    </span>
+                    <span class="theme-preview {{ option }}" aria-hidden="true">
+                        <span class="section">
+                            <span class="header">Results</span>
+                            <span class="content">Our findings show how this theme renders section text and borders.</span>
+                        </span>
+                    </span>
+                </label>
+                {% endfor %}
+            </fieldset>
+            <p id="theme-status" role="status" aria-live="polite"></p>
+            <div class="theme-dialog-actions">
+                <button id="theme-cancel" type="button">Cancel</button>
+                <button id="theme-apply" type="submit">Apply theme</button>
+            </div>
+        </form>
+    </dialog>
 </body>
 </html>

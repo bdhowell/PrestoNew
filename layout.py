@@ -92,6 +92,7 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
         request=request, poster=poster, layout_template=template,
         theme=poster.theme if poster.theme in posters.installed_themes() else "",
         fonts=poster.fonts if poster.fonts in posters.installed_fonts() else "",
+        themes=posters.installed_themes(),
     )
     document = dom.document_fromstring(raw)
     if poster.logo:
@@ -212,6 +213,26 @@ async def update_content(request: Request) -> JSONResponse:
     except psycopg.Error:
         logger.exception("Could not save poster section %s", which)
         raise HTTPException(503, "Your changes could not be saved. Please try again.") from None
+    if not saved:
+        raise HTTPException(409, "This poster can no longer be edited.")
+    return JSONResponse({"ok": True})
+
+
+@router.post("/theme")
+async def update_theme(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    theme = data.get("theme")
+    pid = data.get("pid")
+    if not isinstance(theme, str) or theme not in posters.installed_themes():
+        raise HTTPException(422, "Choose an installed poster theme.")
+    if type(pid) is not int or pid <= 0:
+        raise HTTPException(422, "Choose a valid poster.")
+    try:
+        poster = await owned(request, pid, draft=True)
+        saved = await posters.store().set_theme(uid_for(request), poster.pid, theme)
+    except psycopg.Error:
+        logger.exception("Could not save poster theme for poster %s", pid)
+        raise HTTPException(503, "Your theme could not be saved. Please try again.") from None
     if not saved:
         raise HTTPException(409, "This poster can no longer be edited.")
     return JSONResponse({"ok": True})

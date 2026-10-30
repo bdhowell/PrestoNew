@@ -362,6 +362,25 @@ class PosterRouteTests(unittest.TestCase):
 
 
 class PosterValueTests(unittest.IsolatedAsyncioTestCase):
+    async def test_theme_update_is_validated_owner_scoped_and_invalidates_cache(self) -> None:
+        store = posters.PosterStore()
+        connection = AsyncMock()
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), patch.object(
+            store, "invalidate",
+        ) as invalidate:
+            for row, expected in (((11,), True), (None, False)):
+                connection.execute.return_value.fetchone.return_value = row
+                self.assertEqual(await store.set_theme(7, 11, "greens"), expected)
+            self.assertEqual(invalidate.call_count, 4)
+            invalidate.assert_called_with(7, 11)
+            with self.assertRaises(ValueError):
+                await store.set_theme(7, 11, "unknown")
+        statement, params = connection.execute.call_args.args
+        self.assertIn("p.uid = %s AND p.pid = %s", statement)
+        self.assertIn("NOT EXISTS", statement)
+        self.assertIn("purchase", statement)
+        self.assertEqual(params, ("greens", 7, 11))
+
     async def test_resumption_update_is_parameterized_and_owner_scoped(self) -> None:
         store = posters.PosterStore()
         connection = AsyncMock()

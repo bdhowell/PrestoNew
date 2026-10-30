@@ -31,6 +31,7 @@ body {
 
 body > .basic-menu {
     flex: none;
+    font-size: 1rem;
 }
 
 #poster-container {
@@ -358,4 +359,101 @@ body > .basic-menu {
 
 .content {
     margin-top: 1rem;
+}
+
+#theme-dialog {
+    margin: auto;
+    width: min(58rem, calc(100% - 2rem));
+    max-height: calc(100dvh - 2rem);
+    padding: 1.5rem;
+    border: 1px solid #8e85c2;
+    border-radius: 0.75rem;
+    background: #fff;
+    color: #222;
+    font: 1rem/1.5 system-ui, sans-serif;
+}
+
+#theme-dialog::backdrop {
+    background: rgb(0 0 0 / 65%);
+}
+
+#theme-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+    gap: 1rem;
+    border: 0;
+}
+
+#theme-options legend {
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+}
+
+.theme-option {
+    --border-radius: 0;
+    --border-color: initial;
+    --text-color: initial;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    border: 2px solid #ddd;
+    border-radius: 0.5rem;
+    cursor: pointer;
+}
+
+.theme-option:has(input:checked) {
+    border-color: #443a80;
+    outline: 1px solid #443a80;
+}
+
+.theme-option:focus-within {
+    outline: 2px solid #443a80;
+    outline-offset: 2px;
+}
+
+.theme-option-name {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+}
+
+.theme-preview {
+    display: block;
+    flex: 1;
+    padding: 1.25rem;
+    background: var(--background-color);
+}
+
+.theme-preview .section {
+    display: block;
+    padding: 1rem;
+    font-size: 1rem;
+    border-radius: calc(var(--border-radius, 0px) / 4);
+}
+
+.theme-preview .header {
+    font-size: 1.25rem;
+}
+
+.theme-preview .content {
+    display: block;
+    margin-top: 0.5rem;
+}
+
+#theme-status {
+    margin-top: 1rem;
+}
+
+.theme-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+}
+
+.theme-dialog-actions button {
+    padding: 0.5rem 1rem;
+    font: inherit;
+    cursor: pointer;
 }

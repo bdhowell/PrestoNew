@@ -1165,6 +1165,13 @@ Implementation contract:
   Layout grid columns share the space left after gutters to avoid overflowing
   the poster width.
 - Stored section HTML is sanitized with the same allowlist as poster previews.
+- The layout toolbar's Theme button opens a modal dialog listing the installed
+  themes from `themes.css`. Each option previews a section on its poster background
+  using the renderer's section styles and the current fonts. Cancel or Escape
+  discards the selection. Apply saves via `POST /layout/theme` with an explicit
+  poster ID and installed theme name, then updates only the body's theme class.
+  Saving enforces same-origin requests, ownership, and draft status, invalidates
+  the poster cache, and reports failures in the dialog so the user can retry.
 - The last poster lookup is cached by owner and poster ID for two seconds;
   poster mutations invalidate it.
 - Media endpoints require ownership. QR PNG bytes come from `poster.moreinfopng`,
