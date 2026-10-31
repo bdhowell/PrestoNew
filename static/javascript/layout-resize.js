@@ -133,6 +133,21 @@
     }
 
     function visible(handle, show) {
+        if (show) {
+            for (const other of handles) {
+                if (other !== handle && !other.separator.hidden) visible(other, false);
+            }
+        } else if (dragging && dragging.handle === handle) {
+            const {pointer, moved} = dragging;
+            dragging = null;
+            if (handle.separator.hasPointerCapture(pointer)) {
+                handle.separator.releasePointerCapture(pointer);
+            }
+            if (moved) {
+                clearTimeout(timer);
+                save();
+            }
+        }
         handle.separator.hidden = !show;
         handle.toggle.setAttribute("aria-expanded", String(show));
         if (!show && document.activeElement === handle.separator) handle.toggle.focus();
@@ -148,7 +163,7 @@
         toggle.setAttribute("aria-label", `Toggle ${label.toLowerCase()} handle`);
         toggle.setAttribute("aria-expanded", "false");
         toggle.setAttribute("aria-controls", `resize-${id}`);
-        toggle.title = "Click to show or hide the resize handle.";
+        toggle.title = "Click to show or hide this resize handle and deactivate any other handle.";
         const separator = document.createElement("div");
         separator.id = `resize-${id}`;
         separator.className = "resize-handle";

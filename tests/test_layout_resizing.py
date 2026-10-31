@@ -226,7 +226,24 @@ class SizingBrowserTests(unittest.IsolatedAsyncioTestCase):
                 await self.page.keyboard.press("Escape")
                 self.assertFalse(await self.page.locator("#resize-right").is_visible())
                 await self.page.locator("[data-resize='left'] .resize-toggle").click(position={"x": 1, "y": 1})
+                self.assertTrue(await self.page.locator("#resize-left").is_visible())
+                await self.page.locator("[data-resize='left'] .resize-toggle").click(position={"x": 1, "y": 1})
                 self.assertFalse(await self.page.locator("#resize-left").is_visible())
+
+    async def test_only_one_affordance_is_active_at_a_time(self) -> None:
+        await self.load()
+        before = await self.geometry()
+        for name in ("left", "right", "bottom", "pane3-0", "pane3-1", "introduction", "left"):
+            with self.subTest(handle=name):
+                await self.page.locator(f"[data-resize='{name}'] .resize-toggle").click()
+                self.assertEqual(await self.page.locator(".resize-handle:not([hidden])").count(), 1)
+                self.assertEqual(await self.page.locator(".resize-toggle[aria-expanded='true']").count(), 1)
+                self.assertTrue(await self.page.locator(f"#resize-{name}").is_visible())
+                self.assertEqual(await self.geometry(), before)
+        await self.page.locator("#resize-left").click()
+        self.assertEqual(await self.page.locator(".resize-handle:not([hidden])").count(), 0)
+        self.assertEqual(await self.page.locator(".resize-toggle[aria-expanded='true']").count(), 0)
+        self.assertEqual(await self.page.evaluate("window.sizingRequests"), [])
 
     async def test_column_snapping_uses_six_screen_pixels_and_the_moving_handle(self) -> None:
         await self.load()
