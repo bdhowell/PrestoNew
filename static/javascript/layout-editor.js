@@ -12,6 +12,14 @@
             extended.setAttribute("aria-expanded", String(!extendedControls.hidden));
         });
     }
+    const appearance = document.getElementById("appearance");
+    const appearanceControls = document.getElementById("appearance-controls");
+    if (appearance && appearanceControls) {
+        appearance.addEventListener("click", () => {
+            appearanceControls.hidden = !appearanceControls.hidden;
+            appearance.setAttribute("aria-expanded", String(!appearanceControls.hidden));
+        });
+    }
     const commands = {
         bold: "bold",
         italic: "italic",
@@ -286,11 +294,17 @@
     });
 
     document.addEventListener("keydown", event => {
-        if (event.key === "Escape" && extended && extendedControls && !extendedControls.hidden) {
-            extendedControls.hidden = true;
-            extended.setAttribute("aria-expanded", "false");
-            if (extendedControls.contains(document.activeElement)) extended.focus();
-            event.preventDefault();
+        if (event.key === "Escape") {
+            for (const [button, controls] of [
+                [extended, extendedControls],
+                [appearance, appearanceControls],
+            ]) {
+                if (!button || !controls || controls.hidden) continue;
+                controls.hidden = true;
+                button.setAttribute("aria-expanded", "false");
+                if (controls.contains(document.activeElement)) button.focus();
+                event.preventDefault();
+            }
         }
     });
 

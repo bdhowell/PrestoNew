@@ -97,10 +97,10 @@ body > .basic-menu {
     color: #8e85c2;
 }
 
-#extended-controls {
+#extended-controls,
+#appearance-controls {
     position: absolute;
     bottom: calc(100% + 2px);
-    left: 1rem;
     max-width: calc(100% - 2rem);
     padding: 0.75rem;
     border: 1px solid #8e85c2;
@@ -109,12 +109,17 @@ body > .basic-menu {
     box-shadow: 0 -0.25rem 1rem #0006;
 }
 
-#extended-controls:not([hidden]) {
+#extended-controls:not([hidden]),
+#appearance-controls:not([hidden]) {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 0.375rem;
 }
+
+#appearance-controls {
+   left: 25.96rem;
+ }
 
 #editor-controls button {
     display: inline-flex;
