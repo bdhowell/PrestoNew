@@ -70,6 +70,14 @@ def image_dimensions(data: bytes) -> tuple[int, int]:
         raise ValueError("The image cannot be decoded safely.") from error
 
 
+def image_thumbnail(data: bytes) -> bytes:
+    with Image.open(io.BytesIO(data)) as image:
+        image.thumbnail((160, 120))
+        output = io.BytesIO()
+        image.convert("RGB").save(output, format="PNG")
+        return output.getvalue()
+
+
 def spreadsheet_html(data: bytes) -> str:
     workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=False, keep_links=False)
     try:
