@@ -2,7 +2,6 @@
 
 import logging
 import os
-import io
 from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import unquote
@@ -10,7 +9,6 @@ from urllib.parse import unquote
 import psycopg
 import openai
 import num2words
-from PIL import Image
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from google.api_core.exceptions import GoogleAPIError
@@ -291,14 +289,7 @@ async def thumbnail(request: Request, sid: int) -> Response:
         if data is None:
             raise HTTPException(404, "Source graphic not found")
 
-        def render() -> bytes:
-            with Image.open(io.BytesIO(data)) as image:
-                image.thumbnail((160, 120))
-                output = io.BytesIO()
-                image.convert("RGB").save(output, format="PNG")
-                return output.getvalue()
-
-        preview = await run_in_threadpool(render)
+        preview = await run_in_threadpool(source_processing.image_thumbnail, data)
     except STORAGE_ERRORS:
         logger.exception("Could not load source thumbnail %s", sid)
         raise HTTPException(503, "The source thumbnail could not be loaded.") from None
