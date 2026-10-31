@@ -56,7 +56,7 @@ OFFICE = {'.docx', '.pptx', '.xlsx', '.xlsm'}
 # numbers deliberately aren't inferred.
 MENTION = re.compile(
     r'\b(?P<label>fig(?:ure)?s?\.?|charts?|graphs?|tables?|eq(?:uation)?s?\.?)'
-    r'\s*\(?\s*(?P<number>\d+(?:\.\d+)*[A-Za-z]?)\s*\)?', re.I
+    r'\s*\(?\s*(?P<number>\d+(?:\.\d+)*[A-Za-z]?)\s*\)?', re.IGNORECASE
 )
 
 
