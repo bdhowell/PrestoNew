@@ -200,6 +200,7 @@ body > .basic-menu {
 }
 
 .layout {
+    position: relative;
     flex: 1 0 auto;
     grid-template-rows: minmax(min-content, 1fr);
     grid-auto-rows: min-content;
@@ -219,6 +220,73 @@ body > .basic-menu {
 
 .pane {
     min-width: 0;
+}
+
+.resize-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.resize-gutter {
+    position: absolute;
+    pointer-events: auto;
+}
+
+.resize-toggle {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+}
+
+.resize-toggle:focus-visible {
+    outline: 3px dashed #443a80;
+    outline-offset: -3px;
+}
+
+.resize-handle {
+    position: absolute;
+    background: #443a80;
+    border: 2px solid #fff;
+    border-radius: 1rem;
+    box-shadow: 0 0 0 2px #443a80;
+    touch-action: none;
+    user-select: none;
+}
+
+.resize-x .resize-handle {
+    left: 50%;
+    top: 10%;
+    width: var(--resize-handle-size, 1rem);
+    height: 80%;
+    transform: translateX(-50%);
+    cursor: ew-resize;
+}
+
+.resize-y .resize-handle {
+    left: 10%;
+    top: 50%;
+    width: 80%;
+    height: var(--resize-handle-size, 1rem);
+    transform: translateY(-50%);
+    cursor: ns-resize;
+}
+
+.resize-handle:focus-visible {
+    outline: 4px solid #443a80;
+    outline-offset: 4px;
+}
+
+@media print {
+    .resize-overlay {
+        display: none;
+    }
 }
 
 /* .pane.horizontal {

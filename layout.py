@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from lxml import etree
 from lxml import html as dom
 from playwright.async_api import Error as PlaywrightError
+from pydantic import ValidationError
 
 import common
 import content
@@ -72,6 +73,23 @@ def append_html(element: etree._Element, value: str) -> None:
             element.append(fragment)
 
 
+def horizontal_resize_groups(document: etree._Element) -> dict[str, int]:
+    groups: dict[str, int] = {}
+    for pane in document.xpath('//*[@data-sections]'):
+        if "horizontal" not in pane.get("class", "").split():
+            continue
+        sections = [
+            [item.strip() for item in group.split("|") if item.strip()]
+            for group in pane.get("data-sections", "").split(",") if group.strip()
+        ]
+        if len(sections) > 1:
+            groups[pane.attrib["id"]] = len(sections)
+        for items in sections:
+            if len(items) > 1:
+                groups[f"{'-'.join(items)}-parent"] = len(items)
+    return groups
+
+
 async def layout(template: str, pid: int, *, uid: int, request: Request | None = None) -> str:
     """Render a fresh template, using the trusted owner's ID for all database reads."""
     if template not in posters.TEMPLATES:
@@ -96,6 +114,11 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
         font_sets=posters.installed_fonts(),
     )
     document = dom.document_fromstring(raw)
+    sizing = posters.LayoutSizing.model_validate((poster.layout_settings or {}).get(template, {}))
+    layout_element = document.get_element_by_id("layout")
+    layout_element.set("data-resize-settings", sizing.model_dump_json())
+    layout_element.set("data-pid", str(pid))
+    layout_element.set("data-template", template)
     if poster.logo:
         logo = document.get_element_by_id("logo")
         etree.SubElement(logo, "img", src=f"/layout/logo?pid={pid}", alt="Poster logo")
@@ -197,6 +220,43 @@ async def edit_layout(
         logger.exception("Could not render poster %s", poster.pid)
         raise HTTPException(503, "Your layout could not be loaded.") from None
     return HTMLResponse(rendered, headers=PRIVATE)
+
+
+@router.post("/sizing")
+async def update_sizing(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    pid, template = data.get("pid"), data.get("template")
+    if type(pid) is not int or pid <= 0 or template not in posters.TEMPLATES:
+        raise HTTPException(422, "Choose a valid poster and template.")
+    if not isinstance(data.get("sizing"), dict):
+        raise HTTPException(422, "Poster resizing settings are invalid.")
+    try:
+        sizing = posters.LayoutSizing.model_validate(data["sizing"])
+    except ValidationError:
+        raise HTTPException(422, "Poster resizing settings are outside the permitted limits.") from None
+    try:
+        poster = await owned(request, pid, draft=True)
+        if template != (poster.template or "arena"):
+            raise HTTPException(409, "The poster template changed. Reload before resizing.")
+        raw = templates.env.get_template(f"layouts/{template}.html").render(
+            request=request, poster=poster, layout_template=template, themes=[], font_sets=[],
+        )
+        document = dom.document_fromstring(raw)
+        groups = horizontal_resize_groups(document)
+        if any(group not in groups or len(shares) != groups[group]
+               for group, shares in sizing.sections.items()):
+            raise HTTPException(422, "Choose a valid row of poster sections.")
+        if sizing.bottom and not document.xpath(
+            '//*[@id="layout"]/*[contains(concat(" ", normalize-space(@class), " "), " horizontal ")]'
+        ):
+            raise HTTPException(422, "This layout has no horizontal bottom pane.")
+        saved = await posters.store().set_layout_sizing(uid_for(request), pid, template, sizing)
+    except psycopg.Error:
+        logger.exception("Could not save poster resizing for poster %s", pid)
+        raise HTTPException(503, "Your layout sizing could not be saved.") from None
+    if not saved:
+        raise HTTPException(409, "This poster can no longer be edited.")
+    return JSONResponse({"ok": True})
 
 
 @router.post("/content")

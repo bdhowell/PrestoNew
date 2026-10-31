@@ -9,11 +9,13 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import openai
 import psycopg
 from psycopg import sql
+from psycopg.types.json import Jsonb
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.requests import HTTPConnection
 
 import identity
@@ -48,6 +50,29 @@ POSTER_MAX_WIDTH_CM = 96 * 2.54  # cm
 POSTER_MAX_HEIGHT_CM = 96 * 2.54  # cm
 POSTER_UNIT_TO_CM = {"cm": 1, "mm": 0.1, "in": 2.54}
 
+
+class LayoutSizing(BaseModel):
+    """Normalized, template-specific gutter positions, independent of poster zoom."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+    left: float = Field(default=0, ge=0, le=0.15)
+    right: float = Field(default=0, ge=0, le=0.15)
+    bottom: float = Field(default=0, ge=0, le=0.15)
+    introduction: float | None = Field(default=None, ge=0.25, le=0.75)
+    sections: dict[str, list[Annotated[float, Field(ge=0.2, le=1)]]] = Field(default_factory=dict)
+
+    @field_validator("sections")
+    @classmethod
+    def section_shares(cls, groups: dict[str, list[float]]) -> dict[str, list[float]]:
+        if len(groups) > 10 or any(
+            len(shares) < 2 or len(shares) > 5
+            or not math.isclose(sum(shares), 1, abs_tol=1e-8)
+            for shares in groups.values()
+        ):
+            raise ValueError("Section widths must share the available row width.")
+        return groups
+
+
 @dataclass(frozen=True)
 class Poster:
     pid: int
@@ -65,6 +90,7 @@ class Poster:
     logotype: str | None = None
     moreinfopng: bytes | None = None
     fonts: str | None = None
+    layout_settings: dict[str, dict[str, object]] | None = None
 
     @property
     def centimeters(self) -> tuple[float, float]:
@@ -144,7 +170,9 @@ class PosterStore:
                EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) AS purchased,
                (SELECT min(c.starts) FROM show s JOIN conference c USING (cid)
                 WHERE s.pid = p.pid) AS conference_date,
-               p.resumption, p.units, p.logo, p.logotype, p.moreinfopng, p.fonts
+               p.resumption, p.units, p.logo, p.logotype, p.moreinfopng, p.fonts,
+               (SELECT u.settings->'layout-resizing' FROM userposter u
+                WHERE u.uid = p.uid AND u.pid = p.pid)
         FROM poster p
         LEFT JOIN section t ON t.pid = p.pid AND t.which = 'title'
         WHERE p.uid = %s
@@ -394,6 +422,33 @@ class PosterStore:
                 (fonts, uid, pid),
             )
             saved = await cursor.fetchone() is not None
+        self.invalidate(uid, pid)
+        return saved
+
+    async def set_layout_sizing(
+        self, uid: int, pid: int, template: str, sizing: LayoutSizing,
+    ) -> bool:
+        if template not in TEMPLATES:
+            raise ValueError("Unknown poster template")
+        self.invalidate(uid, pid)
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "INSERT INTO userposter (uid, pid, editor, settings) "
+                "SELECT p.uid, p.pid, 1, %s FROM poster p "
+                "WHERE p.uid = %s AND p.pid = %s AND coalesce(p.template, 'arena') = %s "
+                "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
+                "ON CONFLICT (uid, pid) DO UPDATE SET settings = jsonb_set("
+                "userposter.settings, '{layout-resizing}', "
+                "coalesce(userposter.settings->'layout-resizing', '{}'::jsonb) "
+                "|| (excluded.settings->'layout-resizing')) RETURNING pid",
+                (Jsonb({"layout-resizing": {template: sizing.model_dump()}}), uid, pid, template),
+            )
+            saved = await cursor.fetchone() is not None
+            if saved:
+                await connection.execute(
+                    "UPDATE poster SET updated = now() WHERE uid = %s AND pid = %s", (uid, pid),
+                )
         self.invalidate(uid, pid)
         return saved
 

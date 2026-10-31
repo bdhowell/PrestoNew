@@ -96,7 +96,8 @@ CREATE INDEX idx_poster_embedding_ivfflat ON poster
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 
--- permissions to view or edit poster and user-specific configuration options, such as display layout
+-- Permissions and configuration. settings['layout-resizing'][template] stores
+-- normalized pane offsets and section shares; other settings are preserved.
 
 CREATE TABLE userposter (
     uid       INTEGER NOT NULL REFERENCES "user"(uid) ON DELETE CASCADE,
