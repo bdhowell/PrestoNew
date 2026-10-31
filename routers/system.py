@@ -5,18 +5,23 @@ import logging
 import os
 from pathlib import Path
 import shutil
+from typing import Annotated
 from urllib.parse import urlsplit
 
 import psycopg
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, Response
+from google.api_core.exceptions import GoogleAPIError
+from google.auth.exceptions import GoogleAuthError
+from PIL import Image
 from psycopg import sql
 from starlette.concurrency import run_in_threadpool
 
 import content
 import identity
 import posters
-from routers.wikkit import read_json
+import source_processing
+from routers.wikkit import read_json, render_page
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/system", tags=["system"])
@@ -69,6 +74,32 @@ def remove_directories(directories: list[Path]) -> None:
 
 
 class SystemStore(posters.PosterStore):
+    async def catalog(self, pid: int) -> list[content.Source] | None:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute("SELECT pid FROM poster WHERE pid = %s", (pid,))
+            if await cursor.fetchone() is None:
+                return None
+            cursor = await connection.execute(
+                "SELECT " + content.SourceStore._SOURCE_COLUMNS +
+                " FROM source s LEFT JOIN source parent ON parent.sid = s.parent "
+                "WHERE s.pid = %s ORDER BY s.added, s.sid", (pid,),
+            )
+            return [content.Source(*row) for row in await cursor.fetchall()]
+
+    async def catalog_graphic(self, pid: int, sid: int) -> tuple[bytes, str] | None:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT storage_uri, mimetype FROM source WHERE pid = %s AND sid = %s "
+                "AND (mimetype LIKE 'image/%%' OR kind IN "
+                "('svg', 'image', 'chart', 'logo', 'moreinfo', 'qrcode'))", (pid, sid),
+            )
+            row = await cursor.fetchone()
+        if row is None or not row[0]:
+            return None
+        return await run_in_threadpool(content.SourceFiles().read, row[0]), row[1]
+
     async def purge(self, *, users: bool = False) -> dict[str, int]:
         connection = await self._connect()
         async with connection:
@@ -99,6 +130,48 @@ class SystemStore(posters.PosterStore):
 
 
 _store = SystemStore()
+
+
+@router.get("/catalog")
+async def catalog(
+    request: Request, pid: Annotated[int | None, Query(ge=1, le=2147483647)] = None,
+) -> Response:
+    require_local(request)
+    items = None
+    if pid is not None:
+        try:
+            items = await _store.catalog(pid)
+        except psycopg.Error:
+            logger.exception("Could not load source catalog for poster %s", pid)
+            raise HTTPException(503, "The source catalog could not be loaded.") from None
+        if items is None:
+            raise HTTPException(404, "Poster not found")
+    response = render_page(
+        request, "system/catalog.html", "system-catalog", pid=pid, items=items,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.get("/catalog/{pid}/{sid}/thumbnail")
+async def catalog_thumbnail(request: Request, pid: int, sid: int) -> Response:
+    require_local(request)
+    try:
+        graphic = await _store.catalog_graphic(pid, sid)
+        if graphic is None:
+            raise HTTPException(404, "Source graphic not found")
+        data, mimetype = graphic
+        if mimetype != "image/svg+xml":
+            data = await run_in_threadpool(source_processing.image_thumbnail, data)
+            mimetype = "image/png"
+    except (psycopg.Error, OSError, GoogleAPIError, GoogleAuthError, Image.DecompressionBombError):
+        logger.exception("Could not load catalog thumbnail %s for poster %s", sid, pid)
+        raise HTTPException(503, "The source thumbnail could not be loaded.") from None
+    return Response(data, media_type=mimetype, headers={
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+    })
 
 
 @router.post("/purge")

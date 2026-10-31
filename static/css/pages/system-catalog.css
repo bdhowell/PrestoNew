@@ -1,0 +1,51 @@
+.catalog-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.catalog-scroll {
+    overflow-x: auto;
+}
+
+.source-catalog {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+}
+
+.source-catalog th,
+.source-catalog td {
+    padding: 0.75rem;
+    border-bottom: 1px solid #aaa;
+    vertical-align: top;
+}
+
+.source-catalog img {
+    object-fit: contain;
+}
+
+.source-catalog td p {
+    max-width: 40rem;
+    overflow-wrap: anywhere;
+}
+
+.text-icon {
+    width: 48px;
+    height: 48px;
+}
+
+.catalog-suitable {
+    color: #216537;
+    font-weight: bold;
+}
+
+.catalog-small {
+    color: #a32920;
+    font-weight: bold;
+}
+
+.catalog-unknown {
+    color: #725100;
+}

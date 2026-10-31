@@ -1,0 +1,73 @@
+{% extends "page.html" %}
+
+{% block title %}Source catalog - {{ app_name() }}{% endblock %}
+
+{% block content %}
+<h1>Poster source catalog</h1>
+<form action="/system/catalog" method="get" class="catalog-form">
+    <label for="poster-id">Poster ID</label>
+    <input id="poster-id" name="pid" type="number" min="1" max="2147483647" required
+           value="{{ pid if pid is not none else '' }}">
+    <button type="submit">Show catalog</button>
+</form>
+<p>Graphical sources need at least 450 &times; 450 pixels to print at least
+   3&quot; &times; 3&quot; at 150 dpi. This size check is separate from content relevance.</p>
+{% if items is not none %}
+<h2>Poster {{ pid }}: {{ items|length }} source{{ '' if items|length == 1 else 's' }}</h2>
+{% if items %}
+<div class="catalog-scroll">
+<table class="source-catalog">
+    <thead>
+        <tr><th scope="col">Preview</th><th scope="col">Source</th>
+            <th scope="col">Dimensions</th><th scope="col">Poster suitability</th></tr>
+    </thead>
+    <tbody>
+    {% for item in items %}
+        {% set graphical = item.mimetype.startswith('image/') or item.kind in
+            ('svg', 'image', 'chart', 'logo', 'moreinfo', 'qrcode') %}
+        <tr data-source-id="{{ item.sid }}">
+            <td>
+                {% if graphical %}
+                <img src="/system/catalog/{{ pid }}/{{ item.sid }}/thumbnail"
+                     alt="Thumbnail of {{ item.filename }}" width="160" height="120" loading="lazy">
+                {% else %}
+                <svg class="text-icon" role="img" aria-label="Text source" viewBox="0 0 48 48">
+                    <path d="M10 4h20l8 8v32H10z M30 4v10h8 M16 22h16 M16 29h16 M16 36h12"
+                          fill="none" stroke="currentColor" stroke-width="2"/>
+                </svg>
+                {% endif %}
+            </td>
+            <td>
+                <strong>{{ item.filename }}</strong>
+                <div>Source {{ item.sid }} &middot; {{ item.kind }} &middot; {{ item.mimetype }}</div>
+                <div>{% if item.parent is not none %}Extracted from source {{ item.parent }}{% else %}Original / standalone source{% endif %}</div>
+                {% if not item.extracted %}<div>Extraction pending</div>{% endif %}
+                {% if item.description %}<p>{{ item.description }}</p>{% endif %}
+            </td>
+            <td>
+                {% if graphical and item.width is not none and item.height is not none and item.width > 0 and item.height > 0 %}
+                {{ item.width }} &times; {{ item.height }} px<br>
+                {{ '%.2f'|format(item.width / 150) }}&quot; &times; {{ '%.2f'|format(item.height / 150) }}&quot; at 150 dpi
+                {% elif graphical %}Unknown dimensions
+                {% else %}Not applicable{% endif %}
+            </td>
+            <td>
+                {% if not graphical %}Not applicable (text/document)
+                {% elif item.width is none or item.height is none or item.width <= 0 or item.height <= 0 %}
+                <span class="catalog-unknown">Unknown: size cannot be verified</span>
+                {% elif item.width >= 450 and item.height >= 450 %}
+                <span class="catalog-suitable">Suitable: meets minimum size</span>
+                {% else %}
+                <span class="catalog-small">Not suitable: below minimum size</span>
+                {% endif %}
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<p>No sources are associated with this poster.</p>
+{% endif %}
+{% endif %}
+{% endblock %}
