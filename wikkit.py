@@ -9,7 +9,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 
-from fastapi import WebSocket, WebSocketDisconnect, responses
+from fastapi import WebSocket, WebSocketDisconnect
 
 from intents import IntentStack
 from llm import IntentDispatchResult
