@@ -1,3 +1,4 @@
+import io
 import os
 from pathlib import Path
 import tempfile
@@ -9,10 +10,131 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 import psycopg
 from psycopg import sql
+from PIL import Image
 
 import content
 import posters
 from routers import system
+
+
+class CatalogRouteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        environment = patch.dict(os.environ, {"SYSTEM_PURGE_ENABLED": "true"})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.catalog = AsyncMock(return_value=[])
+        self.graphic = AsyncMock(return_value=None)
+        for name, mock in (("catalog", self.catalog), ("catalog_graphic", self.graphic)):
+            patched = patch.object(system._store, name, mock)
+            patched.start()
+            self.addCleanup(patched.stop)
+        app = FastAPI()
+        app.include_router(system.router)
+        self.client = TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000))
+
+    def test_form_accepts_poster_id_without_identity_or_selected_draft(self) -> None:
+        response = self.client.get("/system/catalog")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('name="pid"', response.text)
+        self.assertIn('action="/system/catalog"', response.text)
+        self.assertIn("/static/css/pages/system-catalog.css", response.text)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.catalog.assert_not_awaited()
+        response = self.client.get("/system/catalog?pid=11")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("No sources are associated", response.text)
+        self.catalog.assert_awaited_once_with(11)
+
+    def test_lists_text_originals_children_and_exact_size_threshold(self) -> None:
+        self.catalog.return_value = [
+            content.Source(1, "<paper>.pdf", "application/pdf", 12, "", extracted=False),
+            content.Source(2, "text.md", "text/markdown", 12, "", parent=1, kind="text"),
+            content.Source(3, "large.png", "image/png", 12, "", parent=1, width=450, height=450, kind="image"),
+            content.Source(4, "narrow.png", "image/png", 12, "", width=449, height=900, kind="chart"),
+            content.Source(5, "short.png", "image/png", 12, "", width=900, height=449, kind="logo"),
+            content.Source(6, "unknown.svg", "image/svg+xml", 12, "", kind="svg"),
+            content.Source(7, "missing.png", "image/png", 12, "", width=450, kind="image"),
+            content.Source(8, "zero.png", "image/png", 12, "", width=0, height=900, kind="image"),
+            content.Source(9, "table.png", "image/png", 12, "", width=900, height=450, kind="table",
+                           description="<script>bad()</script>"),
+        ]
+        response = self.client.get("/system/catalog?pid=11")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Poster 11: 9 sources", response.text)
+        self.assertIn("&lt;paper&gt;.pdf", response.text)
+        self.assertIn("Extraction pending", response.text)
+        self.assertIn("Extracted from source 1", response.text)
+        self.assertEqual(response.text.count('aria-label="Text source"'), 2)
+        self.assertEqual(response.text.count("Suitable: meets minimum size"), 2)
+        self.assertEqual(response.text.count("Not suitable: below minimum size"), 2)
+        self.assertEqual(response.text.count("Unknown: size cannot be verified"), 3)
+        self.assertIn('3.00&quot; &times; 3.00&quot; at 150 dpi', response.text)
+        for sid in range(3, 10):
+            self.assertIn(f"/system/catalog/11/{sid}/thumbnail", response.text)
+        self.assertIn("&lt;script&gt;bad()&lt;/script&gt;", response.text)
+        self.assertNotIn("<script>bad()", response.text)
+
+    def test_invalid_poster_ids_missing_posters_and_database_errors(self) -> None:
+        for pid in ("0", "-1", "abc", "", "2147483648", "1.5"):
+            self.assertEqual(self.client.get("/system/catalog?pid=" + pid).status_code, 422)
+        self.catalog.assert_not_awaited()
+        self.catalog.return_value = None
+        self.assertEqual(self.client.get("/system/catalog?pid=11").status_code, 404)
+        self.catalog.side_effect = psycopg.OperationalError("offline")
+        with self.assertLogs("routers.system", "ERROR"):
+            self.assertEqual(self.client.get("/system/catalog?pid=11").status_code, 503)
+
+    def test_both_routes_apply_purge_guard_before_storage(self) -> None:
+        paths = ("/system/catalog?pid=11", "/system/catalog/11/3/thumbnail")
+        for path in paths:
+            for value in ("", "false", "TRUE", "1"):
+                with patch.dict(os.environ, {"SYSTEM_PURGE_ENABLED": value}):
+                    self.assertEqual(self.client.get(path).status_code, 403)
+            for host in ("203.0.113.1", "testclient"):
+                client = TestClient(self.client.app, base_url="http://localhost", client=(host, 50000))
+                self.assertEqual(client.get(path).status_code, 403)
+            for host in ("example.com", "localhost.evil.test", "0.0.0.0", "[invalid"):
+                self.assertEqual(self.client.get(path, headers={"Host": host}).status_code, 403)
+            self.assertEqual(self.client.get(path, headers=[
+                ("Host", "localhost"), ("Host", "example.com"),
+            ]).status_code, 403)
+            for name in ("Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"):
+                self.assertEqual(self.client.get(path, headers={name: "127.0.0.1"}).status_code, 403)
+        self.catalog.assert_not_awaited()
+        self.graphic.assert_not_awaited()
+
+    def test_thumbnail_uses_explicit_poster_and_source_and_preserves_aspect_ratio(self) -> None:
+        image = io.BytesIO()
+        Image.new("RGB", (900, 450)).save(image, "PNG")
+        self.graphic.return_value = (image.getvalue(), "image/png")
+        response = self.client.get("/system/catalog/11/3/thumbnail")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/png")
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.graphic.assert_awaited_once_with(11, 3)
+        with Image.open(io.BytesIO(response.content)) as thumbnail:
+            self.assertEqual(thumbnail.size, (160, 80))
+
+    def test_svg_thumbnail_is_an_image_with_sandbox_and_no_inline_execution(self) -> None:
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="450" height="450"/>'
+        self.graphic.return_value = (svg, "image/svg+xml")
+        response = self.client.get("/system/catalog/11/3/thumbnail")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, svg)
+        self.assertEqual(response.headers["content-type"], "image/svg+xml")
+        self.assertIn("sandbox", response.headers["content-security-policy"])
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+
+    def test_thumbnail_missing_and_failed_storage_and_decode_are_explicit(self) -> None:
+        self.assertEqual(self.client.get("/system/catalog/11/3/thumbnail").status_code, 404)
+        for error in (psycopg.OperationalError("offline"), OSError("missing")):
+            self.graphic.side_effect = error
+            with self.assertLogs("routers.system", "ERROR"):
+                self.assertEqual(self.client.get("/system/catalog/11/3/thumbnail").status_code, 503)
+        self.graphic.side_effect = None
+        self.graphic.return_value = (b"invalid image", "image/png")
+        with self.assertLogs("routers.system", "ERROR"):
+            self.assertEqual(self.client.get("/system/catalog/11/3/thumbnail").status_code, 503)
 
 
 class SystemRouteTests(unittest.TestCase):
@@ -238,6 +360,41 @@ class SystemDatabaseTests(unittest.TestCase):
         )
         self.connection.execute("INSERT INTO poster_memory VALUES (1, 'test', '{}')")
         self.store = system.SystemStore("SYSTEM_TEST_DATABASE_URL", self.schema)
+
+    def test_catalog_includes_children_and_posters_without_owners(self) -> None:
+        self.connection.execute(
+            "INSERT INTO source (pid, kind, parent, filename, size, mimetype, width, height) "
+            "SELECT 1, 'image', sid, 'figure.png', 12, 'image/png', 450, 450 FROM source WHERE pid = 1",
+        )
+        self.connection.execute("INSERT INTO poster (pid, created) VALUES (2, now())")
+        self.connection.execute(
+            "INSERT INTO source (pid, kind, size, mimetype) VALUES (2, 'text', 1, 'text/plain')",
+        )
+        items = asyncio.run(self.store.catalog(1))
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0].filename, "Untitled source")
+        self.assertEqual(items[1].parent, items[0].sid)
+        self.assertEqual(items[1].width, 450)
+        self.assertEqual(len(asyncio.run(self.store.catalog(2))), 1)
+        self.assertIsNone(asyncio.run(self.store.catalog(999)))
+        self.connection.execute("DELETE FROM source WHERE pid = 2")
+        self.assertEqual(asyncio.run(self.store.catalog(2)), [])
+
+    def test_catalog_graphic_is_scoped_to_poster_and_source(self) -> None:
+        with tempfile.NamedTemporaryFile() as upload:
+            upload.write(b"image")
+            upload.flush()
+            sid = self.connection.execute(
+                "INSERT INTO source (pid, kind, size, mimetype, storage_uri) "
+                "VALUES (1, 'image', 5, 'image/png', %s) RETURNING sid", (upload.name,),
+            ).fetchone()[0]
+            self.assertEqual(asyncio.run(self.store.catalog_graphic(1, sid)), (b"image", "image/png"))
+            self.assertIsNone(asyncio.run(self.store.catalog_graphic(2, sid)))
+            self.assertIsNone(asyncio.run(self.store.catalog_graphic(1, 999)))
+            text_sid = self.connection.execute(
+                "SELECT sid FROM source WHERE kind = 'text'",
+            ).fetchone()[0]
+            self.assertIsNone(asyncio.run(self.store.catalog_graphic(1, text_sid)))
 
     def test_purge_removes_records_dependents_and_memory_but_preserves_users(self) -> None:
         self.assertEqual(asyncio.run(self.store.purge()), {"posters": 1, "conferences": 1, "users": 0})

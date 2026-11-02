@@ -34,7 +34,10 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
             (ROOT / "templates/layoutfoot.html").read_text(),
         ).render(poster={"pid": 11}, themes=posters.installed_themes(),
                  font_sets=posters.installed_fonts())
-        await self.page.set_content('<body class="blues elegant">' + footer)
+        await self.page.set_content(
+            '<body class="blues elegant"><div class="content" contenteditable="true">Sample text</div>'
+            + footer,
+        )
         for stylesheet in ("layout", "fonts", "themes"):
             await self.page.add_style_tag(path=str(ROOT / f"static/css/{stylesheet}.css"))
         await self.page.evaluate("""() => {
@@ -45,6 +48,10 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
             };
         }""")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-theme.js"))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-editor.js"))
+        self.assertTrue(await self.page.locator("#appearance-controls").is_hidden())
+        await self.page.locator("#appearance").click()
+        self.assertEqual(await self.page.locator("#appearance").get_attribute("aria-expanded"), "true")
 
     async def test_cancel_escape_and_apply_preserve_other_appearance_setting(self) -> None:
         for button, setting, current, target, other in (
@@ -61,7 +68,11 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
                 await self.page.locator(f"#{button}").click()
                 self.assertTrue(await self.page.locator(f'input[value="{current}"]').is_checked())
                 await self.page.keyboard.press("Escape")
+                await self.page.wait_for_function(
+                    f"!document.getElementById('{button}-dialog').open",
+                )
                 self.assertFalse(await self.page.locator(f"#{button}-dialog").is_visible())
+                self.assertTrue(await self.page.locator("#appearance-controls").is_visible())
                 await self.page.locator(f"#{button}").click()
                 await self.page.locator(f'label:has(input[value="{target}"])').click()
                 await self.page.locator(f"#{button}-apply").click()
@@ -166,9 +177,9 @@ class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
         public = await handle.evaluate(appearance)
         self.assertEqual(public["fontSize"], "32px")
         self.assertEqual(public["lineHeight"], "51.2px")
-        self.assertIn("/static/graphics/wikkit.svg", public["icon"])
-        self.assertEqual(public["iconWidth"], "28px")
-        self.assertEqual(public["iconHeight"], "28px")
+        self.assertIn("/static/graphics/wikkicon.png", public["icon"])
+        self.assertEqual(public["iconWidth"], "32px")
+        self.assertEqual(public["iconHeight"], "32px")
 
         await self.page.locator("body").evaluate("element => element.className = ''")
         await self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
@@ -370,26 +381,26 @@ class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
                 bounds = await self.page.evaluate("""() => {
                     const rect = id => document.getElementById(id).getBoundingClientRect();
                     const bold = rect('bold');
-                    const redo = rect('redo');
+                    const wikkit = rect('wikkit');
                     const status = rect('content-save-status');
                     const slider = rect('poster-zoom');
                     const value = rect('poster-zoom-value');
                     return {
                         leftInset: bold.left, rightInset: innerWidth - value.right,
-                        statusAfterRedo: Boolean(document.querySelector(
-                            '#editor-controls #redo + #content-save-status')),
-                        statusLeft: status.left, redoRight: redo.right,
-                        statusTop: status.top, redoBottom: redo.bottom,
+                        statusAfterWikkit: Boolean(document.querySelector(
+                            '#editor-controls #wikkit + #content-save-status')),
+                        statusLeft: status.left, wikkitRight: wikkit.right,
+                        statusTop: status.top, wikkitBottom: wikkit.bottom,
                         sliderGap: value.left - slider.right,
                         sliderTop: slider.top, valueBottom: value.bottom,
                         pageWidth: document.documentElement.scrollWidth,
                     };
                 }""")
                 self.assertAlmostEqual(bounds["leftInset"], bounds["rightInset"], delta=0.1)
-                self.assertTrue(bounds["statusAfterRedo"])
+                self.assertTrue(bounds["statusAfterWikkit"])
                 if width == 1600:
-                    self.assertGreater(bounds["statusLeft"], bounds["redoRight"])
-                    self.assertLess(bounds["statusTop"], bounds["redoBottom"])
+                    self.assertGreater(bounds["statusLeft"], bounds["wikkitRight"])
+                    self.assertLess(bounds["statusTop"], bounds["wikkitBottom"])
                 self.assertAlmostEqual(bounds["sliderGap"], 6, delta=0.1)
                 self.assertLess(bounds["sliderTop"], bounds["valueBottom"])
                 self.assertLessEqual(bounds["pageWidth"], width)

@@ -186,8 +186,6 @@ async def edit_layout(
     if type(uid) is not int:
         return RedirectResponse("/account/signin", status_code=303)
 
-    await common.resume(request)
-
     session = identity.session(request)
     selected_pid = pid if pid is not None else (
         session.get("poster_id") if session is not None else None
@@ -212,6 +210,8 @@ async def edit_layout(
         if session is None:
             raise HTTPException(503, "Poster editing requires server-side sessions.")
         session["poster_id"] = poster.pid
+
+    await common.resume(request)
 
     template = poster.template if poster.template in posters.TEMPLATES else "arena"
     try:
@@ -455,7 +455,7 @@ def parse_dimensions(text: str, default_units: str) -> tuple[float, float, str]:
         first = "in"
     if second == '"':
         second = "in"
-    units = second or first or default_units
+    units = (second or first or default_units).lower()
     second = (second or units).lower()
     first = (first or units).lower()
     width = float(match[3]) * SCALE[second]

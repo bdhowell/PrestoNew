@@ -277,7 +277,7 @@ class LayoutRouteTests(unittest.TestCase):
                 self.store.get.return_value = replace(DRAFT, template=template)
                 document = html.fromstring(self.client.get("/layout/edit").text)
                 authors = document.get_element_by_id("authors")
-                self.assertEqual(authors.text_content(), "<Ada> (Institute), Grace, Lin (University)")
+                self.assertEqual(authors.text_content(), "<Ada>\u00a0(Institute), Grace, Lin\u00a0(University)")
                 self.assertFalse(authors.xpath(".//br"))
                 self.assertIn("authors", authors.get("class").split())
                 title = document.get_element_by_id("title")
@@ -306,6 +306,16 @@ class LayoutRouteTests(unittest.TestCase):
         response = self.client.get("/layout/layout", follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/posters/11/view")
+
+    def test_explicit_poster_is_selected_before_saving_resumption(self) -> None:
+        self.session.clear()
+        self.store.get.return_value = replace(DRAFT, pid=12)
+        response = self.client.get("/layout/edit?pid=12", follow_redirects=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.session["poster_id"], 12)
+        self.store.set_resumption.assert_awaited_once_with(
+            7, 12, "http://testserver/layout/edit?pid=12&xyzzy=arpa",
+        )
 
     def test_grouped_sections_and_logo_are_rendered_into_a_fresh_template(self) -> None:
         self.store.get.return_value = replace(DRAFT, template="vertical", logo=b"image", logotype="png")
@@ -666,8 +676,8 @@ class LayoutDatabaseTests(unittest.TestCase):
         async def exercise() -> None:
             self.assertTrue(await self.store.set_dimensions(7, self.pid, 150, 100, "mm"))
             poster = await self.store.get(7, self.pid)
-            self.assertEqual(poster.centimeters, (15, 10))
-            self.assertEqual((poster.width, poster.height), (150, 100))
+            self.assertEqual(poster.centimeters, (150, 100))
+            self.assertEqual((poster.width, poster.height), (1500, 1000))
             self.assertEqual((poster.template, poster.units), ("arena", "mm"))
             with patch.object(posters, "store", return_value=self.store):
                 rendered = await routes.layout("arena", self.pid, uid=7)

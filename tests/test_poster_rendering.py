@@ -112,8 +112,10 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_header_renderer_loads_local_styles_and_measures_both_sections(self) -> None:
         rendered = """
-            <html><head><link rel="stylesheet" href="/static/css/layout.css"></head>
-            <body style="--heading-font-face: monospace; width: 640px">
+            <html><head><link rel="stylesheet" href="/static/css/layout.css">
+                <style>.title, .authors { font: 20px/1.6 monospace; }</style>
+            </head>
+            <body style="--heading-font-face: monospace; width: 750px">
                 <div class="poster-header">
                     <div class="logo-title">
                         <div id="logo"></div>
@@ -125,7 +127,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 </div>
             </body></html>
         """
-        widths = await balance_header_widths(rendered, 640)
+        widths = await balance_header_widths(rendered, 750)
         self.assertEqual(set(widths), {"#title", "#authors"})
         for width in widths.values():
             self.assertGreater(width, 0)
@@ -149,7 +151,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await element.evaluate(LINE_WIDTHS), after)
                 bounds = await element.bounding_box()
                 self.assertIsNotNone(bounds)
-                self.assertAlmostEqual(bounds["x"] + bounds["width"] / 2, 320, delta=0.1)
+                self.assertAlmostEqual(bounds["x"] + bounds["width"] / 2, 375, delta=0.1)
 
     async def editor(self, template: str = "arena") -> None:
         store = AsyncMock()
@@ -197,6 +199,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_theme_dialog_previews_selects_and_saves_without_changing_fonts(self) -> None:
         await self.editor()
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-editor.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-theme.js"))
         await self.page.evaluate("""() => {
             document.body.className = "blues technical";
@@ -206,6 +209,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 return {ok: true, json: async () => ({ok: true})};
             };
         }""")
+        await self.page.locator("#appearance").click()
         await self.page.locator("#theme").click()
         self.assertTrue(await self.page.locator("#theme-dialog").is_visible())
         self.assertTrue(await self.page.locator("input[value='blues']").is_checked())
@@ -242,7 +246,9 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.page.locator("input[value='greens']").is_checked())
         await self.page.locator(".theme-preview.reds").click()
         await self.page.keyboard.press("Escape")
+        await self.page.wait_for_function("!document.getElementById('theme-dialog').open")
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
+        self.assertTrue(await self.page.locator("#appearance-controls").is_visible())
         self.assertEqual(await self.page.locator("body").get_attribute("class"), "technical greens")
         await self.page.locator("#theme").click()
         await self.page.locator("#theme-cancel").click()
@@ -251,6 +257,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_theme_dialog_save_failure_allows_retry_and_small_screens(self) -> None:
         await self.editor()
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-editor.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-theme.js"))
         await self.page.evaluate("""() => {
             document.body.className = "basic modern";
@@ -259,6 +266,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
             });
         }""")
         await self.page.set_viewport_size({"width": 360, "height": 500})
+        await self.page.locator("#appearance").click()
         await self.page.locator("#theme").click()
         bounds = await self.page.locator("#theme-dialog").bounding_box()
         self.assertIsNotNone(bounds)
@@ -427,6 +435,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
     async def test_zoom_preserves_panned_viewport_center(self) -> None:
         await self.page.set_viewport_size({"width": 900, "height": 700})
         await self.editor()
+        await self.set_zoom("100")
         await self.page.locator("#poster-container").evaluate("""element => {
             const canvas = document.getElementById("poster-canvas").getBoundingClientRect();
             element.scrollLeft = canvas.width * 0.4 - element.clientWidth / 2;
@@ -464,16 +473,20 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                         const area = content.getBoundingClientRect();
                         const rect = layout.getBoundingClientRect();
                         const scale = area.height / content.offsetHeight;
-                        const margin = 2 * parseFloat(getComputedStyle(layout).gap) * scale;
+                        const style = getComputedStyle(layout);
                         return {
                             gap: area.bottom - rect.bottom,
                             left: rect.left - area.left,
                             right: area.right - rect.right,
-                            margin,
+                            margins: {
+                                gap: parseFloat(style.marginBottom) * scale,
+                                left: parseFloat(style.marginLeft) * scale,
+                                right: parseFloat(style.marginRight) * scale,
+                            },
                         };
                     }""")
                     for side in ("gap", "left", "right"):
-                        self.assertGreaterEqual(bounds[side], bounds["margin"] - 1)
+                        self.assertGreaterEqual(bounds[side], bounds["margins"][side] - 1)
 
     async def assert_content_bounds(self) -> None:
         bounds = await self.page.evaluate("""() => {
@@ -672,18 +685,19 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 await self.set_zoom("100")
                 bounds = await self.page.locator("#layout").evaluate("""layout => {
                     const footer = layout.querySelector(".pane.horizontal");
+                    const rect = layout.getBoundingClientRect();
+                    const scale = rect.width / layout.offsetWidth;
                     return {
                         height: layout.clientHeight,
                         gutter: parseFloat(getComputedStyle(layout).rowGap),
                         footerHeight: footer ? footer.offsetHeight : 0,
-                        footerBottom: footer ? footer.offsetTop + footer.offsetHeight : null,
+                        footerBottom: footer ? (footer.getBoundingClientRect().bottom - rect.top) / scale : null,
                         panes: [...layout.querySelectorAll(".pane:not(.horizontal)")]
                             .map(pane => ({
-                                top: pane.offsetTop - layout.offsetTop,
-                                bottom: pane.offsetTop - layout.offsetTop + pane.offsetHeight,
+                                top: (pane.getBoundingClientRect().top - rect.top) / scale,
+                                bottom: (pane.getBoundingClientRect().bottom - rect.top) / scale,
                             })),
-                        footerTop: footer ? footer.offsetTop : null,
-                        layoutTop: layout.offsetTop,
+                        footerTop: footer ? (footer.getBoundingClientRect().top - rect.top) / scale : null,
                     };
                 }""")
                 if footer_present:
@@ -692,10 +706,10 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                         (bounds["height"] - bounds["gutter"]) * 0.2, delta=1,
                     )
                     self.assertAlmostEqual(
-                        bounds["footerBottom"] - bounds["layoutTop"], bounds["height"], delta=1,
+                        bounds["footerBottom"], bounds["height"], delta=1,
                     )
                     self.assertAlmostEqual(
-                        bounds["footerTop"] - bounds["layoutTop"],
+                        bounds["footerTop"],
                         bounds["height"] - bounds["footerHeight"], delta=1,
                     )
                 for pane in bounds["panes"]:
@@ -712,6 +726,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         for template in posters.TEMPLATES:
             with self.subTest(template=template):
                 await self.editor(template)
+                await self.set_zoom("100")
                 await self.page.locator("#results .content").evaluate(
                     "(element, text) => element.textContent = text",
                     "Detailed experimental results and observations. " * 2500,
@@ -757,8 +772,8 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
     async def test_header_measurement_uses_the_same_margins_as_the_editor(self) -> None:
         await self.editor()
         await self.page.locator("#poster-canvas").evaluate("""element => {
-            element.style.width = "900px";
-            element.style.height = "1400px";
+            element.style.width = "1400px";
+            element.style.height = "2000px";
         }""")
         await self.page.locator("#title").evaluate("""element => {
             element.style.width = "100%";
@@ -766,7 +781,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 + "with experimental observations and implications for future research";
         }""")
         await self.page.wait_for_timeout(100)
-        widths = await balance_header_widths(await self.page.content(), 900)
+        widths = await balance_header_widths(await self.page.content(), 1400)
         expected = await balance_text_width(self.page, "#title")
         self.assertAlmostEqual(widths["#title"], expected, delta=0.01)
 
@@ -797,6 +812,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 await self.page.wait_for_function(
                     "() => document.getElementById('poster-content').style.transform !== 'scale(1)'",
                 )
+                await self.set_zoom("100")
                 await self.assert_content_bounds()
                 dimensions = await self.dimensions()
                 self.assertAlmostEqual(dimensions["canvasWidth"], width, delta=0.1)
@@ -807,6 +823,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("#poster-canvas").evaluate("""element => {
             element.style.width = "300px";
             element.style.height = "250px";
+            element.style.setProperty("--gutter", "1rem");
             element.querySelector("#layout").style.display = "none";
         }""")
         await self.page.wait_for_function(

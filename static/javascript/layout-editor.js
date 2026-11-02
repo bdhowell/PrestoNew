@@ -294,7 +294,7 @@
     });
 
     document.addEventListener("keydown", event => {
-        if (event.key === "Escape") {
+        if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
             for (const [button, controls] of [
                 [extended, extendedControls],
                 [appearance, appearanceControls],
