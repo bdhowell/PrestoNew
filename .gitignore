@@ -1,4 +1,5 @@
 bin/
+cache/
 include/
 lib/
 share/
