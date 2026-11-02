@@ -1093,6 +1093,20 @@ Return the following information:
 
 # System Router
 
+`GET /system/catalog` provides a read-only source catalog with a poster ID form.
+`GET /system/catalog?pid=123` lists every source for that poster, including original
+uploads and extracted children, without requiring a signed-in owner or selected
+draft. Text/document sources have a text icon; graphics have thumbnails from
+`GET /system/catalog/{pid}/{sid}/thumbnail`. Both routes use exactly the same
+`SYSTEM_PURGE_ENABLED=true`, direct-loopback and no-forwarding-header guard as
+purging, and return `Cache-Control: no-store`. Thumbnail lookups are scoped to
+both the requested poster and source. Raster previews use the shared 160 by 120
+pixel thumbnail renderer; SVGs are displayed as images with a sandboxed response.
+The catalog reports graphical size suitability at 150 dpi: both dimensions must
+be at least 450 pixels (3 inches). Missing or non-positive dimensions are unknown,
+not suitable by default; text/document sources are not subject to this check.
+This diagnostic check does not change the upload page's existing size warnings.
+
 `POST /system/purge` permanently removes all posters and conferences, including
 their cascading dependent records and optional poster memory, then deletes only
 the numbered `0` through `9` subdirectories of the configured local `SOURCES_DIR`.
