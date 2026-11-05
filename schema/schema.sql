@@ -145,7 +145,7 @@ CREATE INDEX idx_show_approved ON show (approved) WHERE approved IS NULL;
 CREATE TABLE source (
     sid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
-    kind        TEXT NOT NULL CHECK (kind IN ('text', 'svg','mixed','image','chart','table','logo','moreinfo', 'qrcode')),
+    kind        TEXT NOT NULL CHECK (kind IN ('text', 'svg','mixed','image','math','chart','table','logo','moreinfo', 'qrcode')),
     parent      INTEGER REFERENCES source(sid) ON DELETE CASCADE,
     text        TEXT,
     description TEXT,
@@ -177,6 +177,18 @@ CREATE INDEX idx_source_embedding_ivfflat ON source
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 
+CREATE TABLE assessment (
+    aid         SERIAL PRIMARY KEY,
+    pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    cid         INTEGER NOT NULL REFERENCES conference(cid) ON DELETE CASCADE,
+    section     section_which NOT NULL,
+    rating      TEXT NOT NULL CHECK (rating IN ('none', 'weakly', 'somewhat', 'significantly', 'highly', 'definitively')),
+    explanation TEXT NOT NULL,
+    created     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_assessment_pid ON assessment (pid);
+CREATE INDEX idx_assessment_cid ON assessment (cid);
 
 CREATE TABLE authors (
     aid         SERIAL PRIMARY KEY,
@@ -187,6 +199,8 @@ CREATE TABLE authors (
     errata      TEXT,
     UNIQUE (pid, name)
 );
+
+CREATE INDEX idx_authors_pid ON authors (pid);
 
 CREATE TYPE section_which AS ENUM(
     'title', 'abstract', 'introduction', 'materials and methods', 'results',
