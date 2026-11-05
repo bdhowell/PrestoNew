@@ -527,7 +527,7 @@ class DimensionRules:
 
 def parse_dimensions(text: str, default_units: str) -> tuple[float, float, str]:
     match = re.fullmatch(
-        r'\s*(\d+(?:\.\d+)?)\s*(cm|mm|in|")?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(cm|mm|in|")?\s*',
+        r'\s*(\d+(?:\.\d+)?)\s*(cm|mm|in|")?\s*(?:by|[x×])\s*(\d+(?:\.\d+)?)\s*(cm|mm|in|")?\s*',
         text, re.IGNORECASE,
     )
     if match is None:
