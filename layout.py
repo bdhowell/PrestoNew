@@ -212,6 +212,9 @@ async def edit_layout(
             raise HTTPException(503, "Poster editing requires server-side sessions.")
         session["poster_id"] = poster.pid
 
+    if poster.width is None or poster.height is None:
+        return RedirectResponse("/layout/dimensions", status_code=303)
+
     await common.resume(request)
 
     template = poster.template if poster.template in posters.TEMPLATES else "arena"

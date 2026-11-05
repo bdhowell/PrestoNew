@@ -170,6 +170,36 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertIn('class="section-parent vertical"', response.text)
         self.assertEqual(self.session["poster_id"], 12)
 
+    def test_drafts_missing_dimensions_redirect_before_rendering(self) -> None:
+        for path in ("/layout/edit", "/layout/layout", "/layout/edit?pid=52"):
+            for width, height in ((None, None), (None, 48), (36, None)):
+                with self.subTest(path=path, width=width, height=height):
+                    self.session["poster_id"] = 11
+                    self.store.get.return_value = replace(
+                        DRAFT, pid=52 if "pid=" in path else 11, width=width, height=height,
+                    )
+                    response = self.client.get(path, follow_redirects=False)
+                    self.assertEqual(response.status_code, 303)
+                    self.assertEqual(response.headers["location"], "/layout/dimensions")
+                    self.assertEqual(self.session["poster_id"], self.store.get.return_value.pid)
+        self.store.content.assert_not_awaited()
+        self.balancer.assert_not_awaited()
+        self.store.set_resumption.assert_not_awaited()
+
+    def test_missing_dimensions_can_be_set_before_returning_to_editor(self) -> None:
+        self.store.get.return_value = replace(DRAFT, width=None, height=None)
+        response = self.client.get("/layout/edit?pid=11")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.url.path, "/layout/dimensions")
+        self.assertIn('data-page="layout-dimensions"', response.text)
+        response = self.client.post("/layout/dimensions", json={"dimensions": "48 in x 36 in"})
+        self.assertEqual(response.status_code, 200)
+        self.store.set_dimensions.assert_awaited_once_with(7, 11, 36 * 2.54, 48 * 2.54, "in")
+        self.store.get.return_value = DRAFT
+        response = self.client.get(response.json()["redirect"])
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('id="poster-canvas"', response.text)
+
     def test_saved_theme_and_fonts_are_applied_to_layout(self) -> None:
         self.store.get.return_value = replace(DRAFT, theme="blues", fonts="technical")
         document = html.fromstring(self.client.get("/layout/edit").text)

@@ -125,6 +125,72 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(bounds["x"] + bounds["width"], 360)
         self.assertLessEqual(bounds["height"], 640)
 
+    async def test_all_themes_preview_header_and_content_colors(self) -> None:
+        original = {"basic", "dark", "light", "blues", "reds", "greens"}
+        self.assertEqual(len(set(posters.installed_themes()) - original), 6)
+        await self.page.locator("#theme").click()
+        for theme in posters.installed_themes():
+            with self.subTest(theme=theme):
+                colors = await self.page.locator(f".theme-preview.{theme}").evaluate("""element => {
+                    const style = getComputedStyle(element);
+                    const header = getComputedStyle(element.querySelector('.poster-header'));
+                    return {
+                        background: style.getPropertyValue('--header-background-color').trim(),
+                        text: style.getPropertyValue('--header-font-color').trim(),
+                        actualBackground: header.backgroundColor,
+                        actualText: header.color,
+                    };
+                }""")
+                self.assertTrue(colors["background"])
+                self.assertTrue(colors["text"])
+                await self.page.evaluate("""theme => {
+                    document.body.className = theme;
+                    let header = document.getElementById('poster-header');
+                    if (!header) {
+                        header = document.createElement('div');
+                        header.id = 'poster-header';
+                        header.className = 'poster-header';
+                        document.body.append(header);
+                    }
+                }""", theme)
+                actual = await self.page.locator("#poster-header").evaluate("""element => ({
+                    background: getComputedStyle(element).backgroundColor,
+                    text: getComputedStyle(element).color,
+                })""")
+                self.assertEqual(actual["background"], colors["actualBackground"])
+                self.assertEqual(actual["text"], colors["actualText"])
+
+    async def test_new_theme_colors_have_readable_contrast_in_documents(self) -> None:
+        await self.page.set_content("""
+            <article class="poster-document">
+                <header>Poster title</header><p>Poster content</p>
+            </article>
+        """)
+        for path in ("themes.css", "pages/poster-document.css"):
+            await self.page.add_style_tag(path=str(ROOT / "static/css" / path))
+        for theme in ("ocean", "forest", "plum", "terracotta", "slate", "gold"):
+            with self.subTest(theme=theme):
+                contrasts = await self.page.locator("article").evaluate("""(element, theme) => {
+                    element.className = `poster-document ${theme}`;
+                    const luminance = color => {
+                        const rgb = color.match(/\\d+/g).slice(0, 3).map(value => {
+                            const channel = Number(value) / 255;
+                            return channel <= 0.04045 ? channel / 12.92
+                                : ((channel + 0.055) / 1.055) ** 2.4;
+                        });
+                        return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+                    };
+                    return [element, element.querySelector('header')].map(node => {
+                        const style = getComputedStyle(node);
+                        const text = luminance(style.color);
+                        const background = luminance(style.backgroundColor);
+                        return (Math.max(text, background) + 0.05)
+                            / (Math.min(text, background) + 0.05);
+                    });
+                }""", theme)
+                for contrast in contrasts:
+                    self.assertGreaterEqual(contrast, 4.5)
+
 
 class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -143,9 +209,11 @@ class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
             class MockWebSocket extends EventTarget {
                 constructor() {
                     super();
-                    this.readyState = MockWebSocket.CONNECTING;
+                    this.readyState = MockWebSocket.OPEN;
+                    this.sent = [];
+                    window.chatSocket = this;
                 }
-                send() {}
+                send(text) { this.sent.push(text); }
                 close() {}
             }
             MockWebSocket.CONNECTING = 0;
@@ -153,6 +221,140 @@ class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
             window.WebSocket = MockWebSocket;
         }""")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+        await self.page.evaluate("window.wikkit = connect(() => {})")
+
+    async def prompt(self, local: bool = False) -> None:
+        await self.page.evaluate("""local => {
+            wikkit.say('<button data-sends="yes">Yes</button><button data-sends="no">No</button>'
+                + '<input required><textarea></textarea><select><option>Choose</option>'
+                + '<option>Other</option></select>');
+            if (local) {
+                window.answer = null;
+                wikkit.requestResponse().then(answer => { window.answer = answer; });
+            } else {
+                return wikkit.execute({does: 'request-response'});
+            }
+        }""", local)
+
+    async def test_typed_response_disables_all_controls_for_server_and_local_waits(self) -> None:
+        for local in (False, True):
+            with self.subTest(local=local):
+                await self.prompt(local)
+                await self.page.locator("#chatinput").fill("My answer")
+                await self.page.locator("#chatinput").press("Enter")
+                self.assertEqual(await self.page.locator(
+                    "#chatlog :is(button, input, textarea, select):enabled",
+                ).count(), 0)
+                if local:
+                    self.assertEqual(await self.page.evaluate("window.answer"), "My answer")
+                await self.page.evaluate("wikkit.say('<button data-sends=\"next\">Next</button>')")
+                self.assertTrue(await self.page.locator("#chatlog button").last.is_enabled())
+                await self.page.evaluate("wikkit.execute({does: 'clear-chat'})")
+
+    async def test_embedded_responses_disable_other_groups_and_fields(self) -> None:
+        for control in ("button", "input", "textarea", "select"):
+            with self.subTest(control=control):
+                await self.prompt()
+                if control == "button":
+                    await self.page.locator("#chatlog button").first.click()
+                elif control == "select":
+                    await self.page.locator("#chatlog select").select_option("Other")
+                else:
+                    await self.page.locator(f"#chatlog {control}").fill("Answer")
+                    if control == "input":
+                        await self.page.locator("#chatlog input").press("Enter")
+                    else:
+                        await self.page.locator("#chatlog textarea + button").click()
+                self.assertEqual(await self.page.locator(
+                    "#chatlog :is(button, input, textarea, select):enabled",
+                ).count(), 0)
+                await self.page.evaluate("wikkit.execute({does: 'clear-chat'})")
+
+    async def test_invalid_response_leaves_controls_active(self) -> None:
+        await self.prompt()
+        await self.page.locator("#chatlog input").press("Enter")
+        self.assertTrue(await self.page.locator("#chatlog input").is_enabled())
+        self.assertTrue(await self.page.locator("#chatlog button").first.is_enabled())
+        self.assertEqual(await self.page.evaluate("chatSocket.sent"), [])
+
+    async def test_late_memory_ack_cannot_submit_or_reenable_obsolete_controls(self) -> None:
+        for ok in (True, False):
+            with self.subTest(ok=ok):
+                await self.prompt()
+                await self.page.evaluate("""() => {
+                    chatSocket.sent = [];
+                    wikkit.say('<input id="remembered" data-memory="session" data-name="answer">');
+                }""")
+                await self.page.locator("#remembered").fill("Old answer")
+                await self.page.locator("#remembered").press("Enter")
+                await self.page.locator("#chatinput").fill("New answer")
+                await self.page.locator("#chatinput").press("Enter")
+                await self.page.evaluate("""ok => {
+                    const {memory} = JSON.parse(chatSocket.sent[0]);
+                    chatSocket.dispatchEvent(new MessageEvent('message', {
+                        data: JSON.stringify({memory: {id: memory.id, ok, error: 'Write failed'}}),
+                    }));
+                }""", ok)
+                self.assertEqual(await self.page.locator(
+                    "#chatlog :is(button, input, textarea, select):enabled",
+                ).count(), 0)
+                self.assertEqual((await self.page.evaluate("chatSocket.sent"))[1:], ["New answer"])
+                await self.page.evaluate("wikkit.execute({does: 'clear-chat'})")
+
+    async def test_failed_memory_write_can_be_retried_without_completing_wait(self) -> None:
+        await self.prompt(True)
+        await self.page.evaluate("""() => {
+            wikkit.say('<input id="remembered" data-memory="session" data-name="answer">');
+        }""")
+        await self.page.locator("#remembered").fill("Answer")
+        await self.page.locator("#remembered").press("Enter")
+        await self.page.evaluate("""() => {
+            const {memory} = JSON.parse(chatSocket.sent[0]);
+            chatSocket.dispatchEvent(new MessageEvent('message', {
+                data: JSON.stringify({memory: {id: memory.id, ok: false, error: 'Write failed'}}),
+            }));
+        }""")
+        self.assertTrue(await self.page.locator("#remembered").is_enabled())
+        self.assertTrue(await self.page.locator("#remembered + button").is_enabled())
+        self.assertTrue(await self.page.locator("#chatlog button").first.is_enabled())
+        self.assertIsNone(await self.page.evaluate("window.answer"))
+        await self.page.locator("#remembered").press("Enter")
+        await self.page.evaluate("""() => {
+            const {memory} = JSON.parse(chatSocket.sent[1]);
+            chatSocket.dispatchEvent(new MessageEvent('message', {
+                data: JSON.stringify({memory: {id: memory.id, ok: true}}),
+            }));
+        }""")
+        self.assertEqual(await self.page.evaluate("window.answer"), "Answer")
+        self.assertEqual(await self.page.locator(
+            "#chatlog :is(button, input, textarea, select):enabled",
+        ).count(), 0)
+
+    async def test_completed_controls_remain_inactive_after_navigation(self) -> None:
+        await self.prompt()
+        await self.page.locator("#chatinput").fill("Answer")
+        await self.page.locator("#chatinput").press("Enter")
+        await self.page.goto("https://presto.test/next")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+        self.assertGreater(await self.page.locator("#chatlog button").count(), 0)
+        self.assertEqual(await self.page.locator(
+            "#chatlog :is(button, input, textarea, select):enabled",
+        ).count(), 0)
+
+    async def test_clicking_outlined_element_or_child_hides_outline_without_blocking_click(self) -> None:
+        await self.page.evaluate("""() => {
+            const element = document.createElement('button');
+            element.id = 'outlined';
+            element.style.outline = '4px solid red';
+            element.innerHTML = '<span>Outlined</span>';
+            element.onclick = () => { element.dataset.clicked = 'true'; };
+            document.body.prepend(element);
+        }""")
+        await self.page.locator("#outlined span").click()
+        self.assertEqual(await self.page.locator("#outlined").get_attribute("data-clicked"), "true")
+        self.assertEqual(await self.page.locator("#outlined").evaluate(
+            "element => getComputedStyle(element).outlineStyle",
+        ), "none")
 
     async def test_handle_appearance_matches_on_public_and_layout_pages(self) -> None:
         await self.page.add_style_tag(path=str(ROOT / "static/css/main.css"))

@@ -52,11 +52,20 @@ Example:
 A `data-group` attribute identifies a group of buttons. 
 When one is clicked, all buttons in the same group are automatically deselected,
 the clicked button is selected, and all buttons in that group are disabled.
-Groups span the current chat log. Ungrouped buttons disable only themselves.
+Groups span the current chat log. Ungrouped command-only buttons disable only themselves.
+After a response is accepted, all existing embedded buttons, inputs, textareas,
+and selects become inactive, whether the reply comes from a control or the main
+chat input. This also applies to page-local response waits. New chat output can
+introduce active controls for the next decision; invalid replies or failed
+memory writes do not complete the wait. Delayed memory acknowledgements cannot
+resubmit or reactivate controls from an already completed decision.
 Newly rendered buttons can start a new decision. If both attributes are present,
 the response is submitted first, then the client command runs through the same
 dispatcher as server commands (including page overrides and registered defaults).
 Buttons are for decisions being passed to the chatbot for processing.
+
+Clicking an outlined element, including a child inside it, hides its visible
+outline without preventing the click's normal action.
 
 ## Embedded Input Fields
 

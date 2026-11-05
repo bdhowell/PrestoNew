@@ -2,33 +2,11 @@
 
 ## Embedded HTML controls in chats
 
-After any wait for input, the embedded HTML controls associate with that input become inactive.
+After any wait for user input is satisfied, any HTML controls in the chat flow become inactive.
 
 ## Clicking an Element with a Visible Outline
 
 Clicking an element with a visible outline hides its outline, if any.
-
-## Wand and Wikkit Interactions
-
-When Wikkit appears on the poster page, he implicitly checks the whole poster and reports on delta changes. 
-Toggling Wikkit off turns off any outlines in the poster.
-Concerning graphics and sections are outlined.
-
-Tapping the wand on the poster, exclusive of any sections, (re-)assesses the entire poster.
-Tapping the wand on a section displays an assessment of the section, and any remedies and recommendations.
-	Try resizing an overflowing graphic
-	Implicit metric: Any text embedded in the graphic should be approximately the same size as poster text.
-Tapping the wand on a graphic displays an assessment, and any remedies and recommendations.
-	If overflowing:
-		If reasonable to resize the graphic 
-			<button>Resize Automatically</button>
-		Else
-			Indicate that the graphic cannot be resized automatically.
-	If underflowing:
-		If reasonable to resize the graphic 
-			<button>Resize Automatically</button>
-		Else
-			Indicate that the graphic cannot be resized automatically.
 
 # Fonts and Layout
 
@@ -103,16 +81,30 @@ Add a route `/image` that takes an image source ID (SID), verifies that the user
 Otherwise, it returns an HTTP 404 Not Found response.
 
 ## Evaluating Graphics Suitability
-Add a route `/evaluate` that takes a poster ID and evaluates a poster's graphic sources using poster_image_evaluator.
+Add a route `/evaluate` that takes a poster ID and evaluates a poster's graphic sources using evaluation.py.
 Invoke it after a successful elucidation
+
 ### Template Content
 Wikkit is evaluating the suitability of each graphic you&rsquo;ve uploaded for your poster.
 
 ### Internal Logic
-Count the number of graphics being evaluated in the poster and the number of graphics that were extracted from the source text(s), that is having a non-null parent.
-- This is a database request
+This is a database request
+Select graphics being evaluated in the poster that have a null parent, as source.sid, "uploaded"
+Union all
+Select graphics extracted from the source text(s), that is having a non-null parent, as source.sid, "extracted"
 
-If the number of graphics being evaluated is zero, then redirect to `/conferences/query`
+If the number of graphics being evaluated is zero:
+- Wikkit says: 
+f"""
+Well, that was quick! 
+I didn&rsquo;t find any graphics to evaluate. 
+We&rsquo;re going to need some but we&rsquo;ll get around to graphics shortly.
+""" 
+- redirect to `/conferences/query`
+
+uploaded_graphics_count = len([g for g in graphics if g['type'] == 'uploaded'])
+extracted_graphics_count = len([g for g in graphics if g['type'] == 'extracted'])
+graphics_evaluating = uploaded_graphics_count + extracted_graphics_count
 
 message = "I&rsquo; reviewing the "
 if uploaded_graphics_count:
@@ -127,10 +119,43 @@ Okay, {identity.user_name}, {message}.
 Give me a few more moments to evaluate them.
 """
 
+processed = 1
+for each graphic in graphics:
+	# Evaluate the graphic's suitability
+	suitable = evaluation.evaluate(graphic)
+	# Store the evaluation result in the graphic dictionary
+	graphic['suitable'] = suitable
+	Wikkit says f"""
+	Processing image {num2words(processed)} of {num2words(graphics_evaluating)}.
+"""
+	processed += 1
+
 After evaluating all graphics, display a summary of which graphics are suitable and which are not.
 Order the graphics by uploaded and then extracted, with a clear distinction between the two categories.
 
 ============================================================
+
+## Wand and Wikkit Interactions
+
+When Wikkit appears on the poster page, he implicitly checks the whole poster and reports on delta changes. 
+Toggling Wikkit off turns off any outlines in the poster.
+Concerning graphics and sections are outlined.
+
+Tapping the wand on the poster, exclusive of any sections, (re-)assesses the entire poster.
+Tapping the wand on a section displays an assessment of the section, and any remedies and recommendations.
+	Try resizing an overflowing graphic
+	Implicit metric: Any text embedded in the graphic should be approximately the same size as poster text.
+Tapping the wand on a graphic displays an assessment, and any remedies and recommendations.
+	If overflowing:
+		If reasonable to resize the graphic 
+			<button>Resize Automatically</button>
+		Else
+			Indicate that the graphic cannot be resized automatically.
+	If underflowing:
+		If reasonable to resize the graphic 
+			<button>Resize Automatically</button>
+		Else
+			Indicate that the graphic cannot be resized automatically.
 
 Create a table named `sizings` in 
 `	pid		INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,

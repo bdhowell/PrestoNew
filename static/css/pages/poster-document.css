@@ -25,6 +25,8 @@ body {
 
 .poster-document header {
     text-align: center;
+    background-color: var(--header-background-color);
+    color: var(--header-font-color);
 }
 
 .poster-document h1 {

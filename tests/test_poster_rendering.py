@@ -255,6 +255,37 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
         self.assertEqual(await self.page.evaluate("window.themeRequests.length"), 1)
 
+    async def test_theme_options_show_two_rows_and_scroll_without_scrolling_dialog(self) -> None:
+        await self.page.set_viewport_size({"width": 1200, "height": 1100})
+        await self.editor()
+        await self.page.evaluate("document.getElementById('theme-dialog').showModal()")
+        dimensions = await self.page.locator("#theme-options").evaluate("""options => {
+            const bounds = options.getBoundingClientRect();
+            const cards = [...options.querySelectorAll(".theme-option")];
+            const visible = cards.filter(card => {
+                const rect = card.getBoundingClientRect();
+                return rect.top >= bounds.top && rect.bottom <= bounds.bottom;
+            });
+            return {
+                visibleRows: new Set(visible.map(card => card.offsetTop)).size,
+                partialCards: cards.filter(card => {
+                    const rect = card.getBoundingClientRect();
+                    return rect.top < bounds.bottom && rect.bottom > bounds.bottom;
+                }).length,
+                scrollHeight: options.scrollHeight, clientHeight: options.clientHeight,
+            };
+        }""")
+        self.assertEqual(dimensions["visibleRows"], 2)
+        self.assertEqual(dimensions["partialCards"], 0)
+        self.assertGreater(dimensions["scrollHeight"], dimensions["clientHeight"])
+        await self.page.locator("#theme-options .theme-option").last.scroll_into_view_if_needed()
+        self.assertGreater(await self.page.locator("#theme-options").evaluate(
+            "options => options.scrollTop",
+        ), 0)
+        self.assertTrue(await self.page.locator("#theme-dialog").evaluate(
+            "dialog => dialog.scrollTop === 0 && dialog.scrollHeight <= dialog.clientHeight",
+        ))
+
     async def test_theme_dialog_save_failure_allows_retry_and_small_screens(self) -> None:
         await self.editor()
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-editor.js"))
@@ -273,8 +304,11 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(bounds["x"], 0)
         self.assertLessEqual(bounds["x"] + bounds["width"], 360)
         self.assertTrue(await self.page.locator("#theme-dialog").evaluate(
-            "dialog => dialog.scrollWidth <= dialog.clientWidth",
+            """dialog => dialog.scrollWidth <= dialog.clientWidth
+                && dialog.scrollHeight <= dialog.clientHeight && dialog.scrollTop === 0""",
         ))
+        self.assertGreaterEqual(bounds["y"], 0)
+        self.assertLessEqual(bounds["y"] + bounds["height"], 500)
         await self.page.locator(".theme-preview.reds").click()
         await self.page.locator("#theme-apply").click()
         self.assertTrue(await self.page.locator("#theme-dialog").is_visible())

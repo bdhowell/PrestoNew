@@ -72,7 +72,7 @@
     <dialog id="theme-dialog" aria-labelledby="theme-dialog-title" data-pid="{{ poster.pid }}">
         <form id="theme-form">
             <h2 id="theme-dialog-title">Choose a theme</h2>
-            <p>Preview a section against each theme's poster background.</p>
+            <p>Preview a poster header and section against each theme's poster background.</p>
             <fieldset id="theme-options">
                 <legend>Available themes</legend>
                 {% for option in themes %}
@@ -82,6 +82,7 @@
                         {{ option | capitalize }}
                     </span>
                     <span class="theme-preview {{ option }}" aria-hidden="true">
+                        <span class="poster-header">Research findings</span>
                         <span class="section">
                             <span class="header">Results</span>
                             <span class="content">Our findings show how this theme renders section text and borders.</span>

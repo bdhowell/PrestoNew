@@ -12,6 +12,15 @@
         ? new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true }))
         : Promise.resolve();
 
+    document.addEventListener("click", (event) => {
+        for (let element = event.target; element instanceof Element; element = element.parentElement) {
+            const style = getComputedStyle(element);
+            if (!["none", "hidden"].includes(style.outlineStyle) && parseFloat(style.outlineWidth) > 0) {
+                element.style.outline = "none";
+            }
+        }
+    });
+
     window.registerWikkitCommands = function registerWikkitCommands({ commands }) {
         if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
             throw new TypeError("commands must be an object.");
@@ -158,6 +167,7 @@
         let requestingResponse = false;
         let pageResponse = null;
         let memoryRequestId = 0;
+        let responseVersion = 0;
         let leaving = false;
         const memoryRequests = new Map();
         const reminderInterval = 120000;
@@ -186,6 +196,14 @@
             requestingResponse = false;
             clearTimeout(reminderTimer);
             reminderTimer = null;
+        }
+
+        function finishResponse() {
+            stopRequest();
+            responseVersion++;
+            chatlog.querySelectorAll("button, input, textarea, select").forEach((control) => {
+                control.disabled = true;
+            });
         }
 
         function resetReminder() {
@@ -277,12 +295,12 @@
         function send(text, response = true) {
             if (socket.readyState === WebSocket.OPEN) {
                 if (response && text.trim()) {
-                    stopRequest();
+                    finishResponse();
                 }
                 socket.send(text);
             } else if (socket.readyState === WebSocket.CONNECTING) {
                 if (response && text.trim()) {
-                    stopRequest();
+                    finishResponse();
                 }
                 pending.push(text);
             } else {
@@ -301,7 +319,7 @@
             if (pageResponse) {
                 const response = pageResponse;
                 pageResponse = null;
-                stopRequest();
+                finishResponse();
                 response.resolve(text);
             } else if (!send(text)) {
                 return false;
@@ -343,11 +361,12 @@
                         : [...chatlog.querySelectorAll("button[data-group]")]
                             .filter((other) => other.dataset.group === group);
                     const enabled = buttons.filter((other) => !other.disabled);
+                    const version = responseVersion;
                     enabled.forEach((other) => { other.disabled = true; });
                     try {
                         if (button.hasAttribute("data-sends")
                             && !submitResponse(button.dataset.sends, false)) {
-                            enabled.forEach((other) => { other.disabled = closed; });
+                            enabled.forEach((other) => { other.disabled = closed || version !== responseVersion; });
                             return;
                         }
                         if (button.hasAttribute("data-does")) {
@@ -362,7 +381,7 @@
                     } catch (error) {
                         // A sent decision cannot be retracted even if its command fails.
                         if (!button.hasAttribute("data-sends")) {
-                            enabled.forEach((other) => { other.disabled = closed; });
+                            enabled.forEach((other) => { other.disabled = closed || version !== responseVersion; });
                         }
                         commandFailed(error);
                     }
@@ -400,6 +419,7 @@
                         return;
                     }
                     const value = control.value;
+                    const version = responseVersion;
                     if (!value.trim() || value.length > 2000) {
                         sayText(value.trim() ? "That message is too long. Please keep it under 2000 characters."
                             : "Please enter a response.", "notice");
@@ -411,6 +431,9 @@
                     }
                     try {
                         await remember(control);
+                        if (closed || version !== responseVersion) {
+                            return;
+                        }
                         if (submitResponse(value, false)) {
                             return;
                         }
@@ -418,9 +441,9 @@
                         console.error("Wikkit embedded control failed", error);
                         sayText(error.message, "notice");
                     }
-                    control.disabled = closed;
+                    control.disabled = closed || version !== responseVersion;
                     if (ok) {
-                        ok.disabled = closed;
+                        ok.disabled = control.disabled;
                     }
                 };
                 control.addEventListener("input", resetReminder);

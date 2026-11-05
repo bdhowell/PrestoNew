@@ -1137,6 +1137,9 @@ Implementation contract:
 - `layout(template, pid, *, uid, request=None)` renders a fresh copy of the named
   template. The trusted owner's `uid` is required; the optional request supplies
   navigation context. `/layout/edit` and `/layout/layout` display the result.
+  Drafts missing either dimension are redirected to `/layout/dimensions` before
+  rendering or saving the editor resumption URL. An explicitly requested owned
+  draft is selected first, so the dimensions workflow updates the correct poster.
 - Panes use `data-sections` (legacy `data-section` is also accepted). Commas
   separate sections; pipes group sections inside a `section-parent`. Vertical
   panes and their grouped sections use the `vertical` class.
@@ -1196,14 +1199,22 @@ Implementation contract:
   the poster width.
 - Stored section HTML is sanitized with the same allowlist as poster previews.
 - The layout toolbar's Theme button opens a modal dialog listing the installed
-  themes from `themes.css`. Each option previews a section on its poster background
-  using the renderer's section styles and the current fonts. Preview cards are
-  clickable selectors; visually hidden radios preserve keyboard selection and
+  themes from `themes.css`. Each option previews a poster header and section on its poster background
+  using the renderer's section styles and the current fonts. Cards are
+  displayed in a scrollable grid sized for two rows, reduced to the available
+  height on short screens. Only the grid scrolls; the dialog title, status, and
+  action buttons stay visible.
+  Preview cards are clickable selectors; visually hidden radios preserve keyboard selection and
   accessible names, with card outlines indicating focus and selection. Cancel or Escape
   discards the selection. Apply saves via `POST /layout/theme` with an explicit
   poster ID and installed theme name, then updates only the body's theme class.
   Saving enforces same-origin requests, ownership, and draft status, invalidates
   the poster cache, and reports failures in the dialog so the user can retry.
+  Every theme defines `--header-background-color` and `--header-font-color` for
+  the poster header, independently of the poster background and section headings.
+  These colors are shared by the editor, theme previews, and read-only documents.
+  The ocean, forest, plum, terracotta, slate, and gold palettes coordinate dark
+  headers and light header text with pale poster backgrounds and dark body text.
 - The last poster lookup is cached by owner and poster ID for two seconds;
   poster mutations invalidate it.
 - Media endpoints require ownership. QR PNG bytes come from `poster.moreinfopng`,

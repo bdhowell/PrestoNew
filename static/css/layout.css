@@ -358,6 +358,8 @@ body > .basic-menu {
 }
 
 .poster-header {
+    background-color: var(--header-background-color);
+    color: var(--header-font-color);
     flex: none;
     display: flex;
     flex-direction: column;
@@ -497,6 +499,33 @@ body > .basic-menu {
     font-weight: 600;
 }
 
+#theme-dialog {
+    overflow: hidden;
+}
+
+#theme-form {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100dvh - 5rem - 2px);
+}
+
+#theme-options {
+    --theme-row-height: 22rem;
+    flex: 0 1 auto;
+    min-height: 0;
+    min-width: 0;
+    height: calc(2 * var(--theme-row-height) + 3.5rem);
+    grid-auto-rows: var(--theme-row-height);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding: 0.25rem;
+}
+
+#theme-form > :not(#theme-options) {
+    flex-shrink: 0;
+}
+
 .theme-option {
     --border-radius: 0;
     --border-color: initial;
@@ -551,6 +580,12 @@ body > .basic-menu {
     padding: 1rem;
     font-size: 1rem;
     border-radius: calc(var(--border-radius, 0px) / 4);
+}
+
+.theme-preview .poster-header {
+    padding: 0.75rem;
+    margin-bottom: 0.75rem;
+    font: bold 1.25rem/1.4 var(--heading-font-face);
 }
 
 .theme-preview .header {
