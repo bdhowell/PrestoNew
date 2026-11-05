@@ -58,6 +58,32 @@ class FontSizing(BaseModel):
     authors: float = Field(default=1, ge=0.5, le=1.5)
 
 
+class LayoutGeometry(BaseModel):
+    """Initial, template-specific proportions before manual gutter adjustments."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+    scale: float = Field(gt=0, le=1)
+    header: float = Field(ge=0, le=1)
+    layout: float = Field(gt=0, le=1)
+    columns: list[float] = Field(min_length=3, max_length=3)
+    rows: list[float] = Field(min_length=1, max_length=2)
+    vertical: dict[str, list[float]]
+    horizontal: dict[str, list[float]]
+
+    @field_validator("columns", "rows", "vertical", "horizontal")
+    @classmethod
+    def valid_shares(cls, value: list[float] | dict[str, list[float]]) -> list[float] | dict[str, list[float]]:
+        groups = list(value.values()) if isinstance(value, dict) else [value]
+        if len(groups) > 20 or any(
+            not 1 <= len(shares) <= 5
+            or any(not math.isfinite(share) or not 0 < share <= 1 for share in shares)
+            or not math.isclose(sum(shares), 1, abs_tol=1e-6)
+            for shares in groups
+        ):
+            raise ValueError("Initial layout areas must share their available space.")
+        return value
+
+
 class LayoutSizing(BaseModel):
     """Normalized, template-specific gutter positions, independent of poster zoom."""
 
@@ -99,6 +125,7 @@ class Poster:
     fonts: str | None = None
     layout_settings: dict[str, dict[str, object]] | None = None
     font_sizing: dict[str, float] | None = None
+    layout_geometry: dict[str, dict[str, object]] | None = None
 
     @property
     def font_sizes(self) -> FontSizing:
@@ -192,6 +219,8 @@ class PosterStore:
                (SELECT u.settings->'layout-resizing' FROM userposter u
                 WHERE u.uid = p.uid AND u.pid = p.pid),
                (SELECT u.settings->'font-sizing' FROM userposter u
+                WHERE u.uid = p.uid AND u.pid = p.pid),
+               (SELECT u.settings->'layout-geometry' FROM userposter u
                 WHERE u.uid = p.uid AND u.pid = p.pid)
         FROM poster p
         LEFT JOIN section t ON t.pid = p.pid AND t.which = 'title'
@@ -470,6 +499,30 @@ class PosterStore:
                 )
         self.invalidate(uid, pid)
         return saved
+
+    async def set_layout_geometry(
+        self, uid: int, pid: int, template: str, geometry: LayoutGeometry,
+    ) -> LayoutGeometry | None:
+        if template not in TEMPLATES:
+            raise ValueError("Unknown poster template")
+        self.invalidate(uid, pid)
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "INSERT INTO userposter (uid, pid, editor, settings) "
+                "SELECT p.uid, p.pid, 1, %s FROM poster p "
+                "WHERE p.uid = %s AND p.pid = %s AND coalesce(p.template, 'arena') = %s "
+                "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
+                "ON CONFLICT (uid, pid) DO UPDATE SET settings = jsonb_set("
+                "userposter.settings, '{layout-geometry}', "
+                "(excluded.settings->'layout-geometry') "
+                "|| coalesce(userposter.settings->'layout-geometry', '{}'::jsonb)) "
+                "RETURNING settings->'layout-geometry'->%s",
+                (Jsonb({"layout-geometry": {template: geometry.model_dump()}}), uid, pid, template, template),
+            )
+            row = await cursor.fetchone()
+        self.invalidate(uid, pid)
+        return LayoutGeometry.model_validate(row[0]) if row else None
 
     async def set_layout_sizing(
         self, uid: int, pid: int, template: str, sizing: LayoutSizing,

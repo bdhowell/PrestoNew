@@ -14,6 +14,7 @@
     let zoomAnchor = null;
 
     function fitContent() {
+        if (content.dataset.fixedGeometry === "true") return;
         const style = getComputedStyle(canvas);
         const width = canvas.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
         const height = canvas.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);

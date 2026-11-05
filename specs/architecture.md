@@ -1169,7 +1169,7 @@ Implementation contract:
   Font Awesome text-size icon. Each target has an independent 50%-150% multiplier
   relative to its area-based size. Unitless line-height scales with the font.
   Controls preview immediately, preserve the current target's value, and schedule
-  content re-fitting without altering zoom or other targets. Header adjustments
+  content updates without altering zoom or other targets. Header adjustments
   reset the old balanced width to 100%; reload rebalances with saved sizing.
   `POST /layout/font-sizing` accepts `pid`, `target`, and numeric `value` (0.5-1.5).
   The owner-only draft write atomically merges only that target into the
@@ -1179,6 +1179,22 @@ Implementation contract:
   and apply to read-only previews. Client writes are debounced and serialized,
   retain newer changes during an in-flight save, display errors with a retry
   action, and warn on navigation with unsaved changes.
+  Font-sizing progress, success, and error messages use the shared
+  `#content-save-status` output; the font controls retain their retry button.
+  Once dimensions exist and a template first renders, `layout-geometry.js`
+  waits for fonts and the initial content fit, then freezes the header, layout
+  frame, grid tracks, and nested section shares. Font and content edits clip
+  within these areas instead of redistributing space or rerunning whole-poster
+  auto-fit. Viewport zoom remains independent, and explicit gutter resizing
+  still adjusts the saved proportions.
+  `POST /layout/geometry` validates the measured areas against the template
+  and atomically initializes `userposter.settings["layout-geometry"][template]`
+  for the owner-only draft. Existing baselines win concurrent initialization;
+  other templates, resizing positions, and font settings are preserved.
+  Baselines are restored on reopening; older drafts initialize on their first
+  editor visit. The content frame scales with physical dimension changes while
+  retaining the baseline shares. Failed initialization writes are reported and
+  navigation warns while the baseline is unsaved.
   CSS keeps both containers centered within their original layout slots, measured
   inside the canvas padding of `5 * var(--gutter)` on every side.
   Measurement uses local stylesheets and waits for web fonts; scripts and other

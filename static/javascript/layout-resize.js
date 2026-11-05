@@ -1,6 +1,7 @@
-(() => {
+(async () => {
     "use strict";
 
+    if (window.posterGeometryReady) await window.posterGeometryReady;
     const layout = document.querySelector(".layout.three-column");
     if (!layout) return;
     const panes = [0, 1, 2].map(index => document.getElementById(`pane${index}`));

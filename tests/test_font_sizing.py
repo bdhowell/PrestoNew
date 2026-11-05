@@ -195,7 +195,7 @@ class FontSizingBrowserTests(unittest.IsolatedAsyncioTestCase):
         }""")
         await self.change_size("title", 140)
         await self.page.wait_for_function("!document.getElementById('font-size-retry').hidden")
-        self.assertIn("Storage unavailable.", await self.page.locator("#font-size-status").inner_text())
+        self.assertIn("Storage unavailable.", await self.page.locator("#content-save-status").inner_text())
         await self.page.evaluate("""() => {
             window.fetch = async (url, options) => {
                 saves.push(JSON.parse(options.body));
@@ -203,7 +203,7 @@ class FontSizingBrowserTests(unittest.IsolatedAsyncioTestCase):
             };
         }""")
         await self.page.locator("#font-size-retry").click()
-        await self.page.wait_for_function("document.getElementById('font-size-status').textContent === 'Font sizing saved.'")
+        await self.page.wait_for_function("document.getElementById('content-save-status').textContent === 'Font sizing saved.'")
         self.assertEqual(await self.page.evaluate("saves"), [
             {"pid": 11, "target": "title", "value": 1.4},
         ])
@@ -225,7 +225,7 @@ class FontSizingBrowserTests(unittest.IsolatedAsyncioTestCase):
             await self.page.evaluate("finishSave()")
             await self.page.wait_for_function(f"saves.length === {count}")
         await self.page.evaluate("finishSave()")
-        await self.page.wait_for_function("document.getElementById('font-size-status').textContent === 'Font sizing saved.'")
+        await self.page.wait_for_function("document.getElementById('content-save-status').textContent === 'Font sizing saved.'")
         self.assertEqual(await self.page.evaluate("saves"), [
             {"pid": 11, "target": "sections", "value": 1.1},
             {"pid": 11, "target": "sections", "value": 1.4},
@@ -236,7 +236,7 @@ class FontSizingBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.load_controls()
         await self.page.set_viewport_size({"width": 360, "height": 700})
         await self.change_size("sections", 150)
-        await self.page.wait_for_function("document.getElementById('font-size-status').textContent === 'Font sizing saved.'")
+        await self.page.wait_for_function("document.getElementById('content-save-status').textContent === 'Font sizing saved.'")
         await self.set_zoom("fit")
         await self.assert_content_bounds()
         bounds = await self.page.locator("#font-size-controls").bounding_box()
@@ -267,7 +267,7 @@ class FontSizingBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("#font-sizing").select_option("authors")
         await self.page.locator("#font-size").focus()
         await self.page.keyboard.press("ArrowRight")
-        await self.page.wait_for_function("document.getElementById('font-size-status').textContent === 'Font sizing saved.'")
+        await self.page.wait_for_function("document.getElementById('content-save-status').textContent === 'Font sizing saved.'")
         self.assertEqual(await self.page.locator("#font-size-value").inner_text(), "111%")
         self.assertEqual(await self.page.evaluate("saves[0].data"), {
             "pid": 11, "target": "authors", "value": 1.11,

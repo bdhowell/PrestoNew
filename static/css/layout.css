@@ -144,10 +144,6 @@ body > .basic-menu {
     display: none;
 }
 
-#font-size-status {
-    max-width: 18rem;
-}
-
 #extended-controls:not([hidden]),
 #appearance-controls:not([hidden]) {
     display: flex;
@@ -260,6 +256,21 @@ body > .basic-menu {
 }
 
 .pane {
+    min-width: 0;
+}
+
+#poster-content[data-fixed-geometry="true"] #poster-header,
+#poster-content[data-fixed-geometry="true"] #layout {
+    flex: none;
+    min-height: 0;
+}
+
+#poster-content[data-fixed-geometry="true"] #poster-header,
+#poster-content[data-fixed-geometry="true"] .layout .pane,
+#poster-content[data-fixed-geometry="true"] .layout .section,
+#poster-content[data-fixed-geometry="true"] .layout .section-parent {
+    overflow: hidden;
+    min-height: 0;
     min-width: 0;
 }
 

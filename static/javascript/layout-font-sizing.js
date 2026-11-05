@@ -7,7 +7,7 @@
     const target = document.getElementById("font-sizing");
     const slider = document.getElementById("font-size");
     const output = document.getElementById("font-size-value");
-    const status = document.getElementById("font-size-status");
+    const status = document.getElementById("content-save-status");
     const retry = document.getElementById("font-size-retry");
     const sizing = JSON.parse(controls.dataset.sizing);
     const dirty = new Map();

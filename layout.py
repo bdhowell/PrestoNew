@@ -119,6 +119,10 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
     layout_element.set("data-resize-settings", sizing.model_dump_json())
     layout_element.set("data-pid", str(pid))
     layout_element.set("data-template", template)
+    geometry = (poster.layout_geometry or {}).get(template)
+    layout_element.set("data-initial-geometry", (
+        posters.LayoutGeometry.model_validate(geometry).model_dump_json() if geometry is not None else "null"
+    ))
     if poster.logo:
         logo = document.get_element_by_id("logo")
         etree.SubElement(logo, "img", src=f"/layout/logo?pid={pid}", alt="Poster logo")
@@ -231,6 +235,50 @@ async def edit_layout(
         logger.exception("Could not render poster %s", poster.pid)
         raise HTTPException(503, "Your layout could not be loaded.") from None
     return HTMLResponse(rendered, headers=PRIVATE)
+
+
+@router.post("/geometry")
+async def initialize_geometry(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    pid, template = data.get("pid"), data.get("template")
+    if type(pid) is not int or pid <= 0 or template not in posters.TEMPLATES:
+        raise HTTPException(422, "Choose a valid poster and template.")
+    try:
+        geometry = posters.LayoutGeometry.model_validate(data.get("geometry"))
+    except ValidationError:
+        raise HTTPException(422, "Initial poster layout dimensions are invalid.") from None
+    try:
+        poster = await owned(request, pid, draft=True)
+        if template != (poster.template or "arena"):
+            raise HTTPException(409, "The poster template changed. Reload before initializing its layout.")
+        raw = templates.env.get_template(f"layouts/{template}.html").render(
+            request=request, poster=poster, layout_template=template, themes=[], font_sets=[],
+        )
+        document = dom.document_fromstring(raw)
+        expected = {"vertical": {}, "horizontal": {}}
+        panes = document.xpath('//*[@id="layout"]/*[@data-sections]')
+        for pane in panes:
+            classes = pane.get("class", "").split()
+            horizontal = "horizontal" in classes
+            groups = [group.split("|") for group in pane.get("data-sections", "").split(",")]
+            expected["horizontal" if horizontal else "vertical"][pane.attrib["id"]] = len(groups)
+            for items in groups:
+                if len(items) > 1:
+                    expected["vertical" if "vertical" in classes else "horizontal"][
+                        f"{'-'.join(items)}-parent"
+                    ] = len(items)
+        if len(geometry.rows) != (2 if len(panes) > 3 else 1) or any(
+            {key: len(shares) for key, shares in getattr(geometry, direction).items()} != groups
+            for direction, groups in expected.items()
+        ):
+            raise HTTPException(422, "Initial dimensions must match the poster's layout areas.")
+        saved = await posters.store().set_layout_geometry(uid_for(request), pid, template, geometry)
+    except psycopg.Error:
+        logger.exception("Could not initialize layout dimensions for poster %s", pid)
+        raise HTTPException(503, "Your initial layout dimensions could not be saved.") from None
+    if saved is None:
+        raise HTTPException(409, "This poster can no longer be edited.")
+    return JSONResponse({"ok": True, "geometry": saved.model_dump()})
 
 
 @router.post("/sizing")
