@@ -167,7 +167,8 @@ Unknown commands and execution errors are logged and shown as a chatbot notice.
   Account AJAX replies can include `command`; the page awaits
   `window.wikkit.execute(command)` before displaying `say` or redirecting.
 - `redirect`: save the chatbot state and navigate the page to the same-origin URL in the string payload.
-- `request-response`: start waiting for user input on the client.
+- `request-response`: show the chatbot, reopen its input, and start waiting for
+  user input on the client, including when a previous page saved it hidden.
   `request` is an alias for the example's original command key.
 
 While a response is requested, the client displays a reminder after 120,000 ms

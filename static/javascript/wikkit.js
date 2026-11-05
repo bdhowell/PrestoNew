@@ -217,6 +217,8 @@
         }
 
         function requestResponse() {
+            showChat();
+            openInput();
             requestingResponse = true;
             resetReminder();
         }
@@ -682,8 +684,6 @@
                         if (closed || pageResponse || requestingResponse) {
                             return Promise.reject(new Error("Wikkit is unavailable or already waiting for a response."));
                         }
-                        showChat();
-                        openInput();
                         requestResponse();
                         chatinput.focus();
                         return new Promise((resolve, reject) => {

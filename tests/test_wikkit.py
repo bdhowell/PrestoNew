@@ -6,10 +6,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
+from playwright.async_api import async_playwright, expect
 from starlette.websockets import WebSocketDisconnect
 
 with patch.dict(os.environ, {"SESSION_BACKEND": "none"}):
@@ -217,6 +219,85 @@ class WikkitPageTests(unittest.TestCase):
                 self.assertIn('<nav class="basic-menu"', response.text)
                 self.assertIn('data-socket="/wikkit/ws"', response.text)
                 self.assertIn("window.wikkit = connect(", response.text)
+
+
+class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        playwright = await async_playwright().start()
+        self.addAsyncCleanup(playwright.stop)
+        browser = await playwright.chromium.launch()
+        self.addAsyncCleanup(browser.close)
+        self.page = await browser.new_page()
+        self.errors = []
+        self.page.on("pageerror", lambda error: self.errors.append(str(error)))
+        request = wikkit.Request({
+            "type": "http", "method": "GET", "path": "/layout/dimensions",
+            "headers": [], "query_string": b"", "state": {"user_id": 7},
+        })
+        rendered = wikkit.render_page(
+            request, "layout/dimensions.html", "layout-dimensions",
+        )
+        client = TestClient(app)
+        self.addCleanup(client.close)
+
+        async def serve(route) -> None:
+            path = urlsplit(route.request.url).path
+            if path == "/layout/dimensions":
+                await route.fulfill(body=rendered.body, content_type="text/html")
+            elif path.startswith("/static/"):
+                response = client.get(path)
+                await route.fulfill(
+                    status=response.status_code, body=response.content,
+                    content_type=response.headers["content-type"],
+                )
+            else:
+                await route.abort()
+
+        def connect(socket) -> None:
+            def receive(message) -> None:
+                if json.loads(message).get("page") == "layout-dimensions":
+                    socket.send(json.dumps({
+                        "say": "<p>Enter your poster height x width.</p>",
+                        "command": {"does": "request-response"},
+                    }))
+            socket.on_message(receive)
+
+        await self.page.route("**/*", serve)
+        await self.page.route_web_socket("**/wikkit/ws", connect)
+
+    async def assert_response_available(self) -> None:
+        chatbot = self.page.locator("#chatbot")
+        await expect(chatbot).to_be_visible()
+        self.assertFalse(await chatbot.evaluate("element => element.inert"))
+        self.assertIsNone(await chatbot.get_attribute("aria-hidden"))
+        chatinput = self.page.locator("#chatinput")
+        await expect(chatinput).to_be_visible()
+        self.assertFalse(await chatinput.evaluate("element => element.inert"))
+        self.assertIsNone(await chatinput.get_attribute("aria-hidden"))
+        self.assertEqual(self.errors, [])
+
+    async def test_dimensions_prompt_reopens_persisted_hidden_chat(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.locator("#chatlog").get_by_text("Enter your poster height x width.").wait_for()
+        await self.page.evaluate("window.wikkit.execute({does: 'hide-close'})")
+        await self.page.wait_for_function(
+            "JSON.parse(sessionStorage.getItem('wikkit.chatbot'))['chat-hidden'] === true"
+        )
+        await self.page.reload()
+        await self.page.wait_for_function(
+            "document.querySelectorAll('#chatlog .chat').length === 2"
+        )
+        await self.assert_response_available()
+
+    async def test_request_aliases_reopen_hidden_chat_and_closed_input(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        for command in ("request-response", "request"):
+            with self.subTest(command=command):
+                await self.page.evaluate("""async command => {
+                    await window.wikkit.execute({does: 'hide-close'});
+                    await window.wikkit.execute({does: command});
+                }""", command)
+                await self.assert_response_available()
 
 
 class WikkitReplyTests(unittest.IsolatedAsyncioTestCase):
