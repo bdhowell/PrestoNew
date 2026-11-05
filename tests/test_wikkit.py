@@ -254,6 +254,7 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
                 await route.abort()
 
         def connect(socket) -> None:
+            self.socket = socket
             def receive(message) -> None:
                 if json.loads(message).get("page") == "layout-dimensions":
                     socket.send(json.dumps({
@@ -298,6 +299,28 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
                     await window.wikkit.execute({does: command});
                 }""", command)
                 await self.assert_response_available()
+
+    async def test_new_output_reveals_chat_without_reopening_input(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.locator("#chatlog").get_by_text("Enter your poster height x width.").wait_for()
+        for output in ("say", "user", "page", "echo", "notice"):
+            with self.subTest(output=output):
+                await self.page.evaluate("window.wikkit.execute({does: 'hide-close'})")
+                if output in ("say", "user"):
+                    self.socket.send(json.dumps({output: f"<p>{output} output</p>"}))
+                elif output == "page":
+                    await self.page.evaluate("window.wikkit.say('<p>Page output</p>')")
+                elif output == "echo":
+                    await self.page.evaluate("window.wikkit.command('{}', true)")
+                else:
+                    self.socket.send(json.dumps({"command": {"does": "unknown-command"}}))
+                chatbot = self.page.locator("#chatbot")
+                await expect(chatbot).not_to_have_class("chat-hidden input-closed")
+                await expect(chatbot).to_be_visible()
+                self.assertFalse(await chatbot.evaluate("element => element.inert"))
+                self.assertIsNone(await chatbot.get_attribute("aria-hidden"))
+                await expect(chatbot).to_have_class("input-closed")
+        self.assertEqual(self.errors, [])
 
 
 class WikkitReplyTests(unittest.IsolatedAsyncioTestCase):
