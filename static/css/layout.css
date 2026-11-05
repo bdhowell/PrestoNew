@@ -170,7 +170,8 @@ body > .basic-menu {
     margin-left: auto;
 }
 
-#editor-controls #wikkit {
+#editor-controls #wikkit,
+#editor-controls #auto-fit {
     color: rgb(244, 211, 94);
 }
 

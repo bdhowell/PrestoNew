@@ -148,6 +148,7 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
                 heading.text = {
                     "methods": "Materials and Methods",
                     "citations": "Literature Cited",
+                    "information": "Additional Information",
                 }.get(item, item.title())
                 body = etree.SubElement(
                     section, "div", attrib={
