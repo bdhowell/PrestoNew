@@ -52,6 +52,8 @@ body > .basic-menu {
 
 #poster-canvas {
     --gutter: 6rem;
+    font-size: calc(2rem * var(--poster-font-scale, 1));
+    line-height: 1.6;
     position: absolute;
     top: 0;
     left: 0;
@@ -107,6 +109,43 @@ body > .basic-menu {
     border-radius: 0.5rem 0.5rem 0 0;
     background: #2f2766;
     box-shadow: 0 -0.25rem 1rem #0006;
+}
+
+#font-size-controls {
+    display: flex;
+    margin-left: auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem;
+    max-width: 100%;
+    color: #fff;
+}
+
+#font-sizing {
+    background: #443a80;
+    color: #fff;
+    border: 1px solid #8e85c2;
+    border-radius: 0.5rem;
+    padding: 0.25rem;
+    font: inherit;
+}
+
+#font-size {
+    width: 7rem;
+    accent-color: #c4bdeb;
+}
+
+#font-size-value {
+    min-width: 4ch;
+    text-align: right;
+}
+
+#editor-controls #font-size-retry[hidden] {
+    display: none;
+}
+
+#font-size-status {
+    max-width: 18rem;
 }
 
 #extended-controls:not([hidden]),
@@ -214,6 +253,7 @@ body > .basic-menu {
 }
 
 #layout {
+    font-size: calc(1em * var(--sections-font-scale, 1));
     margin-right: var(--gutter);
     margin-left: var(--gutter);
     margin-bottom: var(--gutter);
@@ -343,7 +383,7 @@ body > .basic-menu {
 
 .header {
     font-family: var(--heading-font-face);
-    font-size: 3rem;
+    font-size: 1.5em;
     display: flex;
     align-items: center;
     width: 100%;
@@ -387,7 +427,7 @@ body > .basic-menu {
 .title {
     grid-column: 2;
     font-family: var(--heading-font-face);
-    font-size: 7rem;
+    font-size: calc(3.5em * var(--title-font-scale, 1));
     flex: 1;
     min-width: 0;
     text-align: center;
@@ -399,7 +439,7 @@ body > .basic-menu {
 
 .authors {
     font-family: var(--heading-font-face);
-    font-size: 2.75rem;
+    font-size: calc(1.375em * var(--authors-font-scale, 1));
     flex: 1;
     min-width: 0;
     text-align: center;

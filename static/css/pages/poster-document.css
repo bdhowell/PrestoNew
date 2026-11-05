@@ -13,7 +13,7 @@ body {
     overflow: hidden;
     background: var(--background-color, #fff);
     color: var(--text-color, #111);
-    font: 32px/1.4 var(--body-font-face, system-ui, sans-serif);
+    font: calc(2rem * var(--poster-font-scale, 1))/1.4 var(--body-font-face, system-ui, sans-serif);
 }
 
 .poster-document h1,
@@ -31,10 +31,15 @@ body {
 
 .poster-document h1 {
     margin: 0 0 48px;
-    font-size: 80px;
+    font-size: calc(2.5em * var(--title-font-scale, 1));
+}
+
+.poster-document .author {
+    font-size: calc(1em * var(--authors-font-scale, 1));
 }
 
 .poster-sections {
+    font-size: calc(1em * var(--sections-font-scale, 1));
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 48px;
@@ -52,7 +57,7 @@ body {
     padding: 16px;
     color: var(--heading-text-color, #fff);
     background: var(--heading-background-color, #333);
-    font-size: 40px;
+    font-size: 1.25em;
 }
 
 .section-content {

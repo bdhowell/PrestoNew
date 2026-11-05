@@ -16,6 +16,20 @@
                 <button id="subscript" aria-label="Subscript" title="Subscript"><i class="fa-solid fa-subscript"></i></button>
                 <button id="ullist" aria-label="Unordered List" title="Unordered List"><i class="fa-solid fa-list-ul"></i></button>
                 <button id="ollist" aria-label="Ordered List" title="Ordered List"><i class="fa-solid fa-list-ol"></i></button>
+                | <div id="font-size-controls" role="group" aria-label="Poster font sizing">
+                    <i class="fa-solid fa-text-size" aria-hidden="true"></i>
+                    <select id="font-sizing" aria-label="Font sizing target">
+                        <option value="sections">Sections</option>
+                        <option value="title">Title</option>
+                        <option value="authors">Authors</option>
+                    </select>
+                    <input id="font-size" type="range" min="50" max="150" step="1" value="100"
+                           aria-label="Sections font size" aria-describedby="font-size-value">
+                    <output id="font-size-value" for="font-size">100%</output>
+                    <button id="font-size-retry" type="button" hidden aria-label="Retry saving font sizing"
+                            title="Retry saving font sizing"><i class="fa-solid fa-rotate-right"></i></button>
+                    <output id="font-size-status" role="status" aria-live="polite"></output>
+                </div>
             </div>
             | <button id="cut" aria-label="Cut" title="Cut"><i class="fa-solid fa-cut"></i></button>
             <button id="copy" aria-label="Copy" title="Copy"><i class="fa-solid fa-copy"></i></button>

@@ -362,6 +362,17 @@ class PosterRouteTests(unittest.TestCase):
 
 
 class PosterValueTests(unittest.IsolatedAsyncioTestCase):
+    def test_font_scale_uses_physical_area_in_any_supported_units(self) -> None:
+        for width, height, units, expected in (
+            (36, 36, "in", 1), (36, 48, "in", 4 / 3),
+            (72, 72, "in", 4), (96, 96, "in", 64 / 9),
+            (100, 150, "cm", 15000 / (91.44 ** 2)),
+            (1000, 1500, "mm", 15000 / (91.44 ** 2)),
+        ):
+            with self.subTest(width=width, height=height, units=units):
+                poster = replace(DRAFT, width=width, height=height, units=units)
+                self.assertAlmostEqual(poster.font_scale, expected)
+
     async def test_font_update_is_validated_owner_scoped_and_invalidates_cache(self) -> None:
         store = posters.PosterStore()
         connection = AsyncMock()

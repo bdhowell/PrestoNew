@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/static/css/pages/poster-document.css">
 </head>
 <body>
-<article class="poster-document {{ theme }} {{ fonts }} {{ layout }}" style="width: {{ width }}px; height: {{ height }}px" data-width="{{ width }}" data-height="{{ height }}">
+<article class="poster-document {{ theme }} {{ fonts }} {{ layout }}" style="width: {{ width }}px; height: {{ height }}px; --poster-font-scale: {{ poster.font_scale }}; --sections-font-scale: {{ poster.font_sizes.sections }}; --title-font-scale: {{ poster.font_sizes.title }}; --authors-font-scale: {{ poster.font_sizes.authors }}" data-width="{{ width }}" data-height="{{ height }}">
     <header>
         <h1>{{ poster.name }}</h1>
         {% for name, affiliation in authors %}

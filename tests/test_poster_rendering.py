@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -153,9 +154,9 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(bounds)
                 self.assertAlmostEqual(bounds["x"] + bounds["width"] / 2, 375, delta=0.1)
 
-    async def editor(self, template: str = "arena") -> None:
+    async def editor(self, template: str = "arena", poster: posters.Poster = DRAFT) -> None:
         store = AsyncMock()
-        store.get.return_value = DRAFT
+        store.get.return_value = poster
         store.content.return_value = ([("title", "Poster title"), ("results", "<p>Results</p>")], [])
         with patch.object(posters, "store", return_value=store), patch.object(
             layout, "balance_header_widths", AsyncMock(return_value={"#title": 80, "#authors": 100}),
@@ -177,6 +178,56 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         await self.page.wait_for_function(
             "() => document.getElementById('poster-stage').style.height !== ''",
         )
+
+    async def test_base_typography_scales_with_physical_area_not_zoom_or_content(self) -> None:
+        for template in posters.TEMPLATES:
+            for width, height in ((36, 36), (36, 48), (72, 72), (96, 96)):
+                with self.subTest(template=template, width=width, height=height):
+                    await self.editor(template, replace(DRAFT, width=width, height=height))
+                    ratio = width * height / (36 * 36)
+                    for selector, baseline in (
+                        ("#layout", 32), ("#results .header", 48),
+                        ("#title", 112), ("#authors", 44),
+                    ):
+                        values = await self.page.locator(selector).evaluate("""element => {
+                            const style = getComputedStyle(element);
+                            return [parseFloat(style.fontSize), parseFloat(style.lineHeight)];
+                        }""")
+                        self.assertAlmostEqual(values[0], baseline * ratio, delta=0.01)
+                        self.assertAlmostEqual(values[1], baseline * 1.6 * ratio, delta=0.01)
+                    before = await self.page.locator("#layout").evaluate(
+                        "element => getComputedStyle(element).fontSize",
+                    )
+                    await self.set_zoom("100")
+                    await self.page.locator("#results .content").fill("More results. " * 100)
+                    await self.set_zoom("fit")
+                    self.assertEqual(await self.page.locator("#layout").evaluate(
+                        "element => getComputedStyle(element).fontSize",
+                    ), before)
+                    self.assertEqual(await self.page.locator("#controls").evaluate(
+                        "element => getComputedStyle(element).fontSize",
+                    ), "16px")
+
+    async def test_read_only_typography_uses_the_same_area_ratio(self) -> None:
+        for width, height in ((36, 36), (36, 48), (72, 72)):
+            with self.subTest(width=width, height=height):
+                poster = replace(DRAFT, width=width, height=height)
+                rendered = layout.templates.env.get_template("posters/document.html").render(
+                    poster=poster, width=width * 96, height=height * 96,
+                    sections=[("results", "Findings")], authors=[("Ada", "Institute")],
+                    theme="blues", fonts="technical", layout="arena",
+                )
+                await self.page.set_content(rendered)
+                await self.page.add_style_tag(path=str(ROOT / "static/css/pages/poster-document.css"))
+                for selector, baseline in (
+                    (".poster-document", 32), ("h1", 80), ("h2", 40), (".author", 32),
+                ):
+                    values = await self.page.locator(selector).evaluate("""element => {
+                        const style = getComputedStyle(element);
+                        return [parseFloat(style.fontSize), parseFloat(style.lineHeight)];
+                    }""")
+                    self.assertAlmostEqual(values[0], baseline * poster.font_scale, delta=0.01)
+                    self.assertAlmostEqual(values[1], baseline * 1.4 * poster.font_scale, delta=0.01)
 
     async def dimensions(self) -> dict:
         return await self.page.evaluate("""() => {
@@ -596,7 +647,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
             for font_size in ("1.2rem", "2.0rem"):
                 for zoom in ("100", "fit"):
                     with self.subTest(template=template, font_size=font_size, zoom=zoom):
-                        await self.page.locator("body").evaluate(
+                        await self.page.locator("#poster-canvas").evaluate(
                             "(element, size) => element.style.fontSize = size", font_size,
                         )
                         await self.set_zoom(zoom)

@@ -164,7 +164,14 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
                     body.remove(body[0])
     width, height = poster.inches
     canvas = document.get_element_by_id("poster-canvas")
-    canvas.set("style", f"width: {width * 96:.6f}px; height: {height * 96:.6f}px")
+    canvas.set("style", (
+        f"width: {width * 96:.6f}px; height: {height * 96:.6f}px; "
+        f"--poster-font-scale: {poster.font_scale:.9f}; "
+        + "; ".join(f"--{target}-font-scale: {value:g}" for target, value in poster.font_sizes.model_dump().items())
+    ))
+    font_controls = document.get_element_by_id("font-size-controls")
+    font_controls.set("data-pid", str(pid))
+    font_controls.set("data-sizing", poster.font_sizes.model_dump_json())
     rendered = etree.tostring(document, method="html", encoding="unicode", doctype="<!DOCTYPE html>")
     widths = await balance_header_widths(rendered, width * 96)
     for selector, percentage in widths.items():
@@ -281,6 +288,29 @@ async def update_content(request: Request) -> JSONResponse:
     except psycopg.Error:
         logger.exception("Could not save poster section %s", which)
         raise HTTPException(503, "Your changes could not be saved.") from None
+    if not saved:
+        raise HTTPException(409, "This poster can no longer be edited.")
+    return JSONResponse({"ok": True})
+
+
+@router.post("/font-sizing")
+async def update_font_sizing(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    pid, target = data.get("pid"), data.get("target")
+    if type(pid) is not int or pid <= 0 or target not in ("sections", "title", "authors"):
+        raise HTTPException(422, "Choose a valid poster and font-sizing target.")
+    try:
+        sizing = posters.FontSizing.model_validate({target: data.get("value")})
+    except ValidationError:
+        raise HTTPException(422, "Font sizing must be between 50% and 150%.") from None
+    try:
+        poster = await owned(request, pid, draft=True)
+        saved = await posters.store().set_font_sizing(
+            uid_for(request), poster.pid, target, sizing.model_dump()[target],
+        )
+    except psycopg.Error:
+        logger.exception("Could not save font sizing for poster %s", pid)
+        raise HTTPException(503, "Your font sizing could not be saved.") from None
     if not saved:
         raise HTTPException(409, "This poster can no longer be edited.")
     return JSONResponse({"ok": True})

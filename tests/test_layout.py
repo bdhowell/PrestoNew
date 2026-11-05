@@ -147,7 +147,9 @@ class LayoutRouteTests(unittest.TestCase):
                 self.assertAlmostEqual(self.balancer.await_args.args[1], DRAFT.inches[0] * 96)
                 self.assertEqual(
                     document.get_element_by_id("poster-canvas").get("style"),
-                    f"width: {DRAFT.inches[0] * 96:.6f}px; height: {DRAFT.inches[1] * 96:.6f}px",
+                    f"width: {DRAFT.inches[0] * 96:.6f}px; height: {DRAFT.inches[1] * 96:.6f}px; "
+                    f"--poster-font-scale: {DRAFT.font_scale:.9f}; "
+                    "--sections-font-scale: 1; --title-font-scale: 1; --authors-font-scale: 1",
                 )
                 self.assertIsNone(document.find("body").get("style"))
                 self.assertTrue(document.xpath('//*[@id="poster-container"]//*[@id="poster-header"]'))

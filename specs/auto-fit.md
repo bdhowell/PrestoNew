@@ -15,20 +15,36 @@ Add a --header-font-color variable to each theme which sets the font color of #p
 
 Create six new themes with #poster-header having --header-background-color and --header-font-color values coordinated with #poster-content's --background-color and #text-color
 
-## Font Sizing Controls
-
-To the right of `#extended-controls`, add a drop-down menu `#font-sizing`: Sections, Title, Authors
-Add a font-size slider on the right of `#font-sizing` that adjusts the `#layout` font size and line spacing each section up to 2x from the default/initial value.
-The drop-down controls which of the poster's fonts the slider is modifying.
-Indicate these controls' purpose using Font Awesome's <i class="fa-solid fa-text-size"></i> positioned before the drop-down menu.
+## Base Font Size
 
 The base font-size is computed as:
 
-`2rem * (area in cm of #layout / area in cm of smallest possible layout)`
+`2rem * (poster area in square cm / minimum poster area in square cm)`
+
+Use the physical poster area, rather than the live rendered `#layout` area, so
+wrapping, header height, zoom, and auto-fit do not feed back into the base size.
+The minimum poster area is 91.44 cm x 91.44 cm (36 in x 36 in).
 
 Line spacing is also scaled proportionally.
 
 `#authors` and `#title` base font sizes and line spacing are proportional to the `#layout` font.
+
+## Font Sizing Controls
+
+Inside `#extended-controls`, on the container's right side, add a drop-down menu `#font-sizing`: Sections, Title, Authors
+Add a font-size slider on the right of `#font-sizing` that adjusts the `#layout` font size and line spacing each section up to 1.5x from the default/initial value.
+The drop-down controls which of the poster's fonts the slider is modifying.
+Indicate these controls' purpose using Font Awesome's <i class="fa-solid fa-text-size"></i> positioned before the drop-down menu.
+The slider ranges from 50% to 150%, with 100% restoring the area-based default.
+Each target has an independent saved multiplier; switching targets restores its
+slider value. Changes preview immediately and scale line spacing proportionally.
+Save these settings with the poster, preserve them across template/font/theme
+changes, and apply them to read-only previews. Report save errors with a retry
+action and warn before navigating away with unsaved adjustments.
+
+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+
+When a poster is created, fix its resizeable areas to the initial layout dimensions, so that subsequent adjustments to font sizing or content do not alter the original layout proportions.
 
 # Graphics Handling
 

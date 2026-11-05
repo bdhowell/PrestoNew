@@ -51,6 +51,13 @@ POSTER_MAX_HEIGHT_CM = 96 * 2.54  # cm
 POSTER_UNIT_TO_CM = {"cm": 1, "mm": 0.1, "in": 2.54}
 
 
+class FontSizing(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+    sections: float = Field(default=1, ge=0.5, le=1.5)
+    title: float = Field(default=1, ge=0.5, le=1.5)
+    authors: float = Field(default=1, ge=0.5, le=1.5)
+
+
 class LayoutSizing(BaseModel):
     """Normalized, template-specific gutter positions, independent of poster zoom."""
 
@@ -91,6 +98,11 @@ class Poster:
     moreinfopng: bytes | None = None
     fonts: str | None = None
     layout_settings: dict[str, dict[str, object]] | None = None
+    font_sizing: dict[str, float] | None = None
+
+    @property
+    def font_sizes(self) -> FontSizing:
+        return FontSizing.model_validate(self.font_sizing or {})
 
     @property
     def centimeters(self) -> tuple[float, float]:
@@ -108,6 +120,12 @@ class Poster:
     def inches(self) -> tuple[float, float]:
         width, height = self.centimeters
         return width / 2.54, height / 2.54
+
+    @property
+    def font_scale(self) -> float:
+        """Use physical area so typography cannot feed back into its own sizing."""
+        width, height = self.centimeters
+        return width * height / (POSTER_MIN_WIDTH_CM * POSTER_MIN_HEIGHT_CM)
 
     @property
     def display_dimensions(self) -> str:
@@ -172,6 +190,8 @@ class PosterStore:
                 WHERE s.pid = p.pid) AS conference_date,
                p.resumption, p.units, p.logo, p.logotype, p.moreinfopng, p.fonts,
                (SELECT u.settings->'layout-resizing' FROM userposter u
+                WHERE u.uid = p.uid AND u.pid = p.pid),
+               (SELECT u.settings->'font-sizing' FROM userposter u
                 WHERE u.uid = p.uid AND u.pid = p.pid)
         FROM poster p
         LEFT JOIN section t ON t.pid = p.pid AND t.which = 'title'
@@ -422,6 +442,32 @@ class PosterStore:
                 (fonts, uid, pid),
             )
             saved = await cursor.fetchone() is not None
+        self.invalidate(uid, pid)
+        return saved
+
+    async def set_font_sizing(
+        self, uid: int, pid: int, target: Literal["sections", "title", "authors"], value: float,
+    ) -> bool:
+        sizing = FontSizing.model_validate({target: value})
+        self.invalidate(uid, pid)
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "INSERT INTO userposter (uid, pid, editor, settings) "
+                "SELECT p.uid, p.pid, 1, %s FROM poster p "
+                "WHERE p.uid = %s AND p.pid = %s "
+                "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
+                "ON CONFLICT (uid, pid) DO UPDATE SET settings = jsonb_set("
+                "userposter.settings, '{font-sizing}', "
+                "coalesce(userposter.settings->'font-sizing', '{}'::jsonb) "
+                "|| (excluded.settings->'font-sizing')) RETURNING pid",
+                (Jsonb({"font-sizing": sizing.model_dump(exclude_unset=True)}), uid, pid),
+            )
+            saved = await cursor.fetchone() is not None
+            if saved:
+                await connection.execute(
+                    "UPDATE poster SET updated = now() WHERE uid = %s AND pid = %s", (uid, pid),
+                )
         self.invalidate(uid, pid)
         return saved
 

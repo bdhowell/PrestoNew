@@ -1154,6 +1154,31 @@ Implementation contract:
   `layout()` measures `#title` and `#authors` at the poster's physical width
   (96 CSS pixels per inch), fixes `#poster-canvas` to that width and the exact
   physical poster height, and embeds percentage widths in the returned HTML.
+  Base typography uses the poster's physical area in square centimeters divided
+  by the minimum poster area (`POSTER_MIN_WIDTH_CM * POSTER_MIN_HEIGHT_CM`,
+  currently 36 x 36 inches). This stable reference avoids a feedback loop between
+  font size, wrapping, header height, and auto-fit. The canvas sets the section
+  body size to `2rem * ratio`; section headings, title, and authors remain 1.5,
+  3.5, and 1.375 times that size. Unitless line-height preserves proportional
+  line spacing. The scale is present before server-side header measurement and
+  is independent of viewport zoom, content changes, and gutter resizing.
+  Read-only documents use the same area ratio while preserving their existing
+  heading proportions and line-height.
+  The toolbar places `#font-sizing` (Sections, Title, Authors) and the `#font-size`
+  range input inside the extended-controls tray on its right side, preceded by the
+  Font Awesome text-size icon. Each target has an independent 50%-150% multiplier
+  relative to its area-based size. Unitless line-height scales with the font.
+  Controls preview immediately, preserve the current target's value, and schedule
+  content re-fitting without altering zoom or other targets. Header adjustments
+  reset the old balanced width to 100%; reload rebalances with saved sizing.
+  `POST /layout/font-sizing` accepts `pid`, `target`, and numeric `value` (0.5-1.5).
+  The owner-only draft write atomically merges only that target into the
+  `userposter.settings` `font-sizing` object, preserving gutter and other settings,
+  updates the poster timestamp, and invalidates the owner-scoped cache.
+  These poster-wide multipliers survive template, theme, and font-set changes
+  and apply to read-only previews. Client writes are debounced and serialized,
+  retain newer changes during an in-flight save, display errors with a retry
+  action, and warn on navigation with unsaved changes.
   CSS keeps both containers centered within their original layout slots, measured
   inside the canvas padding of `5 * var(--gutter)` on every side.
   Measurement uses local stylesheets and waits for web fonts; scripts and other
