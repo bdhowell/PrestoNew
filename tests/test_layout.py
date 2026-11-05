@@ -86,6 +86,10 @@ class LayoutRouteTests(unittest.TestCase):
             document.xpath('//*[@id="citations"]//div[@class="header"]/text()'),
             ["Literature Cited"],
         )
+        self.assertEqual(
+            document.xpath('//*[@id="information"]//div[@class="header"]/text()'),
+            ["Additional Information"],
+        )
 
     def test_section_content_is_saved_to_its_database_section(self) -> None:
         self.store.save_section.return_value = True
