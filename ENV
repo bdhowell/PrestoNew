@@ -52,5 +52,7 @@ SOURCE_STORAGE_LIMIT_MB
 
 CHAT_WINDOW_TRANSITION=440 # milliseconds
 CHAT_INPUT_TRANSITION=500 # milliseconds
+CHAT_WORD_INTERVAL=400 # milliseconds
+CHAT_WORD_DEVIATION=100 # milliseconds
 
 SYSTEM_PURGE_ENABLED=true # allow /system/purge endpoint to be used locally only
