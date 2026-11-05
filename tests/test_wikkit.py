@@ -2,6 +2,8 @@ import unittest
 import asyncio
 import json
 import os
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -24,6 +26,16 @@ import wikkit as chatbot
 
 def dispatched(handler_result: object) -> IntentDispatchResult[object]:
     return IntentDispatchResult(intent="help", entities=[], handler_result=handler_result)
+
+class ConfiguredTestClient(TestClient):
+    @contextmanager
+    def websocket_connect(self, *args, **kwargs):
+        with super().websocket_connect(*args, **kwargs) as socket:
+            configuration = socket.receive_json()
+            assert configuration == {
+                "command": {"does": "configure", "payload": wikkit.chat_word_timing()},
+            }
+            yield socket
 
 
 class WikkitPageTests(unittest.TestCase):
@@ -64,6 +76,31 @@ class WikkitPageTests(unittest.TestCase):
             response = self.client.get("/wikkit")
         self.assertEqual(response.status_code, 200)
         self.assertIn('data-chat-input-transition="250"', response.text)
+
+    def test_chat_word_timing_defaults_and_configuration(self) -> None:
+        with patch.dict(os.environ):
+            os.environ.pop("CHAT_WORD_INTERVAL", None)
+            os.environ.pop("CHAT_WORD_DEVIATION", None)
+            self.assertEqual(wikkit.chat_word_timing(), {
+                "CHAT_WORD_INTERVAL": 400, "CHAT_WORD_DEVIATION": 100,
+            })
+        for interval, deviation in ((400, 100), (75, 25), (0, 0)):
+            with self.subTest(interval=interval), patch.dict(os.environ, {
+                "CHAT_WORD_INTERVAL": str(interval), "CHAT_WORD_DEVIATION": str(deviation),
+            }):
+                response = self.client.get("/wikkit")
+                self.assertNotIn("data-chat-word-timing", response.text)
+                self.assertEqual(wikkit.chat_word_timing(), {
+                    "CHAT_WORD_INTERVAL": interval, "CHAT_WORD_DEVIATION": deviation,
+                })
+
+    def test_invalid_chat_word_timing_is_reported(self) -> None:
+        for interval, deviation in (("-1", "0"), ("400", "-1"), ("50", "100"), ("bad", "0")):
+            with self.subTest(interval=interval, deviation=deviation), patch.dict(os.environ, {
+                "CHAT_WORD_INTERVAL": interval, "CHAT_WORD_DEVIATION": deviation,
+            }):
+                with self.assertRaises(ValueError):
+                    wikkit.chat_word_timing()
 
     def test_authenticated_user_sees_sign_out_link(self) -> None:
         request = wikkit.Request({
@@ -234,15 +271,18 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
             "type": "http", "method": "GET", "path": "/layout/dimensions",
             "headers": [], "query_string": b"", "state": {"user_id": 7},
         })
-        rendered = wikkit.render_page(
-            request, "layout/dimensions.html", "layout-dimensions",
-        )
+        self.word_interval = 0
+        self.word_deviation = 0
+        self.prompt_on_connect = True
         client = TestClient(app)
         self.addCleanup(client.close)
 
         async def serve(route) -> None:
             path = urlsplit(route.request.url).path
             if path == "/layout/dimensions":
+                rendered = wikkit.render_page(
+                    request, "layout/dimensions.html", "layout-dimensions",
+                )
                 await route.fulfill(body=rendered.body, content_type="text/html")
             elif path.startswith("/static/"):
                 response = client.get(path)
@@ -255,8 +295,13 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
 
         def connect(socket) -> None:
             self.socket = socket
+            socket.send(json.dumps({"command": {"does": "configure", "payload": {
+                "CHAT_WORD_INTERVAL": self.word_interval,
+                "CHAT_WORD_DEVIATION": self.word_deviation,
+            }}}))
+
             def receive(message) -> None:
-                if json.loads(message).get("page") == "layout-dimensions":
+                if self.prompt_on_connect and json.loads(message).get("page") == "layout-dimensions":
                     socket.send(json.dumps({
                         "say": "<p>Enter your poster height x width.</p>",
                         "command": {"does": "request-response"},
@@ -265,6 +310,226 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
 
         await self.page.route("**/*", serve)
         await self.page.route_web_socket("**/wikkit/ws", connect)
+
+    async def start_timed_output(self) -> None:
+        self.word_interval = 400
+        self.word_deviation = 100
+        self.prompt_on_connect = False
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.clock.install()
+        await self.page.clock.pause_at(datetime.now() + timedelta(seconds=1))
+
+    async def test_output_preserves_html_whitespace_and_queues_commands(self) -> None:
+        await self.start_timed_output()
+        markup = '  First\t <strong>second</strong>\n\nthird  <button data-sends="ok">Done</button> '
+        self.socket.send(json.dumps({
+            "say": markup, "command": {"does": "close-input"},
+        }))
+        await self.page.locator("#chatlog .chat").wait_for()
+        await self.page.wait_for_function(
+            "document.querySelector('#chatlog .chat').textContent.includes('First')"
+        )
+        self.assertEqual(await self.page.locator("#chatlog .chat").text_content(), "  First\t Done")
+        self.assertTrue(await self.page.locator("#chatlog .chat").evaluate("el => el.inert"))
+        await self.page.clock.fast_forward(299)
+        self.assertEqual(await self.page.locator("#chatlog strong").text_content(), "")
+        await self.page.clock.fast_forward(201)
+        self.assertEqual(await self.page.locator("#chatlog strong").text_content(), "second")
+        self.assertFalse(await self.page.locator("#chatbot").evaluate(
+            "el => el.classList.contains('input-closed')"
+        ))
+        self.socket.send(json.dumps({"say": "<p>Next message</p>"}))
+        await self.page.clock.run_for(2000)
+        await expect(self.page.locator("#chatlog .chat")).to_have_count(2)
+        await self.page.clock.run_for(1000)
+        await expect(self.page.locator("#chatlog [aria-busy]")).to_have_count(0)
+        self.assertEqual(
+            await self.page.locator("#chatlog .chat").first.text_content(),
+            "  First\t second\n\nthird  Done ",
+        )
+        self.assertEqual(await self.page.locator("#chatlog strong").text_content(), "second")
+        self.assertEqual(await self.page.locator("#chatlog button").get_attribute("data-sends"), "ok")
+        self.assertEqual(await self.page.locator("#chatlog .chat").last.text_content(), "Next message")
+        self.assertFalse(await self.page.locator("#chatlog .chat").first.evaluate("el => el.inert"))
+        await expect(self.page.locator("#chatbot")).to_have_class("input-closed")
+        self.assertEqual(self.errors, [])
+
+    async def test_embedded_controls_render_in_full_before_text_finishes(self) -> None:
+        await self.start_timed_output()
+        await self.page.evaluate("""() => {
+            window.wikkit.say(
+                '<p>First second third</p>'
+                + '<button data-sends="ok"><strong>Use these</strong> dimensions</button>'
+                + '<label>Poster name <input value="My poster"></label>'
+                + '<textarea>Full initial text</textarea>'
+                + '<select><option>First option</option><option>Second option</option></select>'
+            );
+        }""")
+        await expect(self.page.locator("#chatlog .chat")).to_have_attribute("aria-busy", "true")
+        self.assertEqual(await self.page.locator("#chatlog p").text_content(), "First ")
+        self.assertEqual(
+            await self.page.locator("#chatlog button[data-sends]").text_content(),
+            "Use these dimensions",
+        )
+        self.assertEqual(await self.page.locator("#chatlog input").input_value(), "My poster")
+        self.assertEqual(await self.page.locator("#chatlog label").text_content(), "Poster name OK")
+        self.assertEqual(await self.page.locator("#chatlog textarea").input_value(), "Full initial text")
+        self.assertEqual(
+            await self.page.locator("#chatlog option").all_text_contents(),
+            ["First option", "Second option"],
+        )
+        self.assertEqual(await self.page.locator("#chatlog button.embedded-ok").all_text_contents(), ["OK", "OK"])
+        await self.page.clock.run_for(1000)
+        self.assertEqual(await self.page.locator("#chatlog p").text_content(), "First second third")
+        await expect(self.page.locator("#chatlog [aria-busy]")).to_have_count(0)
+        self.assertEqual(self.errors, [])
+
+    async def test_word_delay_reaches_configured_jitter_bounds(self) -> None:
+        await self.start_timed_output()
+        for random, delay in ((0, 300), (0.5, 400), (0.999999, 500)):
+            with self.subTest(random=random):
+                await self.page.evaluate("""random => {
+                    Math.random = () => random;
+                    window.wikkit.say('one  \\t\\ntwo');
+                }""", random)
+                message = self.page.locator("#chatlog .chat").last
+                await expect(message).to_have_attribute("aria-busy", "true")
+                self.assertEqual(await message.text_content(), "one  \t\n")
+                await self.page.clock.run_for(delay - 1)
+                self.assertEqual(await message.text_content(), "one  \t\n")
+                await self.page.clock.run_for(1)
+                self.assertEqual(await message.text_content(), "one  \t\ntwo")
+                self.assertIsNone(await message.get_attribute("aria-busy"))
+
+    async def test_configure_updates_current_output_without_waiting_for_queue(self) -> None:
+        await self.page.add_init_script("""{
+            const OriginalWebSocket = WebSocket;
+            window.WebSocket = class extends OriginalWebSocket {
+                constructor(...args) {
+                    super(...args);
+                    this.addEventListener('message', event => {
+                        const command = JSON.parse(event.data).command;
+                        if (command?.does === 'configure') window.lastConfiguration = command.payload;
+                    });
+                }
+            };
+        }""")
+        await self.start_timed_output()
+        await self.page.evaluate("""() => {
+            Math.random = () => 0.5;
+            window.wikkit.say('one two three four');
+        }""")
+        message = self.page.locator("#chatlog .chat")
+        self.assertEqual(await message.text_content(), "one ")
+        self.socket.send(json.dumps({"command": {"does": "configure", "payload": {
+            "CHAT_WORD_INTERVAL": 100, "CHAT_WORD_DEVIATION": 0,
+        }}}))
+        await self.page.wait_for_function("window.lastConfiguration?.CHAT_WORD_INTERVAL === 100")
+        # The pending delay retains its original duration; later delays use the update.
+        await self.page.clock.run_for(400)
+        self.assertEqual(await message.text_content(), "one two ")
+        await self.page.clock.run_for(99)
+        self.assertEqual(await message.text_content(), "one two ")
+        await self.page.clock.run_for(1)
+        self.assertEqual(await message.text_content(), "one two three ")
+        await self.page.evaluate("window.wikkit.execute({does: 'configure', payload: {CHAT_WORD_INTERVAL: 0}})")
+        await self.page.clock.run_for(100)
+        self.assertEqual(await message.text_content(), "one two three four")
+        await self.page.evaluate("window.wikkit.say('five six seven')")
+        await expect(self.page.locator("#chatlog .chat").last).to_have_text("five six seven")
+        self.assertEqual(self.errors, [])
+
+    async def test_configure_validates_updates_atomically_and_retains_other_values(self) -> None:
+        await self.start_timed_output()
+        for payload in (None, [], {"CHAT_WORD_INTERVAL": -1}, {"CHAT_WORD_INTERVAL": "100"},
+                        {"CHAT_WORD_DEVIATION": 500}, {"CHAT_WORD_INTERVAL": 1.5}):
+            with self.subTest(payload=payload):
+                result = await self.page.evaluate("""async payload => {
+                    try {
+                        await window.wikkit.execute({does: 'configure', payload});
+                        return 'accepted';
+                    } catch (error) {
+                        return error.name;
+                    }
+                }""", payload)
+                self.assertIn(result, ("TypeError", "RangeError"))
+        await self.page.evaluate("""async () => {
+            await window.wikkit.execute({does: 'configure', payload: {custom: {enabled: true}}});
+            Math.random = () => 0.5;
+            window.wikkit.say('one two');
+        }""")
+        await self.page.clock.run_for(399)
+        self.assertEqual(await self.page.locator("#chatlog .chat").text_content(), "one ")
+        await self.page.clock.run_for(1)
+        self.assertEqual(await self.page.locator("#chatlog .chat").text_content(), "one two")
+
+    async def test_whitespace_only_and_inline_word_fragments(self) -> None:
+        await self.start_timed_output()
+        for markup, expected in ((" \t\n ", " \t\n "), ("hel<strong>lo</strong> \tworld", "hello \t")):
+            with self.subTest(markup=markup):
+                await self.page.evaluate("window.wikkit.execute({does: 'clear-chat'})")
+                await self.page.evaluate("markup => { window.wikkit.say(markup); }", markup)
+                self.assertEqual(await self.page.locator("#chatlog .chat").text_content(), expected)
+                await self.page.clock.run_for(500)
+        self.assertEqual(await self.page.locator("#chatlog .chat").text_content(), "hello \tworld")
+
+    async def test_page_response_request_waits_for_prompt(self) -> None:
+        await self.start_timed_output()
+        await self.page.evaluate("""() => {
+            window.wikkit.say('First second');
+            window.response = window.wikkit.requestResponse();
+        }""")
+        self.assertEqual(await self.page.locator("#chatlog .chat").text_content(), "First ")
+        self.assertFalse(await self.page.locator("#chatinput").evaluate(
+            "el => document.activeElement === el"
+        ))
+        await self.page.clock.run_for(500)
+        self.assertTrue(await self.page.locator("#chatinput").evaluate(
+            "el => document.activeElement === el"
+        ))
+        await self.page.locator("#chatinput").fill("Okay")
+        await self.page.locator("#chatinput").press("Enter")
+        self.assertEqual(await self.page.evaluate("window.response"), "Okay")
+
+    async def test_navigation_persists_complete_output_without_replaying(self) -> None:
+        await self.start_timed_output()
+        await self.page.evaluate("() => { window.wikkit.say('one two three'); }")
+        self.assertEqual(await self.page.locator("#chatlog .chat").text_content(), "one ")
+        await self.page.reload()
+        self.assertEqual(await self.page.locator("#chatlog .chat").text_content(), "one two three")
+        await expect(self.page.locator("#chatlog [aria-busy]")).to_have_count(0)
+        self.assertFalse(await self.page.locator("#chatlog .chat").evaluate("el => el.inert"))
+
+    async def test_zero_timing_outputs_immediately(self) -> None:
+        self.prompt_on_connect = False
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.evaluate("window.wikkit.say('one  two\\nthree')")
+        self.assertEqual(await self.page.locator("#chatlog .chat").text_content(), "one  two\nthree")
+        await expect(self.page.locator("#chatlog [aria-busy]")).to_have_count(0)
+
+    async def test_all_output_paths_use_word_animation(self) -> None:
+        await self.start_timed_output()
+        await self.page.evaluate("Math.random = () => 0")
+        for kind in ("say", "user", "page", "echo", "notice"):
+            with self.subTest(kind=kind):
+                await self.page.evaluate("window.wikkit.execute({does: 'clear-chat'})")
+                if kind in ("say", "user"):
+                    self.socket.send(json.dumps({kind: "first second"}))
+                elif kind == "page":
+                    await self.page.evaluate("() => { window.wikkit.say('first second'); }")
+                elif kind == "echo":
+                    await self.page.evaluate("window.wikkit.command('{\"value\": \"second\"}', true)")
+                else:
+                    self.socket.send(json.dumps({"command": {"does": "unknown-command"}}))
+                message = self.page.locator("#chatlog .chat")
+                await expect(message).to_have_attribute("aria-busy", "true")
+                initial = await message.text_content()
+                await self.page.clock.run_for(299)
+                self.assertEqual(await message.text_content(), initial)
+                await self.page.clock.run_for(5000)
+                await expect(message).not_to_have_attribute("aria-busy")
+                self.assertGreater(len(await message.text_content()), len(initial))
+        self.assertEqual(self.errors, [])
 
     async def assert_response_available(self) -> None:
         chatbot = self.page.locator("#chatbot")
@@ -384,7 +649,15 @@ class WikkitReplyTests(unittest.IsolatedAsyncioTestCase):
 
 class WikkitSocketTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.client = TestClient(app)
+        self.client = ConfiguredTestClient(app)
+
+    def test_socket_sends_configuration_before_output(self) -> None:
+        with patch.dict(os.environ, {"CHAT_WORD_INTERVAL": "80", "CHAT_WORD_DEVIATION": "20"}):
+            with TestClient(app).websocket_connect("/wikkit/ws") as socket:
+                self.assertEqual(socket.receive_json(), {"command": {
+                    "does": "configure",
+                    "payload": {"CHAT_WORD_INTERVAL": 80, "CHAT_WORD_DEVIATION": 20},
+                }})
 
     def test_memory_frame_stores_before_response_and_accepts_length_limit(self) -> None:
         async def workflow(session: chatbot.Chatbot, message: str) -> None:
@@ -744,7 +1017,7 @@ class WikkitRouterPageTests(unittest.TestCase):
 
 class WikkitWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.client = TestClient(app)
+        self.client = ConfiguredTestClient(app)
 
     def open_page(self, socket, page: str) -> None:
         socket.send_text(json.dumps({"page": page}))

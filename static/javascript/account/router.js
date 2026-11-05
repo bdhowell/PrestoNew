@@ -11,7 +11,7 @@
 
     function wikkitSay(html) {
         if (html && window.wikkit) {
-            window.wikkit.say(html);
+            return window.wikkit.say(html);
         }
     }
 
@@ -56,7 +56,7 @@
             if (reply.command) {
                 await window.wikkit.execute(reply.command);
             }
-            wikkitSay(reply.say);
+            await wikkitSay(reply.say);
             showErrors(form, reply.errors);
             if (reply.ok && reply.redirect) {
                 location.assign(reply.redirect);

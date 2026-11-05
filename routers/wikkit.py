@@ -77,6 +77,16 @@ def chat_input_transition_ms() -> int:
     return duration
 
 
+def chat_word_timing() -> dict[str, int]:
+    interval = int(os.environ.get("CHAT_WORD_INTERVAL", "400"))
+    deviation = int(os.environ.get("CHAT_WORD_DEVIATION", "100"))
+    if interval < 0 or deviation < 0:
+        raise ValueError("CHAT_WORD_INTERVAL and CHAT_WORD_DEVIATION must be non-negative.")
+    if deviation > interval:
+        raise ValueError("CHAT_WORD_DEVIATION must not exceed CHAT_WORD_INTERVAL.")
+    return {"CHAT_WORD_INTERVAL": interval, "CHAT_WORD_DEVIATION": deviation}
+
+
 @router.get("")
 async def wikkit(request: Request) -> RedirectResponse:
     return RedirectResponse(DEFAULT_URL, status_code=303)
@@ -302,7 +312,9 @@ What can I help you with, {identity.display_name(request)}?
 
 @router.websocket("/ws")
 async def wikkit_socket(websocket: WebSocket) -> None:
+    configuration = chat_word_timing()
     await websocket.accept()
     chatbot = Chatbot(websocket, websocket.state.memory, WORKFLOWS)
     websocket.state.chatbot = chatbot
+    await chatbot.send({"command": {"does": "configure", "payload": configuration}})
     await chatbot.run()

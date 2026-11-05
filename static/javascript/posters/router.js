@@ -12,7 +12,7 @@
         });
         const reply = await response.json();
         if (reply.say) {
-            window.wikkit.say(reply.say);
+            await window.wikkit.say(reply.say);
         }
         if (!response.ok && !reply.existing_poster) {
             throw new Error(reply.detail ?? "The request failed. Please try again.");

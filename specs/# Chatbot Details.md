@@ -135,6 +135,32 @@ memory write is attempted.
 
 ## Server replies
 
+Any new output appended to the chat log reveals the chatbot, including page-local
+messages, user echoes, and notices. This does not reopen a closed input; requesting
+a response does that.
+
+New output appears one whitespace-delimited word at a time, retaining the original
+whitespace and HTML markup. The first word appears immediately. Each subsequent
+word waits a uniformly sampled integer delay in milliseconds from
+`CHAT_WORD_INTERVAL - CHAT_WORD_DEVIATION` through
+`CHAT_WORD_INTERVAL + CHAT_WORD_DEVIATION`, inclusive. The settings are read as
+integers from the environment, defaulting to `400` and `100`. Both must be
+non-negative and deviation must not exceed interval; `0`/`0` disables the pauses.
+All word timing is performed on the client. The client starts with the defaults;
+on websocket connection the server sends a `configure` command containing its
+environment values. Timing is not embedded in page HTML. This applies to ordinary
+pages and the poster editor.
+
+All new messages (including user echoes and notices) are queued in arrival order.
+Embedded controls, their labels, and generated OK buttons render immediately in
+full, without word animation. They remain inert until their message finishes. Commands accompanying
+server output run after that output finishes, and response reminders start then.
+Memory acknowledgements are handled immediately, outside the display queue.
+`configure` commands are also handled immediately, outside the display queue.
+Restored chat history is displayed immediately, without replaying the animation.
+`await window.wikkit.say(html)` waits for page-local output to finish; callers should
+wait before navigating or requesting a response.
+
 User input is processed by the conversation's `IntentStack`. The server sends
 the following protocol; both `say` and `command` are optional:
 
@@ -163,6 +189,14 @@ Unknown commands and execution errors are logged and shown as a chatbot notice.
 
 ## Intrinsic commands
 
+- `configure`: merge the payload object into the client's configuration data.
+  For example:
+  `{"command":{"does":"configure","payload":{"CHAT_WORD_INTERVAL":400,"CHAT_WORD_DEVIATION":100}}}`.
+  Partial updates retain unspecified values, including other configuration keys.
+  Timing values must be non-negative integers, with deviation no greater than
+  interval; invalid updates report an error and leave configuration unchanged.
+  Updates affect subsequent word delays, including those in current output.
+  A delay already scheduled is not restarted.
 - `clear-chat`: clear the visible chat log.
   Account AJAX replies can include `command`; the page awaits
   `window.wikkit.execute(command)` before displaying `say` or redirecting.

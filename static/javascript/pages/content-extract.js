@@ -16,7 +16,7 @@
         });
         const reply = await response.json();
         if (reply.say) {
-            window.wikkit.say(reply.say);
+            await window.wikkit.say(reply.say);
         }
         if (!response.ok && !reply.say) {
             throw new Error(reply.detail ?? "Your content could not be read.");

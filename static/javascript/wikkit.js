@@ -171,25 +171,104 @@
         let leaving = false;
         const memoryRequests = new Map();
         const reminderInterval = 120000;
+        let configuration = { CHAT_WORD_INTERVAL: 400, CHAT_WORD_DEVIATION: 100 };
 
-        function append(div) {
+        function configure(payload) {
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+                throw new TypeError("configure requires a configuration object.");
+            }
+            const updated = { ...configuration, ...payload };
+            if (!Number.isSafeInteger(updated.CHAT_WORD_INTERVAL)
+                || !Number.isSafeInteger(updated.CHAT_WORD_DEVIATION)
+                || updated.CHAT_WORD_INTERVAL < 0 || updated.CHAT_WORD_DEVIATION < 0
+                || updated.CHAT_WORD_DEVIATION > updated.CHAT_WORD_INTERVAL) {
+                throw new RangeError("Invalid chatbot word timing.");
+            }
+            configuration = updated;
+        }
+        let output = Promise.resolve();
+        let finishAnimation = null;
+
+        function enqueue(operation) {
+            const result = output.then(operation);
+            output = result.catch(commandFailed);
+            return result;
+        }
+
+        async function append(div) {
+            prepareControls(div);
+            const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+            const parts = [];
+            let previousWasWord = false;
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                if (node.parentElement.closest("script, style, button, input, textarea, select, label")) continue;
+                for (const text of node.data.match(/\s+|\S+/gu) || []) {
+                    const word = /\S/u.test(text);
+                    parts.push({ node, text, pause: word && !previousWasWord });
+                    previousWasWord = word;
+                }
+                node.data = "";
+            }
+            div.inert = true;
+            div.setAttribute("aria-busy", "true");
+            showChat();
             chatlog.appendChild(div);
-            chatlog.scrollTop = chatlog.scrollHeight;
+            let index = 0;
+            let words = 0;
+            let timer;
+            await new Promise((resolve) => {
+                function reveal(finish = false) {
+                    clearTimeout(timer);
+                    while (index < parts.length) {
+                        const part = parts[index];
+                        if (!finish && part.pause && words > 0) {
+                            const delay = configuration.CHAT_WORD_INTERVAL + Math.floor(
+                                Math.random() * (2 * configuration.CHAT_WORD_DEVIATION + 1)
+                            ) - configuration.CHAT_WORD_DEVIATION;
+                            if (delay > 0) {
+                                timer = setTimeout(() => {
+                                    part.node.appendData(part.text);
+                                    index++;
+                                    words++;
+                                    chatlog.scrollTop = chatlog.scrollHeight;
+                                    reveal();
+                                }, delay);
+                                return;
+                            }
+                        }
+                        part.node.appendData(part.text);
+                        index++;
+                        if (part.pause) words++;
+                    }
+                    finishAnimation = null;
+                    div.inert = false;
+                    div.removeAttribute("aria-busy");
+                    if (closed) {
+                        div.querySelectorAll("button, input, textarea, select").forEach((control) => {
+                            control.disabled = true;
+                        });
+                    }
+                    chatlog.scrollTop = chatlog.scrollHeight;
+                    resolve();
+                }
+                finishAnimation = () => reveal(true);
+                reveal(leaving);
+            });
         }
 
         function say(html) {
             const div = document.createElement("div");
             div.className = "chat";
             div.innerHTML = html;
-            prepareControls(div);
-            append(div);
+            return enqueue(() => append(div));
         }
 
         function sayText(text, kind) {
             const div = document.createElement("div");
             div.className = `chat ${kind}`;
             div.textContent = text;
-            append(div);
+            return enqueue(() => append(div));
         }
 
         function stopRequest() {
@@ -263,6 +342,7 @@
         }
 
         const intrinsicCommands = new Map([
+            ["configure", configure],
             ["redirect", (payload) => {
                 if (typeof payload !== "string") {
                     throw new TypeError("redirect requires a URL string.");
@@ -535,8 +615,6 @@
             sayText("Wikkit could not complete a page action. Please try again.", "notice");
         }
 
-        let delivery = Promise.resolve();
-
         function deliver(message) {
             if (message.memory) {
                 const result = message.memory;
@@ -551,23 +629,30 @@
                 }
                 return;
             }
+            let command = message.command ?? message.client;
+            if ((command?.does ?? command?.action) === "configure") {
+                try {
+                    configure(command.payload);
+                } catch (error) {
+                    commandFailed(error);
+                }
+                command = null;
+            }
             const html = message.say ?? message.user;
             if (typeof html === "string" && html) {
                 say(html);
             }
-            const entry = client;
-            if (entry) {
-                try {
-                    entry.listen(message);
-                } catch (error) {
-                    console.error("Wikkit listener failed", error);
+            enqueue(async () => {
+                const entry = client;
+                if (entry) {
+                    try {
+                        entry.listen(message);
+                    } catch (error) {
+                        console.error("Wikkit listener failed", error);
+                    }
                 }
-            }
-            const command = message.command ?? message.client;
-            if (!command) {
-                return;
-            }
-            delivery = delivery.then(() => executeCommand(command)).catch(commandFailed);
+                if (command) await executeCommand(command);
+            });
         }
 
         socket.addEventListener("open", () => {
@@ -617,6 +702,7 @@
         window.addEventListener("pagehide", () => {
             leaving = true;
             stopRequest();
+            if (finishAnimation) finishAnimation();
             save();
             socket.close();
         }, { once: true });
@@ -676,7 +762,12 @@
                     return client.apiobj;
                 }
                 const apiobj = Object.freeze({
-                    execute: (command) => executeCommand(command),
+                    execute: (command) => {
+                        if ((command?.does ?? command?.action) === "configure") {
+                            return Promise.resolve().then(() => configure(command.payload));
+                        }
+                        return enqueue(() => executeCommand(command));
+                    },
                     setSignedIn: updateMenu,
                     // Appends text or an HTML fragment to #chatlog as <div class="chat">.
                     say: (html) => say(String(html)),
@@ -684,10 +775,14 @@
                         if (closed || pageResponse || requestingResponse) {
                             return Promise.reject(new Error("Wikkit is unavailable or already waiting for a response."));
                         }
-                        requestResponse();
-                        chatinput.focus();
                         return new Promise((resolve, reject) => {
-                            pageResponse = { resolve, reject, win };
+                            const response = { resolve, reject, win };
+                            pageResponse = response;
+                            enqueue(() => {
+                                if (pageResponse !== response) return;
+                                requestResponse();
+                                chatinput.focus();
+                            });
                         });
                     },
                     // Sends text to the server; with echo, also shows it via say().

@@ -205,9 +205,11 @@ class SessionBackendTests(unittest.TestCase):
 
         with patch.object(Chatbot, "handle_message", workflow):
             with client.websocket_connect("wss://testserver/wikkit/ws") as socket:
+                self.assertEqual(socket.receive_json()["command"]["does"], "configure")
                 socket.send_text("remember")
                 self.assertEqual(socket.receive_json(), {"say": "Ada"})
             with client.websocket_connect("wss://testserver/wikkit/ws") as socket:
+                self.assertEqual(socket.receive_json()["command"]["does"], "configure")
                 socket.send_text("recall")
                 self.assertEqual(socket.receive_json(), {"say": "Ada"})
         self.assertEqual(
@@ -261,6 +263,7 @@ class SessionBackendTests(unittest.TestCase):
 
         with patch.object(Chatbot, "handle_message", workflow):
             with client.websocket_connect("wss://testserver/wikkit/ws") as socket:
+                self.assertEqual(socket.receive_json()["command"]["does"], "configure")
                 socket.send_text("start")
                 self.assertEqual(socket.receive_json()["say"], "Waiting")
         memory = run_async(self.store.load(identifier)).data["chatbot_memory"]

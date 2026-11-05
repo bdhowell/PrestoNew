@@ -80,7 +80,7 @@
                 throw new Error(reply.detail ?? "Your content could not be checked.");
             }
             if (reply.ok && reply.redirect) {
-                location.assign(reply.redirect);
+                window.wikkit.execute({does: "redirect", payload: reply.redirect});
             }
         } catch (error) {
             console.error("Upload completion failed", error);
