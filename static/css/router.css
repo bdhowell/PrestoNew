@@ -8,7 +8,7 @@
     flex-direction: column;
     width: 24rem;
     height: 28rem;
-    line-height: 1.5rem;
+    line-height: 1.6rem;
     min-width: min(14rem, 100vw);
     min-height: min(12rem, 100vh);
     max-width: 100vw;
@@ -72,9 +72,9 @@
     padding: 0 0.75rem;
 }
 
-#chatlog .chat {
+/* #chatlog .chat {
     white-space: pre-wrap;
-}
+} */
 
 #chatlog .chat.user {
     color: #9fd3ff;
