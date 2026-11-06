@@ -205,26 +205,63 @@ class LayoutRouteTests(unittest.TestCase):
     def test_saved_theme_and_fonts_are_applied_to_layout(self) -> None:
         self.store.get.return_value = replace(DRAFT, theme="blues", fonts="technical")
         document = html.fromstring(self.client.get("/layout/edit").text)
-        self.assertEqual(document.find("body").get("class").split(), ["blues", "technical"])
+        self.assertEqual(document.find("body").get("class").split(), [
+            "blue", "corners-very-rounded", "colored-poster-header",
+            "colored-section-headers", "technical",
+        ])
         self.assertTrue(document.xpath('//link[@href="/static/css/themes.css"]'))
         self.assertTrue(document.xpath('//link[@href="/static/css/fonts.css"]'))
 
-    def test_theme_dialog_lists_installed_themes_and_saves_current_poster(self) -> None:
+    def test_theme_dialog_exposes_settings_and_saves_current_poster(self) -> None:
         document = html.fromstring(self.client.get("/layout/edit").text)
         self.assertEqual(
-            document.xpath('//*[@id="theme-options"]//input/@value'),
+            document.xpath('//*[@id="theme-options"]//input[@name="color"]/@value'),
             posters.installed_themes(),
+        )
+        self.assertEqual(
+            document.xpath('//*[@id="theme-options"]//input[@name="corners"]/@value'),
+            list(posters.THEME_CORNERS),
+        )
+        self.assertEqual(
+            document.xpath('//*[@id="theme-options"]//input[@type="checkbox"]/@name'),
+            ["colored_poster_header", "colored_section_headers"],
         )
         self.assertEqual(document.get_element_by_id("theme-dialog").get("data-pid"), "11")
         self.store.set_theme.return_value = True
         self.session["poster_id"] = 99
-        response = self.client.post("/layout/theme", json={"pid": 11, "theme": "greens"})
+        response = self.client.post("/layout/theme", json={
+            "pid": 11, "color": "green", "corners": "rounded",
+            "colored_poster_header": True, "colored_section_headers": False,
+        })
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True})
-        self.store.set_theme.assert_awaited_once_with(7, 11, "greens")
-        self.store.get.return_value = replace(DRAFT, theme="greens")
+        self.store.set_theme.assert_awaited_once_with(
+            7, 11, "green",
+            posters.ThemeSettings(
+                corners="rounded", colored_poster_header=True, colored_section_headers=False,
+            ),
+        )
+        self.store.get.return_value = replace(
+            DRAFT, theme="green",
+            theme_settings={"corners": "rounded", "colored_poster_header": True},
+        )
         document = html.fromstring(self.client.get("/layout/edit?pid=11").text)
-        self.assertIn("greens", document.find("body").get("class").split())
+        self.assertEqual(document.find("body").get("class").split(), [
+            "green", "corners-rounded", "colored-poster-header",
+        ])
+
+    def test_theme_save_accepts_a_legacy_request_from_cached_editor_assets(self) -> None:
+        self.store.set_theme.return_value = True
+        response = self.client.post("/layout/theme", json={"pid": 11, "theme": "greens"})
+        self.assertEqual(response.status_code, 200)
+        self.store.set_theme.assert_awaited_once_with(
+            7, 11, "green",
+            posters.ThemeSettings(
+                corners="very-rounded",
+                colored_poster_header=True,
+                colored_section_headers=True,
+            ),
+        )
 
     def test_font_dialog_lists_installed_sets_and_saves_current_poster(self) -> None:
         document = html.fromstring(self.client.get("/layout/edit").text)
@@ -248,7 +285,10 @@ class LayoutRouteTests(unittest.TestCase):
         self.store.set_fonts.assert_awaited_once_with(7, 11, "technical")
         self.store.get.return_value = replace(DRAFT, theme="blues", fonts="technical")
         document = html.fromstring(self.client.get("/layout/edit?pid=11").text)
-        self.assertEqual(document.find("body").get("class").split(), ["blues", "technical"])
+        self.assertEqual(document.find("body").get("class").split(), [
+            "blue", "corners-very-rounded", "colored-poster-header",
+            "colored-section-headers", "technical",
+        ])
 
     def test_font_save_rejects_invalid_unowned_and_purchased_posters(self) -> None:
         for data in (
@@ -281,11 +321,16 @@ class LayoutRouteTests(unittest.TestCase):
 
     def test_theme_save_rejects_invalid_unowned_and_purchased_posters(self) -> None:
         for data in (
-            {"pid": 11, "theme": "missing"}, {"pid": 11, "theme": ["basic"]},
-            {"pid": True, "theme": "basic"}, {"theme": "basic"},
+            {"pid": 11, "color": "missing", "corners": "square"},
+            {"pid": 11, "color": ["blue"], "corners": "square"},
+            {"pid": 11, "color": "blue", "corners": "invalid"},
+            {"pid": 11, "color": "blue", "corners": "square",
+             "colored_poster_header": "yes"},
+            {"pid": True, "color": "blue", "corners": "square"},
+            {"color": "blue", "corners": "square"},
         ):
             self.assertEqual(self.client.post("/layout/theme", json=data).status_code, 422)
-        data = {"pid": 11, "theme": "basic"}
+        data = {"pid": 11, "color": "blue", "corners": "square"}
         self.assertEqual(self.client.post(
             "/layout/theme", json=data, headers={"Origin": "https://elsewhere.test"},
         ).status_code, 403)
@@ -296,7 +341,7 @@ class LayoutRouteTests(unittest.TestCase):
         self.store.set_theme.assert_not_awaited()
 
     def test_theme_save_reports_storage_errors_and_conflicts(self) -> None:
-        data = {"pid": 11, "theme": "basic"}
+        data = {"pid": 11, "color": "blue", "corners": "square"}
         self.store.set_theme.return_value = False
         self.assertEqual(self.client.post("/layout/theme", json=data).status_code, 409)
         self.store.set_theme.side_effect = psycopg.OperationalError("offline")

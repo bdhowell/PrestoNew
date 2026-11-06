@@ -24,10 +24,22 @@ logger = logging.getLogger(__name__)
 Sort = Literal["name", "conference_date", "relevance"]
 Direction = Literal["asc", "desc"]
 TEMPLATES = ("arena", "central", "vertical")
+THEME_COLORS = (
+    "blue", "red", "yellow", "green", "brown", "orange", "purple",
+    "dark-grey", "light-grey", "black-and-white",
+)
+THEME_CORNERS = ("square", "slightly-rounded", "rounded", "very-rounded")
+LEGACY_THEME_COLORS = {
+    "basic": "blue", "dark": "dark-grey", "light": "light-grey",
+    "blues": "blue", "reds": "red", "greens": "green", "ocean": "blue",
+    "forest": "green", "plum": "purple", "terracotta": "brown",
+    "slate": "dark-grey", "gold": "yellow",
+}
+LEGACY_ROUNDED_THEMES = frozenset({"blues", "greens", "forest", "gold"})
 
 
 def installed_themes() -> list[str]:
-    return stylesheet_classes("themes")
+    return list(THEME_COLORS)
 
 
 def installed_fonts() -> list[str]:
@@ -56,6 +68,33 @@ class FontSizing(BaseModel):
     sections: float = Field(default=1, ge=0.5, le=1.5)
     title: float = Field(default=1, ge=0.5, le=1.5)
     authors: float = Field(default=1, ge=0.5, le=1.5)
+
+
+class ThemeSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    corners: Literal["square", "slightly-rounded", "rounded", "very-rounded"] = "square"
+    colored_poster_header: bool = False
+    colored_section_headers: bool = False
+
+
+def theme_classes(theme: str | None, settings: dict[str, object] | None = None) -> str:
+    """Return safe CSS classes for both current and legacy saved theme values."""
+    color = theme if theme in THEME_COLORS else LEGACY_THEME_COLORS.get(theme or "", "blue")
+    if settings is None:
+        settings = {}
+        if theme in LEGACY_THEME_COLORS:
+            settings = {
+                "corners": "very-rounded" if theme in LEGACY_ROUNDED_THEMES else "square",
+                "colored_poster_header": True,
+                "colored_section_headers": True,
+            }
+    options = ThemeSettings.model_validate(settings)
+    classes = [color, f"corners-{options.corners}"]
+    if options.colored_poster_header:
+        classes.append("colored-poster-header")
+    if options.colored_section_headers:
+        classes.append("colored-section-headers")
+    return " ".join(classes)
 
 
 class LayoutGeometry(BaseModel):
@@ -126,6 +165,7 @@ class Poster:
     layout_settings: dict[str, dict[str, object]] | None = None
     font_sizing: dict[str, float] | None = None
     layout_geometry: dict[str, dict[str, object]] | None = None
+    theme_settings: dict[str, object] | None = None
 
     @property
     def font_sizes(self) -> FontSizing:
@@ -221,6 +261,8 @@ class PosterStore:
                (SELECT u.settings->'font-sizing' FROM userposter u
                 WHERE u.uid = p.uid AND u.pid = p.pid),
                (SELECT u.settings->'layout-geometry' FROM userposter u
+                WHERE u.uid = p.uid AND u.pid = p.pid),
+               (SELECT u.settings->'theme-settings' FROM userposter u
                 WHERE u.uid = p.uid AND u.pid = p.pid)
         FROM poster p
         LEFT JOIN section t ON t.pid = p.pid AND t.which = 'title'
@@ -442,9 +484,12 @@ class PosterStore:
             row = await cursor.fetchone()
         return (row[0], row[1] or {}) if row else ("", {})
 
-    async def set_theme(self, uid: int, pid: int, theme: str) -> bool:
+    async def set_theme(
+        self, uid: int, pid: int, theme: str, settings: ThemeSettings,
+    ) -> bool:
         if theme not in installed_themes():
             raise ValueError("Unknown poster theme")
+        settings = ThemeSettings.model_validate(settings.model_dump())
         self.invalidate(uid, pid)
         connection = await self._connect()
         async with connection:
@@ -455,6 +500,18 @@ class PosterStore:
                 (theme, uid, pid),
             )
             saved = await cursor.fetchone() is not None
+            if saved:
+                await connection.execute(
+                    "INSERT INTO userposter (uid, pid, editor, settings) "
+                    "VALUES (%s, %s, 1, %s) "
+                    "ON CONFLICT (uid, pid) DO UPDATE SET settings = jsonb_set("
+                    "userposter.settings, '{theme-settings}', "
+                    "excluded.settings->'theme-settings')",
+                    (
+                        uid, pid,
+                        Jsonb({"theme-settings": settings.model_dump()}),
+                    ),
+                )
         self.invalidate(uid, pid)
         return saved
 

@@ -25,6 +25,11 @@ body {
 
 .poster-document header {
     text-align: center;
+    background-color: transparent;
+    color: var(--text-color, #111);
+}
+
+.poster-document.colored-poster-header header {
     background-color: var(--header-background-color);
     color: var(--header-font-color);
 }
@@ -55,9 +60,20 @@ body {
 
 .poster-document h2 {
     padding: 16px;
+    color: var(--text-color, #111);
+    background: transparent;
+    border-radius: calc(var(--border-radius, 0px) / 2);
+    font-size: 1.25em;
+}
+
+.poster-document h3 {
+    border-radius: calc(var(--border-radius, 0px) / 2);
+}
+
+.poster-document.colored-section-headers h2,
+.poster-document.colored-section-headers h3 {
     color: var(--heading-text-color, #fff);
     background: var(--heading-background-color, #333);
-    font-size: 1.25em;
 }
 
 .section-content {

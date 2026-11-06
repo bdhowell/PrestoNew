@@ -271,7 +271,7 @@ async def preview(request: Request, pid: int) -> Response:
         {
             "poster": poster, "sections": sections, "authors": authors,
             "width": width * 96, "height": height * 96,
-            "theme": poster.theme if poster.theme in installed_themes() else "",
+            "theme": posters.theme_classes(poster.theme, poster.theme_settings),
             "fonts": poster.fonts if poster.fonts in posters.installed_fonts() else "",
             "layout": poster.template if poster.template in posters.TEMPLATES else "arena",
         },

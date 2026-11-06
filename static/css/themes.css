@@ -1,143 +1,170 @@
 :root {
-    --background-color: #7f7f7f;
-    --header-background-color: #7f7f7f;
-    --header-font-color: #000000;
-    --heading-background-color: #333333;
-    --heading-text-color: #ffffff;
-}
-
-.basic {
-    --background-color: #efefff;
-    --header-background-color: #efefff;
-    --header-font-color: #000000;
-    --heading-background-color: #333333;
-    --heading-text-color: #ffffff;
-    --text-color: #000000;
-    --border-color: #00007f;
-    --border-width: 3px;
-}
-
-.dark {
-    --background-color: #1a1a1a;
-    --header-background-color: #000000;
-    --header-font-color: #ffffff;
-    --heading-background-color: #000000;
-    --heading-text-color: #ffffff;
-    --text-color: #00007f;;
-    --border-color: #ffffff;
-    --border-width: 3px;
-}
-
-.light {
     --background-color: #ffffff;
-    --header-background-color: #f0f0f0;
-    --header-font-color: #000000;
-    --heading-background-color: #f0f0f0;
-    --heading-text-color: #000000;
-    --text-color: #000000;
-    --border-color: ;
-    --border-width: 3px;
-}
-
-.blues {
-    --background-color: #e0f7ff;
-    --header-background-color: #004080;
+    --header-background-color: #333333;
     --header-font-color: #ffffff;
-    --heading-background-color: #004080;
+    --heading-background-color: #333333;
     --heading-text-color: #ffffff;
-    --text-color: #000000;
-    --border-color: #004080;
+    --text-color: #222222;
+    --border-color: #444444;
     --border-width: 3px;
-    --border-radius: 3rem;
+    --border-radius: 0;
+    --section-background-color: #ffffff;
+    --palette-color: #ffffff;
 }
 
-.reds {
-    --background-color: #ffe0e0;
-    --header-background-color: #800000;
+.blue {
+    --palette-color: #2363a5;
+    --background-color: #eaf3ff;
+    --header-background-color: #174a80;
+    --heading-background-color: #2363a5;
+    --text-color: #172b42;
+    --border-color: #2363a5;
+}
+
+.red {
+    --palette-color: #c43a3a;
+    --background-color: #fff0ef;
+    --header-background-color: #8d2424;
+    --heading-background-color: #b52e32;
+    --text-color: #3b2020;
+    --border-color: #b52e32;
+}
+
+.yellow {
+    --palette-color: #e1b51c;
+    --background-color: #fff9df;
+    --header-background-color: #69520c;
     --header-font-color: #ffffff;
-    --heading-background-color: #800000;
-    --heading-text-color: #ffffff;
-    --text-color: #000000;
-    --border-color: #800000;
-    --border-width: 3px;
+    --heading-background-color: #8a6b0c;
+    --text-color: #382f16;
+    --border-color: #9c7a0d;
 }
 
-.greens {
-    --background-color: #e0ffe0;
-    --header-background-color: #004000;
-    --header-font-color: #ffffff;
-    --heading-background-color: #004000;
-    --heading-text-color: #ffffff;
-    --text-color: #000000;
-    --border-color: #004000;
-    --border-width: 3px;
-    --border-radius: 3rem;
+.green {
+    --palette-color: #34834b;
+    --background-color: #edf8ef;
+    --header-background-color: #205b32;
+    --heading-background-color: #2d7541;
+    --text-color: #1d3323;
+    --border-color: #2d7541;
 }
 
-.ocean {
-    --background-color: #e6f4f3;
-    --header-background-color: #164e63;
-    --header-font-color: #f0fdfa;
-    --heading-background-color: #0f766e;
-    --heading-text-color: #ffffff;
-    --text-color: #16343c;
-    --border-color: #0f766e;
-    --border-width: 3px;
+.brown {
+    --palette-color: #8b5a3c;
+    --background-color: #f7f0e9;
+    --header-background-color: #68412d;
+    --heading-background-color: #805038;
+    --text-color: #34271f;
+    --border-color: #805038;
 }
 
-.forest {
-    --background-color: #edf3e6;
-    --header-background-color: #294936;
-    --header-font-color: #f3f8ed;
-    --heading-background-color: #3f6245;
-    --heading-text-color: #ffffff;
-    --text-color: #24352a;
-    --border-color: #3f6245;
-    --border-width: 3px;
-    --border-radius: 3rem;
+.orange {
+    --palette-color: #df7629;
+    --background-color: #fff2e6;
+    --header-background-color: #8b4313;
+    --heading-background-color: #b85b1b;
+    --text-color: #3a281d;
+    --border-color: #b85b1b;
 }
 
-.plum {
-    --background-color: #f4eaf5;
-    --header-background-color: #54265e;
-    --header-font-color: #fff3fa;
-    --heading-background-color: #704078;
-    --heading-text-color: #ffffff;
-    --text-color: #38233e;
-    --border-color: #704078;
-    --border-width: 3px;
+.purple {
+    --palette-color: #7952a0;
+    --background-color: #f4eff9;
+    --header-background-color: #513773;
+    --heading-background-color: #68438e;
+    --text-color: #30243b;
+    --border-color: #68438e;
 }
 
-.terracotta {
-    --background-color: #f9eee5;
-    --header-background-color: #843f2c;
-    --header-font-color: #fff7ed;
-    --heading-background-color: #99513a;
-    --heading-text-color: #ffffff;
-    --text-color: #442b24;
-    --border-color: #99513a;
-    --border-width: 3px;
+.dark-grey {
+    --palette-color: #52565a;
+    --background-color: #ebedef;
+    --header-background-color: #383b3e;
+    --heading-background-color: #4a4e52;
+    --text-color: #25282a;
+    --border-color: #52565a;
 }
 
-.slate {
-    --background-color: #edf1f7;
-    --header-background-color: #334155;
-    --header-font-color: #f8fafc;
-    --heading-background-color: #475569;
-    --heading-text-color: #ffffff;
-    --text-color: #263445;
-    --border-color: #64748b;
-    --border-width: 3px;
+.light-grey {
+    --palette-color: #d6d8da;
+    --background-color: #f2f3f4;
+    --header-background-color: #656a6e;
+    --heading-background-color: #6c7277;
+    --text-color: #292c2f;
+    --border-color: #92979b;
 }
 
-.gold {
-    --background-color: #faf4df;
-    --header-background-color: #665018;
-    --header-font-color: #fffbeb;
-    --heading-background-color: #785c1c;
-    --heading-text-color: #ffffff;
-    --text-color: #3e3420;
-    --border-color: #947528;
-    --border-width: 3px;
-    --border-radius: 3rem;
+.black-and-white {
+    --palette-color: #111111;
+    --background-color: #ffffff;
+    --header-background-color: #000000;
+    --heading-background-color: #000000;
+    --text-color: #111111;
+    --border-color: #111111;
+}
+
+.corners-square {
+    --border-radius: 0;
+}
+
+.corners-slightly-rounded {
+    --border-radius: 20px;
+}
+
+.corners-rounded {
+    --border-radius: 40px;
+}
+
+.corners-very-rounded {
+    --border-radius: 60px;
+}
+
+.section-parent,
+.section {
+    border-radius: var(--border-radius, 0);
+}
+
+.section {
+    background-color: var(--section-background-color, #fff);
+}
+
+.poster-header,
+.poster-document header {
+    background-color: transparent;
+    color: var(--text-color, #222);
+}
+
+.colored-poster-header .poster-header,
+.colored-poster-header .poster-document header,
+.poster-document.colored-poster-header header {
+    background-color: var(--header-background-color);
+    color: var(--header-font-color);
+}
+
+.layout .section > .header {
+    padding: 0;
+    color: var(--text-color);
+    background: transparent;
+    border-radius: calc(var(--border-radius, 0px) / 2);
+}
+
+.colored-section-headers .layout .section > .header {
+    padding: 0.1em 0.35em;
+    color: var(--heading-text-color);
+    background: var(--heading-background-color);
+}
+
+.poster-document h2,
+.poster-document h3 {
+    color: var(--text-color, #222);
+    background: transparent;
+    border-radius: calc(var(--border-radius, 0px) / 2);
+}
+
+.colored-section-headers .poster-document h2,
+.colored-section-headers .poster-document h3,
+.poster-document.colored-section-headers h2,
+.poster-document.colored-section-headers h3 {
+    color: var(--heading-text-color);
+    background: var(--heading-background-color);
 }

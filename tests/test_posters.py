@@ -189,7 +189,11 @@ class PosterRouteTests(unittest.TestCase):
         self.store.get.return_value = replace(DRAFT, theme="blues", fonts="technical")
         response = self.client.get("/posters/11/preview")
         self.assertEqual(response.status_code, 200)
-        self.assertIn('class="poster-document blues technical arena"', response.text)
+        self.assertIn(
+            'class="poster-document blue corners-very-rounded '
+            'colored-poster-header colored-section-headers technical arena"',
+            response.text,
+        )
         self.assertIn('href="/static/css/fonts.css"', response.text)
 
     def test_new_draft_without_dimensions_has_explicit_preview_placeholder(self) -> None:
@@ -396,21 +400,28 @@ class PosterValueTests(unittest.IsolatedAsyncioTestCase):
     async def test_theme_update_is_validated_owner_scoped_and_invalidates_cache(self) -> None:
         store = posters.PosterStore()
         connection = AsyncMock()
+        settings = posters.ThemeSettings(
+            corners="rounded",
+            colored_poster_header=True,
+            colored_section_headers=False,
+        )
         with patch.object(store, "_connect", AsyncMock(return_value=connection)), patch.object(
             store, "invalidate",
         ) as invalidate:
             for row, expected in (((11,), True), (None, False)):
                 connection.execute.return_value.fetchone.return_value = row
-                self.assertEqual(await store.set_theme(7, 11, "greens"), expected)
+                self.assertEqual(await store.set_theme(7, 11, "green", settings), expected)
             self.assertEqual(invalidate.call_count, 4)
             invalidate.assert_called_with(7, 11)
             with self.assertRaises(ValueError):
-                await store.set_theme(7, 11, "unknown")
-        statement, params = connection.execute.call_args.args
-        self.assertIn("p.uid = %s AND p.pid = %s", statement)
-        self.assertIn("NOT EXISTS", statement)
-        self.assertIn("purchase", statement)
-        self.assertEqual(params, ("greens", 7, 11))
+                await store.set_theme(7, 11, "unknown", settings)
+        statement, params = connection.execute.call_args_list[1].args
+        self.assertIn("theme-settings", statement)
+        self.assertEqual(params[0:2], (7, 11))
+        update, update_params = connection.execute.call_args_list[0].args
+        self.assertIn("NOT EXISTS", update)
+        self.assertIn("purchase", update)
+        self.assertEqual(update_params, ("green", 7, 11))
 
     async def test_resumption_update_is_parameterized_and_owner_scoped(self) -> None:
         store = posters.PosterStore()
@@ -445,7 +456,7 @@ class PosterValueTests(unittest.IsolatedAsyncioTestCase):
         inserted.fetchone.return_value = (11,)
         connection.execute.side_effect = [owner, draft, inserted]
         with patch.object(store, "_connect", AsyncMock(return_value=connection)), patch.object(
-            posters.random, "choice", side_effect=["blues", "technical"],
+            posters.random, "choice", side_effect=["blue", "technical"],
         ) as choose:
             self.assertEqual(await store.new_or_existing(7), (11, True))
         self.assertEqual(choose.call_args_list[0].args, (posters.installed_themes(),))
@@ -460,7 +471,7 @@ class PosterValueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(uid, 7)
         self.assertIn(theme, posters.installed_themes())
         self.assertIn(fonts, posters.installed_fonts())
-        self.assertEqual((theme, fonts), ("blues", "technical"))
+        self.assertEqual((theme, fonts), ("blue", "technical"))
 
     async def test_creation_reuses_existing_draft_without_inserting(self) -> None:
         store = posters.PosterStore()
@@ -565,6 +576,24 @@ class PosterDatabaseTests(unittest.TestCase):
         self.assertEqual(self.connection.execute(
             "SELECT theme, fonts FROM poster WHERE pid = %s", (pid,),
         ).fetchone(), original)
+
+    def test_theme_configuration_persists_with_palette_and_independent_settings(self) -> None:
+        pid = self.create("Research")
+        settings = posters.ThemeSettings(
+            corners="slightly-rounded",
+            colored_poster_header=True,
+            colored_section_headers=False,
+        )
+        self.assertTrue(asyncio.run(self.store.set_theme(7, pid, "purple", settings)))
+        poster = asyncio.run(self.store.get(7, pid))
+        self.assertEqual(poster.theme, "purple")
+        self.assertEqual(poster.theme_settings, settings.model_dump())
+        self.assertEqual(
+            posters.theme_classes(poster.theme, poster.theme_settings),
+            "purple corners-slightly-rounded colored-poster-header",
+        )
+        self.purchase(pid)
+        self.assertFalse(asyncio.run(self.store.set_theme(7, pid, "red", settings)))
 
     def test_concurrent_new_clicks_create_one_draft_and_allow_new_after_purchase(self) -> None:
         async def concurrent():

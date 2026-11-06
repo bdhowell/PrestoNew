@@ -35,7 +35,7 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         ).render(poster={"pid": 11}, themes=posters.installed_themes(),
                  font_sets=posters.installed_fonts())
         await self.page.set_content(
-            '<body class="blues elegant"><div class="content" contenteditable="true">Sample text</div>'
+            '<body class="blue corners-square elegant"><div class="content" contenteditable="true">Sample text</div>'
             + footer,
         )
         for stylesheet in ("layout", "fonts", "themes"):
@@ -54,9 +54,8 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.locator("#appearance").get_attribute("aria-expanded"), "true")
 
     async def test_cancel_escape_and_apply_preserve_other_appearance_setting(self) -> None:
-        for button, setting, current, target, other in (
-            ("font", "fonts", "elegant", "technical", "blues"),
-            ("theme", "theme", "blues", "greens", "technical"),
+        for button, setting, current, target in (
+            ("font", "fonts", "elegant", "technical"),
         ):
             with self.subTest(button=button):
                 await self.page.locator(f"#{button}").click()
@@ -79,13 +78,34 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
                 await self.page.wait_for_function(
                     f"!document.getElementById('{button}-dialog').open",
                 )
-                self.assertEqual(
-                    set((await self.page.locator("body").get_attribute("class")).split()),
-                    {target, other},
-                )
+                self.assertEqual(set((await self.page.locator("body").get_attribute("class")).split()), {
+                    "blue", "corners-square", target,
+                })
                 self.assertEqual(await self.page.evaluate("window.savedRequests.pop()"), {
                     "url": f"/layout/{setting}", "data": {"pid": 11, setting: target},
                 })
+
+    async def test_theme_controls_save_all_settings_and_keep_other_appearance(self) -> None:
+        await self.page.locator("#theme").click()
+        self.assertTrue(await self.page.locator('input[name="color"][value="blue"]').is_checked())
+        self.assertTrue(await self.page.locator('input[name="corners"][value="square"]').is_checked())
+        await self.page.locator('label:has(input[name="color"][value="purple"])').click()
+        await self.page.locator('label:has(input[name="corners"][value="very-rounded"])').click()
+        await self.page.locator('input[name="colored_poster_header"]').check()
+        await self.page.locator('input[name="colored_section_headers"]').check()
+        await self.page.locator("#theme-apply").click()
+        await self.page.wait_for_function("!document.getElementById('theme-dialog').open")
+        self.assertEqual(set((await self.page.locator("body").get_attribute("class")).split()), {
+            "purple", "corners-very-rounded", "colored-poster-header",
+            "colored-section-headers", "elegant",
+        })
+        self.assertEqual(await self.page.evaluate("window.savedRequests.pop()"), {
+            "url": "/layout/theme",
+            "data": {
+                "pid": 11, "color": "purple", "corners": "very-rounded",
+                "colored_poster_header": True, "colored_section_headers": True,
+            },
+        })
 
     async def test_failed_save_stays_open_and_can_be_retried(self) -> None:
         await self.page.evaluate("""() => {
@@ -102,13 +122,19 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(await self.page.locator("#font-dialog").is_visible())
         self.assertTrue(await self.page.locator("#font-apply").is_enabled())
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "blues elegant")
+        self.assertEqual(
+            set((await self.page.locator("body").get_attribute("class")).split()),
+            {"blue", "corners-square", "elegant"},
+        )
         await self.page.evaluate("""() => {
             window.fetch = async () => ({ok: true, json: async () => ({ok: true})});
         }""")
         await self.page.locator("#font-apply").click()
         await self.page.wait_for_function("!document.getElementById('font-dialog').open")
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "blues modern")
+        self.assertEqual(
+            set((await self.page.locator("body").get_attribute("class")).split()),
+            {"blue", "corners-square", "modern"},
+        )
 
     async def test_font_previews_use_their_own_fonts_and_fit_small_screens(self) -> None:
         await self.page.locator("#font").click()
@@ -125,53 +151,87 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(bounds["x"] + bounds["width"], 360)
         self.assertLessEqual(bounds["height"], 640)
 
-    async def test_all_themes_preview_header_and_content_colors(self) -> None:
-        original = {"basic", "dark", "light", "blues", "reds", "greens"}
-        self.assertEqual(len(set(posters.installed_themes()) - original), 6)
+    async def test_palette_swatches_and_opt_in_header_colors(self) -> None:
         await self.page.locator("#theme").click()
-        for theme in posters.installed_themes():
+        self.assertEqual(
+            await self.page.locator(".theme-color-option").count(),
+            len(posters.THEME_COLORS),
+        )
+        swatches = await self.page.locator(".theme-color-swatch").evaluate_all(
+            "elements => elements.map(element => getComputedStyle(element).backgroundColor)",
+        )
+        self.assertEqual(len(set(swatches)), len(posters.THEME_COLORS))
+        await self.page.evaluate("""() => {
+            const header = document.createElement("div");
+            header.className = "poster-header";
+            header.textContent = "Poster title";
+            document.body.append(header);
+            document.body.classList.add("colored-poster-header", "colored-section-headers");
+        }""")
+        for theme in posters.THEME_COLORS:
             with self.subTest(theme=theme):
-                colors = await self.page.locator(f".theme-preview.{theme}").evaluate("""element => {
-                    const style = getComputedStyle(element);
-                    const header = getComputedStyle(element.querySelector('.poster-header'));
-                    return {
-                        background: style.getPropertyValue('--header-background-color').trim(),
-                        text: style.getPropertyValue('--header-font-color').trim(),
-                        actualBackground: header.backgroundColor,
-                        actualText: header.color,
-                    };
-                }""")
-                self.assertTrue(colors["background"])
-                self.assertTrue(colors["text"])
-                await self.page.evaluate("""theme => {
-                    document.body.className = theme;
-                    let header = document.getElementById('poster-header');
-                    if (!header) {
-                        header = document.createElement('div');
-                        header.id = 'poster-header';
-                        header.className = 'poster-header';
-                        document.body.append(header);
-                    }
+                actual = await self.page.locator(".poster-header").evaluate("""(element, theme) => {
+                    document.body.classList.remove(...document.body.classList);
+                    document.body.classList.add(theme, "colored-poster-header");
+                    return getComputedStyle(element).backgroundColor;
                 }""", theme)
-                actual = await self.page.locator("#poster-header").evaluate("""element => ({
-                    background: getComputedStyle(element).backgroundColor,
-                    text: getComputedStyle(element).color,
-                })""")
-                self.assertEqual(actual["background"], colors["actualBackground"])
-                self.assertEqual(actual["text"], colors["actualText"])
+                self.assertNotEqual(actual, "rgba(0, 0, 0, 0)")
 
-    async def test_new_theme_colors_have_readable_contrast_in_documents(self) -> None:
+    async def test_read_only_header_colors_are_opt_in(self) -> None:
         await self.page.set_content("""
-            <article class="poster-document">
-                <header>Poster title</header><p>Poster content</p>
+            <article class="poster-document blue corners-rounded">
+                <header>Poster title</header>
+                <h2>Section title</h2>
+                <div id="sample-section" class="section">Section content</div>
             </article>
         """)
         for path in ("themes.css", "pages/poster-document.css"):
             await self.page.add_style_tag(path=str(ROOT / "static/css" / path))
-        for theme in ("ocean", "forest", "plum", "terracotta", "slate", "gold"):
+        before = await self.page.locator(".poster-document").evaluate("""element => [
+            getComputedStyle(element.querySelector("header")).backgroundColor,
+            getComputedStyle(element.querySelector("h2")).backgroundColor,
+            getComputedStyle(element.querySelector("h2")).borderRadius,
+            getComputedStyle(element.querySelector(".section")).borderRadius,
+        ]""")
+        self.assertEqual(before[:2], ["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"])
+        self.assertEqual(before[2:], ["3.5px", "7px"])
+        for corner, section_radius in (
+            ("square", "0px"), ("slightly-rounded", "3px"),
+            ("rounded", "7px"), ("very-rounded", "11px"),
+        ):
+            radius = await self.page.locator("#sample-section").evaluate(
+                """(element, corner) => {
+                    element.closest(".poster-document").classList.remove(
+                        "corners-square", "corners-slightly-rounded",
+                        "corners-rounded", "corners-very-rounded",
+                    );
+                    element.closest(".poster-document").classList.add(`corners-${corner}`);
+                    return getComputedStyle(element).borderRadius;
+                }""", corner,
+            )
+            self.assertEqual(radius, section_radius)
+        after = await self.page.locator(".poster-document").evaluate("""element => {
+            element.classList.add("colored-poster-header", "colored-section-headers");
+            return [
+                getComputedStyle(element.querySelector("header")).backgroundColor,
+                getComputedStyle(element.querySelector("h2")).backgroundColor,
+            ];
+        }""")
+        self.assertNotEqual(after[0], "rgba(0, 0, 0, 0)")
+        self.assertNotEqual(after[1], "rgba(0, 0, 0, 0)")
+
+    async def test_new_theme_colors_have_readable_contrast_in_documents(self) -> None:
+        await self.page.set_content("""
+            <article class="poster-document">
+                <header>Poster title</header><h2>Section title</h2><p>Poster content</p>
+            </article>
+        """)
+        for path in ("themes.css", "pages/poster-document.css"):
+            await self.page.add_style_tag(path=str(ROOT / "static/css" / path))
+        for theme in posters.THEME_COLORS:
             with self.subTest(theme=theme):
                 contrasts = await self.page.locator("article").evaluate("""(element, theme) => {
-                    element.className = `poster-document ${theme}`;
+                    element.className = `poster-document ${theme} colored-poster-header colored-section-headers`;
                     const luminance = color => {
                         const rgb = color.match(/\\d+/g).slice(0, 3).map(value => {
                             const channel = Number(value) / 255;
@@ -180,7 +240,7 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
                         });
                         return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
                     };
-                    return [element, element.querySelector('header')].map(node => {
+                    return [element, element.querySelector('header'), element.querySelector('h2')].map(node => {
                         const style = getComputedStyle(node);
                         const text = luminance(style.color);
                         const background = luminance(style.backgroundColor);

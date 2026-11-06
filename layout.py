@@ -108,7 +108,7 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
         request = Request({"type": "http", "headers": [], "state": {"user_id": uid}})
     raw = templates.env.get_template(f"layouts/{template}.html").render(
         request=request, poster=poster, layout_template=template,
-        theme=poster.theme if poster.theme in posters.installed_themes() else "",
+        theme=posters.theme_classes(poster.theme, poster.theme_settings),
         fonts=poster.fonts if poster.fonts in posters.installed_fonts() else "",
         themes=posters.installed_themes(),
         font_sets=posters.installed_fonts(),
@@ -387,15 +387,38 @@ async def update_fonts(request: Request) -> JSONResponse:
 @router.post("/theme")
 async def update_theme(request: Request) -> JSONResponse:
     data = await read_json(request)
-    theme = data.get("theme")
+    color = data.get("color")
     pid = data.get("pid")
-    if not isinstance(theme, str) or theme not in posters.installed_themes():
-        raise HTTPException(422, "Choose an installed poster theme.")
+    legacy_theme: str | None = None
+    if color is None:
+        candidate = data.get("theme")
+        if isinstance(candidate, str) and candidate in posters.LEGACY_THEME_COLORS:
+            legacy_theme = candidate
+            color = posters.LEGACY_THEME_COLORS[candidate]
+    if not isinstance(color, str) or color not in posters.installed_themes():
+        raise HTTPException(422, "Choose an installed theme color.")
     if type(pid) is not int or pid <= 0:
         raise HTTPException(422, "Choose a valid poster.")
     try:
+        if legacy_theme is not None:
+            settings = posters.ThemeSettings(
+                corners=(
+                    "very-rounded" if legacy_theme in posters.LEGACY_ROUNDED_THEMES else "square"
+                ),
+                colored_poster_header=True,
+                colored_section_headers=True,
+            )
+        else:
+            settings = posters.ThemeSettings.model_validate({
+                "corners": data.get("corners"),
+                "colored_poster_header": data.get("colored_poster_header", False),
+                "colored_section_headers": data.get("colored_section_headers", False),
+            })
+    except ValidationError:
+        raise HTTPException(422, "Choose valid theme settings.") from None
+    try:
         poster = await owned(request, pid, draft=True)
-        saved = await posters.store().set_theme(uid_for(request), poster.pid, theme)
+        saved = await posters.store().set_theme(uid_for(request), poster.pid, color, settings)
     except psycopg.Error:
         logger.exception("Could not save poster theme for poster %s", pid)
         raise HTTPException(503, "Your theme could not be saved.") from None

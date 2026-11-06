@@ -253,7 +253,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-editor.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-theme.js"))
         await self.page.evaluate("""() => {
-            document.body.className = "blues technical";
+            document.body.className = "blue corners-square technical";
             window.themeRequests = [];
             window.fetch = async (url, options) => {
                 window.themeRequests.push({url, data: JSON.parse(options.body)});
@@ -263,86 +263,58 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("#appearance").click()
         await self.page.locator("#theme").click()
         self.assertTrue(await self.page.locator("#theme-dialog").is_visible())
-        self.assertTrue(await self.page.locator("input[value='blues']").is_checked())
-        self.assertEqual(await self.page.locator(".theme-preview").count(), len(posters.installed_themes()))
-        colors = await self.page.locator(".theme-preview").evaluate_all("""previews =>
-            previews.map(preview => getComputedStyle(preview).backgroundColor)""")
-        self.assertEqual(len(set(colors)), len(colors))
-        await self.page.locator(".theme-preview.greens").click()
-        self.assertTrue(await self.page.locator("input[value='greens']").is_checked())
-        self.assertEqual(await self.page.locator("input[value='greens']").evaluate(
-            "input => getComputedStyle(input).clipPath",
-        ), "inset(50%)")
-        await self.page.locator("input[value='greens']").focus()
-        await self.page.keyboard.press("ArrowLeft")
-        self.assertTrue(await self.page.locator("input[value='reds']").is_checked())
-        await self.page.locator(".theme-preview.greens").click()
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "blues technical")
+        self.assertTrue(await self.page.locator("input[name='color'][value='blue']").is_checked())
+        self.assertTrue(await self.page.locator("input[name='corners'][value='square']").is_checked())
+        await self.page.locator("label:has(input[name='color'][value='green'])").click()
+        await self.page.locator("label:has(input[name='corners'][value='slightly-rounded'])").click()
+        await self.page.locator("input[name='colored_section_headers']").check()
         await self.page.locator("#theme-apply").click()
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "technical greens")
-        styles = await self.page.evaluate("""() => {
-            const preview = getComputedStyle(document.querySelector(".theme-preview.greens .section"));
-            const section = getComputedStyle(document.querySelector("#results"));
-            return ["color", "backgroundColor", "borderColor", "fontFamily"].map(
-                property => [preview[property], section[property]],
-            );
-        }""")
-        for preview, section in styles:
-            self.assertEqual(preview, section)
+        self.assertEqual(set((await self.page.locator("body").get_attribute("class")).split()), {
+            "technical", "green", "corners-slightly-rounded", "colored-section-headers",
+        })
         self.assertEqual(await self.page.evaluate("window.themeRequests"), [
-            {"url": "/layout/theme", "data": {"pid": 11, "theme": "greens"}},
+            {"url": "/layout/theme", "data": {
+                "pid": 11, "color": "green", "corners": "slightly-rounded",
+                "colored_poster_header": False, "colored_section_headers": True,
+            }},
         ])
         await self.page.locator("#theme").click()
-        self.assertTrue(await self.page.locator("input[value='greens']").is_checked())
-        await self.page.locator(".theme-preview.reds").click()
+        self.assertTrue(await self.page.locator("input[name='color'][value='green']").is_checked())
+        await self.page.locator("label:has(input[name='color'][value='red'])").click()
         await self.page.keyboard.press("Escape")
         await self.page.wait_for_function("!document.getElementById('theme-dialog').open")
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
         self.assertTrue(await self.page.locator("#appearance-controls").is_visible())
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "technical greens")
+        self.assertEqual(set((await self.page.locator("body").get_attribute("class")).split()), {
+            "technical", "green", "corners-slightly-rounded", "colored-section-headers",
+        })
         await self.page.locator("#theme").click()
         await self.page.locator("#theme-cancel").click()
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
         self.assertEqual(await self.page.evaluate("window.themeRequests.length"), 1)
 
-    async def test_theme_options_show_two_rows_and_scroll_without_scrolling_dialog(self) -> None:
+    async def test_theme_options_show_all_controls_and_fit_small_screens(self) -> None:
         await self.page.set_viewport_size({"width": 1200, "height": 1100})
         await self.editor()
         await self.page.evaluate("document.getElementById('theme-dialog').showModal()")
-        dimensions = await self.page.locator("#theme-options").evaluate("""options => {
-            const bounds = options.getBoundingClientRect();
-            const cards = [...options.querySelectorAll(".theme-option")];
-            const visible = cards.filter(card => {
-                const rect = card.getBoundingClientRect();
-                return rect.top >= bounds.top && rect.bottom <= bounds.bottom;
-            });
-            return {
-                visibleRows: new Set(visible.map(card => card.offsetTop)).size,
-                partialCards: cards.filter(card => {
-                    const rect = card.getBoundingClientRect();
-                    return rect.top < bounds.bottom && rect.bottom > bounds.bottom;
-                }).length,
-                scrollHeight: options.scrollHeight, clientHeight: options.clientHeight,
-            };
-        }""")
-        self.assertEqual(dimensions["visibleRows"], 2)
-        self.assertEqual(dimensions["partialCards"], 0)
-        self.assertGreater(dimensions["scrollHeight"], dimensions["clientHeight"])
-        await self.page.locator("#theme-options .theme-option").last.scroll_into_view_if_needed()
-        self.assertGreater(await self.page.locator("#theme-options").evaluate(
-            "options => options.scrollTop",
-        ), 0)
-        self.assertTrue(await self.page.locator("#theme-dialog").evaluate(
-            "dialog => dialog.scrollTop === 0 && dialog.scrollHeight <= dialog.clientHeight",
-        ))
+        self.assertEqual(await self.page.locator("#theme-options input[name='color']").count(), 10)
+        self.assertEqual(await self.page.locator("#theme-options input[name='corners']").count(), 4)
+        self.assertEqual(await self.page.locator("#theme-options input[type='checkbox']").count(), 2)
+        for width, height in ((1200, 1100), (360, 500)):
+            await self.page.set_viewport_size({"width": width, "height": height})
+            bounds = await self.page.locator("#theme-dialog").bounding_box()
+            self.assertGreaterEqual(bounds["x"], 0)
+            self.assertLessEqual(bounds["x"] + bounds["width"], width)
+            self.assertGreaterEqual(bounds["y"], 0)
+            self.assertLessEqual(bounds["y"] + bounds["height"], height)
 
     async def test_theme_dialog_save_failure_allows_retry_and_small_screens(self) -> None:
         await self.editor()
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-editor.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-theme.js"))
         await self.page.evaluate("""() => {
-            document.body.className = "basic modern";
+            document.body.className = "blue corners-square modern";
             window.fetch = async () => ({
                 ok: false, json: async () => ({detail: "Storage unavailable."}),
             });
@@ -360,18 +332,18 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertGreaterEqual(bounds["y"], 0)
         self.assertLessEqual(bounds["y"] + bounds["height"], 500)
-        await self.page.locator(".theme-preview.reds").click()
+        await self.page.locator("label:has(input[name='color'][value='red'])").click()
         await self.page.locator("#theme-apply").click()
         self.assertTrue(await self.page.locator("#theme-dialog").is_visible())
         self.assertIn("Storage unavailable.", await self.page.locator("#theme-status").inner_text())
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "basic modern")
+        self.assertEqual(await self.page.locator("body").get_attribute("class"), "blue corners-square modern")
         self.assertTrue(await self.page.locator("#theme-apply").is_enabled())
         await self.page.evaluate("""() => {
             window.fetch = async () => ({ok: true, json: async () => ({ok: true})});
         }""")
         await self.page.locator("#theme-apply").click()
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "modern reds")
+        self.assertEqual(await self.page.locator("body").get_attribute("class"), "modern red corners-square")
 
     async def set_zoom(self, value: str) -> None:
         await self.page.locator("#poster-zoom").evaluate("""(slider, value) => {
