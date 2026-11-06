@@ -91,8 +91,8 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.page.locator('input[name="corners"][value="square"]').is_checked())
         await self.page.locator('label:has(input[name="color"][value="purple"])').click()
         await self.page.locator('label:has(input[name="corners"][value="very-rounded"])').click()
-        await self.page.locator('input[name="colored_poster_header"]').check()
-        await self.page.locator('input[name="colored_section_headers"]').check()
+        await self.page.locator('label:has(input[name="colored_poster_header"])').click()
+        await self.page.locator('label:has(input[name="colored_section_headers"])').click()
         await self.page.locator("#theme-apply").click()
         await self.page.wait_for_function("!document.getElementById('theme-dialog').open")
         self.assertEqual(set((await self.page.locator("body").get_attribute("class")).split()), {
@@ -106,6 +106,32 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
                 "colored_poster_header": True, "colored_section_headers": True,
             },
         })
+
+    async def test_corner_and_header_examples_follow_selected_color_and_shape(self) -> None:
+        await self.page.locator("#theme").click()
+        await self.page.locator('label:has(input[name="color"][value="yellow"])').click()
+        await self.page.locator('label:has(input[name="corners"][value="rounded"])').click()
+        examples = await self.page.locator(
+            ".theme-corner-option, .theme-toggle-option",
+        ).evaluate_all("""elements => elements.map(element => {
+            const style = getComputedStyle(element);
+            return {
+                background: style.backgroundColor,
+                color: style.color,
+                radius: style.borderRadius,
+            };
+        })""")
+        for example in examples:
+            self.assertEqual(example["background"], "rgb(225, 181, 28)")
+            self.assertEqual(example["color"], "rgb(34, 34, 34)")
+        for example, expected in zip(examples[:4], (0, 20 / 3, 40 / 3, 20)):
+            self.assertAlmostEqual(float(example["radius"].removesuffix("px")), expected, places=2)
+        for example in examples[4:]:
+            self.assertAlmostEqual(
+                float(example["radius"].removesuffix("px")),
+                40 / 3,
+                places=2,
+            )
 
     async def test_failed_save_stays_open_and_can_be_retried(self) -> None:
         await self.page.evaluate("""() => {
@@ -151,16 +177,46 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(bounds["x"] + bounds["width"], 360)
         self.assertLessEqual(bounds["height"], 640)
 
-    async def test_palette_swatches_and_opt_in_header_colors(self) -> None:
+    async def test_palette_buttons_have_contrasting_theme_colors(self) -> None:
         await self.page.locator("#theme").click()
         self.assertEqual(
             await self.page.locator(".theme-color-option").count(),
             len(posters.THEME_COLORS),
         )
-        swatches = await self.page.locator(".theme-color-swatch").evaluate_all(
-            "elements => elements.map(element => getComputedStyle(element).backgroundColor)",
-        )
-        self.assertEqual(len(set(swatches)), len(posters.THEME_COLORS))
+        buttons = await self.page.locator(".theme-color-option").evaluate_all("""elements =>
+            elements.map(element => {
+                const style = getComputedStyle(element);
+                const luminance = color => {
+                    const rgb = color.match(/\\d+/g).slice(0, 3).map(value => {
+                        const channel = Number(value) / 255;
+                        return channel <= 0.04045 ? channel / 12.92
+                            : ((channel + 0.055) / 1.055) ** 2.4;
+                    });
+                    return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+                };
+                const text = luminance(style.color);
+                const background = luminance(style.backgroundColor);
+                return {
+                    contrast: (Math.max(text, background) + 0.05)
+                        / (Math.min(text, background) + 0.05),
+                    inputVisible: getComputedStyle(element.querySelector("input")).opacity !== "0"
+                        && getComputedStyle(element.querySelector("input")).clipPath === "none",
+                };
+            })""")
+        for button in buttons:
+            self.assertGreaterEqual(button["contrast"], 4.5)
+            self.assertFalse(button["inputVisible"])
+        self.assertTrue(await self.page.locator(".theme-color-option").first.evaluate(
+            "element => getComputedStyle(element).backgroundColor !== 'rgba(0, 0, 0, 0)'",
+        ))
+        for corner, radius in (
+            ("square", 0), ("slightly-rounded", 20 / 3),
+            ("rounded", 40 / 3), ("very-rounded", 20),
+        ):
+            button_radius = await self.page.locator(
+                f'.theme-corner-option:has(input[value="{corner}"])',
+            ).evaluate("element => getComputedStyle(element).borderRadius")
+            self.assertAlmostEqual(float(button_radius.removesuffix("px")), radius, places=2)
         await self.page.evaluate("""() => {
             const header = document.createElement("div");
             header.className = "poster-header";
@@ -194,10 +250,10 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
             getComputedStyle(element.querySelector(".section")).borderRadius,
         ]""")
         self.assertEqual(before[:2], ["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"])
-        self.assertEqual(before[2:], ["3.5px", "7px"])
+        self.assertEqual(before[2:], ["20px", "40px"])
         for corner, section_radius in (
-            ("square", "0px"), ("slightly-rounded", "3px"),
-            ("rounded", "7px"), ("very-rounded", "11px"),
+            ("square", "0px"), ("slightly-rounded", "20px"),
+            ("rounded", "40px"), ("very-rounded", "60px"),
         ):
             radius = await self.page.locator("#sample-section").evaluate(
                 """(element, corner) => {

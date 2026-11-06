@@ -14,6 +14,15 @@
     const sectionHeaders = themeForm.querySelector("input[name='colored_section_headers']");
     let savingTheme = false;
 
+    const updateThemeExamples = () => {
+        const color = themeForm.querySelector("input[name='color']:checked")?.value;
+        const corner = themeForm.querySelector("input[name='corners']:checked")?.value;
+        themeDialog.classList.remove(...colors.map(input => input.value));
+        if (color) themeDialog.classList.add(color);
+        themeDialog.classList.remove(...corners.map(input => `corners-${input.value}`));
+        if (corner) themeDialog.classList.add(`corners-${corner}`);
+    };
+
     themeButton.addEventListener("click", () => {
         for (const color of colors) {
             color.checked = document.body.classList.contains(color.value);
@@ -23,9 +32,11 @@
         }
         posterHeader.checked = document.body.classList.contains("colored-poster-header");
         sectionHeaders.checked = document.body.classList.contains("colored-section-headers");
+        updateThemeExamples();
         themeStatus.textContent = "";
         themeDialog.showModal();
     });
+    themeForm.addEventListener("change", updateThemeExamples);
     themeCancel.addEventListener("click", () => themeDialog.close());
     themeDialog.addEventListener("cancel", event => {
         if (savingTheme) event.preventDefault();

@@ -91,10 +91,9 @@
                     <legend>Theme Color</legend>
                     <div class="theme-color-options">
                         {% for option in themes %}
-                        <label class="theme-color-option">
+                        <label class="theme-color-option {{ option }}">
                             <input type="radio" name="color" value="{{ option }}" required>
-                            <span class="theme-color-swatch {{ option }}" aria-hidden="true"></span>
-                            <span>{% if option == "black-and-white" %}Black and White{% else %}{{ option | replace("-", " ") | title }}{% endif %}</span>
+                            <span>{% if option == "black-and-white" %}Black &amp; White{% else %}{{ option | replace("-", " ") | title }}{% endif %}</span>
                         </label>
                         {% endfor %}
                     </div>
@@ -102,28 +101,28 @@
                 <fieldset class="theme-setting">
                     <legend>Corners</legend>
                     <div class="theme-corner-options">
-                        {% for option, label in [
-                            ("square", "Square"),
-                            ("slightly-rounded", "Slightly Rounded"),
-                            ("rounded", "Rounded"),
-                            ("very-rounded", "Very Rounded")
+                        {% for option, label, radius in [
+                            ("square", "Square", "0px"),
+                            ("slightly-rounded", "Slightly Rounded", "20px"),
+                            ("rounded", "Rounded", "40px"),
+                            ("very-rounded", "Very Rounded", "60px")
                         ] %}
-                        <label class="theme-choice-option">
+                        <label class="theme-choice-option theme-corner-option"
+                               style="--corner-radius: {{ radius }}">
                             <input type="radio" name="corners" value="{{ option }}" required>
                             <span>{{ label }}</span>
                         </label>
                         {% endfor %}
                     </div>
-                    <p class="theme-setting-help">Sections use 3px, 7px, or 11px corners; section header corners scale with them.</p>
                 </fieldset>
                 <fieldset class="theme-setting">
                     <legend>Colored Headers</legend>
                     <div class="theme-header-options">
-                        <label class="theme-choice-option">
+                        <label class="theme-choice-option theme-toggle-option">
                             <input type="checkbox" name="colored_poster_header">
                             <span>Colored Poster Header</span>
                         </label>
-                        <label class="theme-choice-option">
+                        <label class="theme-choice-option theme-toggle-option">
                             <input type="checkbox" name="colored_section_headers">
                             <span>Colored Section Headers</span>
                         </label>

@@ -267,7 +267,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.page.locator("input[name='corners'][value='square']").is_checked())
         await self.page.locator("label:has(input[name='color'][value='green'])").click()
         await self.page.locator("label:has(input[name='corners'][value='slightly-rounded'])").click()
-        await self.page.locator("input[name='colored_section_headers']").check()
+        await self.page.locator("label:has(input[name='colored_section_headers'])").click()
         await self.page.locator("#theme-apply").click()
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
         self.assertEqual(set((await self.page.locator("body").get_attribute("class")).split()), {
