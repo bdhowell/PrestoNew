@@ -4,20 +4,18 @@
     const toolbar = document.getElementById("editor-controls");
     if (!toolbar) return;
 
-    const extended = document.getElementById("extended");
-    const extendedControls = document.getElementById("extended-controls");
-    if (extended && extendedControls) {
-        extended.addEventListener("click", () => {
-            extendedControls.hidden = !extendedControls.hidden;
-            extended.setAttribute("aria-expanded", String(!extendedControls.hidden));
-        });
-    }
-    const appearance = document.getElementById("appearance");
-    const appearanceControls = document.getElementById("appearance-controls");
-    if (appearance && appearanceControls) {
-        appearance.addEventListener("click", () => {
-            appearanceControls.hidden = !appearanceControls.hidden;
-            appearance.setAttribute("aria-expanded", String(!appearanceControls.hidden));
+    const controlGroups = ["extended", "appearance"]
+        .map(id => [document.getElementById(id), document.getElementById(`${id}-controls`)])
+        .filter(([button, controls]) => button && controls);
+
+    for (const [button, controls] of controlGroups) {
+        button.addEventListener("click", () => {
+            const opening = controls.hidden;
+            for (const [otherButton, otherControls] of controlGroups) {
+                const visible = otherControls === controls && opening;
+                otherControls.hidden = !visible;
+                otherButton.setAttribute("aria-expanded", String(visible));
+            }
         });
     }
     const commands = {
@@ -295,11 +293,8 @@
 
     document.addEventListener("keydown", event => {
         if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
-            for (const [button, controls] of [
-                [extended, extendedControls],
-                [appearance, appearanceControls],
-            ]) {
-                if (!button || !controls || controls.hidden) continue;
+            for (const [button, controls] of controlGroups) {
+                if (controls.hidden) continue;
                 controls.hidden = true;
                 button.setAttribute("aria-expanded", "false");
                 if (controls.contains(document.activeElement)) button.focus();

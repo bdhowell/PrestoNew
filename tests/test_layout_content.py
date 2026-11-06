@@ -47,6 +47,7 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
                 return {ok: true, json: async () => ({ok: true})};
             };
         }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-theme.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-editor.js"))
         self.assertTrue(await self.page.locator("#appearance-controls").is_hidden())
@@ -84,6 +85,39 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await self.page.evaluate("window.savedRequests.pop()"), {
                     "url": f"/layout/{setting}", "data": {"pid": 11, setting: target},
                 })
+
+    async def test_toolbar_control_groups_are_mutually_exclusive(self) -> None:
+        for button, visible in (
+            ("extended", "extended"),
+            ("appearance", "appearance"),
+            ("appearance", None),
+            ("extended", "extended"),
+            ("extended", None),
+        ):
+            with self.subTest(button=button, visible=visible):
+                await self.page.locator(f"#{button}").click()
+                for group in ("appearance", "extended"):
+                    self.assertEqual(
+                        await self.page.locator(f"#{group}-controls").is_visible(),
+                        group == visible,
+                    )
+                    self.assertEqual(
+                        await self.page.locator(f"#{group}").get_attribute("aria-expanded"),
+                        str(group == visible).lower(),
+                    )
+
+        await self.page.locator("#extended").focus()
+        await self.page.keyboard.press("Enter")
+        await self.page.locator("#appearance").focus()
+        await self.page.keyboard.press("Enter")
+        self.assertTrue(await self.page.locator("#appearance-controls").is_visible())
+        self.assertTrue(await self.page.locator("#extended-controls").is_hidden())
+        self.assertEqual(await self.page.locator("#extended").get_attribute("aria-expanded"), "false")
+        await self.page.locator("#theme").focus()
+        await self.page.keyboard.press("Escape")
+        self.assertTrue(await self.page.locator("#appearance-controls").is_hidden())
+        self.assertEqual(await self.page.locator("#appearance").get_attribute("aria-expanded"), "false")
+        self.assertEqual(await self.page.locator(":focus").get_attribute("id"), "appearance")
 
     async def test_theme_controls_save_all_settings_and_keep_other_appearance(self) -> None:
         await self.page.locator("#theme").click()
@@ -132,6 +166,150 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
                 40 / 3,
                 places=2,
             )
+
+    async def test_header_controls_have_ten_pixel_gap(self) -> None:
+        await self.page.locator("#theme").click()
+        for width, height in ((1200, 1100), (360, 500)):
+            with self.subTest(width=width, height=height):
+                await self.page.set_viewport_size({"width": width, "height": height})
+                gap = await self.page.locator(".theme-header-options").evaluate("""group => {
+                    const [first, second] = [...group.children].map(element => element.getBoundingClientRect());
+                    return Math.abs(first.top - second.top) < 1
+                        ? second.left - first.right
+                        : second.top - first.bottom;
+                }""")
+                self.assertAlmostEqual(gap, 10, delta=0.01)
+
+    async def test_theme_option_outlines_fit_at_all_edges(self) -> None:
+        await self.page.locator("#theme").click()
+        for width, height in ((1200, 1100), (360, 500)):
+            with self.subTest(width=width, height=height):
+                await self.page.set_viewport_size({"width": width, "height": height})
+                options = self.page.locator(".theme-color-option, .theme-choice-option")
+                for index in range(await options.count()):
+                    option = options.nth(index)
+                    input_control = option.locator("input")
+                    if not await input_control.is_checked():
+                        await option.click()
+                    bounds = await option.evaluate("""element => {
+                        const scroller = document.getElementById("theme-options-scroll");
+                        const before = element.getBoundingClientRect();
+                        const scrollport = scroller.getBoundingClientRect();
+                        scroller.scrollTop += (before.top + before.bottom) / 2
+                            - (scrollport.top + scrollport.bottom) / 2;
+                        const style = getComputedStyle(element);
+                        const outset = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+                        const rect = element.getBoundingClientRect();
+                        const group = element.parentElement.getBoundingClientRect();
+                        const viewport = scroller.getBoundingClientRect();
+                        const siblings = [...element.parentElement.children]
+                            .filter(sibling => sibling !== element)
+                            .map(sibling => sibling.getBoundingClientRect());
+                        return {
+                            outset,
+                            left: rect.left - outset,
+                            right: rect.right + outset,
+                            top: rect.top - outset,
+                            bottom: rect.bottom + outset,
+                            group: {left: group.left, right: group.right,
+                                    top: group.top, bottom: group.bottom},
+                            viewport: {left: viewport.left + scroller.clientLeft,
+                                       right: viewport.left + scroller.clientLeft + scroller.clientWidth,
+                                       top: viewport.top + scroller.clientTop,
+                                       bottom: viewport.top + scroller.clientTop + scroller.clientHeight},
+                            overlaps: siblings.some(sibling =>
+                                rect.left - outset < sibling.right
+                                && rect.right + outset > sibling.left
+                                && rect.top - outset < sibling.bottom
+                                && rect.bottom + outset > sibling.top),
+                        };
+                    }""")
+                    self.assertEqual(bounds["outset"], 6)
+                    for container in ("group", "viewport"):
+                        self.assertGreaterEqual(bounds["left"], bounds[container]["left"] - 0.01)
+                        self.assertLessEqual(bounds["right"], bounds[container]["right"] + 0.01)
+                        self.assertGreaterEqual(bounds["top"], bounds[container]["top"] - 0.01)
+                        self.assertLessEqual(
+                            bounds["bottom"], bounds[container]["bottom"] + 0.01,
+                            f"option {index}, {container}: {bounds}",
+                        )
+                    self.assertFalse(bounds["overlaps"])
+
+    async def test_selected_theme_buttons_use_contrasting_three_pixel_outlines(self) -> None:
+        await self.page.locator("#theme").click()
+        await self.page.locator('label:has(input[name="color"][value="yellow"])').click()
+        await self.page.locator('label:has(input[name="corners"][value="rounded"])').click()
+        await self.page.locator('label:has(input[name="colored_poster_header"])').click()
+        await self.page.locator('label:has(input[name="colored_section_headers"])').click()
+        selected = await self.page.locator(
+            ".theme-color-option:has(> input[name='color']:checked), "
+            ".theme-corner-option:has(> input[name='corners']:checked), "
+            ".theme-toggle-option:has(> input[type='checkbox']:checked)",
+        ).evaluate_all(
+            """elements => elements.map(element => {
+            const style = getComputedStyle(element);
+            return {
+                outline: style.outlineStyle,
+                width: style.outlineWidth,
+                offset: style.outlineOffset,
+                color: style.outlineColor,
+                border: style.borderColor,
+                marker: getComputedStyle(element, "::after").content,
+            };
+        })""",
+        )
+        self.assertEqual(len(selected), 4)
+        for button in selected:
+            self.assertEqual(button["outline"], "solid")
+            self.assertEqual(button["width"], "3px")
+            self.assertEqual(button["offset"], "3px")
+            self.assertEqual(button["color"], button["border"])
+            self.assertEqual(button["marker"], "none")
+        self.assertEqual(
+            await self.page.locator(
+                ".theme-color-option:has(> input[name='color']:checked)",
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            await self.page.locator(
+                ".theme-corner-option:has(> input[name='corners']:checked)",
+            ).count(),
+            1,
+        )
+        await self.page.locator('label:has(input[name="colored_section_headers"])').click()
+        self.assertEqual(
+            await self.page.locator(
+                ".theme-toggle-option:has(> input[type='checkbox']:checked)",
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            await self.page.locator(
+                ".theme-toggle-option:has(> input[type='checkbox']:checked)",
+            ).inner_text(),
+            "Colored Poster Header",
+        )
+        await self.page.locator('label:has(input[name="color"][value="light-grey"])').click()
+        light_selected = await self.page.locator(
+            ".theme-color-option:has(> input[name='color']:checked)",
+        ).evaluate("""element => {
+            const style = getComputedStyle(element);
+            return [style.outlineColor, style.borderColor];
+        }""")
+        self.assertEqual(light_selected[0], light_selected[1])
+        self.assertEqual(
+            await self.page.locator(
+                ".theme-color-option:has(> input[name='color']:checked)",
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            await self.page.locator(
+                ".theme-color-option:has(> input[name='color']:checked)",
+            ).evaluate("element => getComputedStyle(element).outlineWidth"),
+            "3px",
+        )
 
     async def test_failed_save_stays_open_and_can_be_retried(self) -> None:
         await self.page.evaluate("""() => {
@@ -606,6 +784,29 @@ class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await tray.is_hidden())
         self.assertEqual(await self.page.locator(":focus").get_attribute("id"), "extended")
         self.assertEqual(await self.page.evaluate("window.savedRequests"), [])
+
+    async def test_extended_buttons_are_outlined_only_when_formatting_is_set(self) -> None:
+        for button in ("code", "superscript", "subscript", "ullist", "ollist"):
+            with self.subTest(button=button):
+                await self.load_editor()
+                await self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
+                await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+                control = self.page.locator(f"#{button}")
+                self.assertEqual(await control.evaluate(
+                    "element => getComputedStyle(element).outlineStyle",
+                ), "none")
+                await control.click()
+                self.assertEqual(await control.get_attribute("aria-pressed"), "true")
+                self.assertEqual(await control.evaluate(
+                    "element => [getComputedStyle(element).outlineStyle, "
+                    "getComputedStyle(element).outlineWidth, getComputedStyle(element).outlineOffset]",
+                ), ["solid", "3px", "3px"])
+                await control.click()
+                self.assertEqual(await control.get_attribute("aria-pressed"), "false")
+                await control.focus()
+                self.assertEqual(await control.evaluate(
+                    "element => getComputedStyle(element).outlineStyle",
+                ), "none")
 
     async def test_list_buttons_toggle_switch_and_save(self) -> None:
         for button, tag, other in (("ullist", "ul", "ollist"), ("ollist", "ol", "ullist")):

@@ -99,6 +99,10 @@ body > .basic-menu {
     color: #8e85c2;
 }
 
+#extended-controls {
+    left: 43px;
+}
+
 #extended-controls,
 #appearance-controls {
     position: absolute;
@@ -153,7 +157,7 @@ body > .basic-menu {
 }
 
 #appearance-controls {
-   left: 25.96rem;
+   left: 0;
  }
 
 #editor-controls button {
@@ -194,7 +198,15 @@ body > .basic-menu {
 }
 
 #editor-controls button:focus-visible {
-    outline: 2px solid #fff;
+    box-shadow: 0 0 0 2px #fff;
+}
+
+#extended-controls button {
+    outline: none;
+}
+
+#extended-controls button[aria-pressed="true"] {
+    outline: 3px solid #fff;
     outline-offset: 3px;
 }
 
@@ -558,20 +570,24 @@ body > .basic-menu {
     max-height: calc(100dvh - 5rem - 2px);
 }
 
-#theme-form > :not(#theme-options) {
+#theme-form > :not(#theme-options-scroll) {
     flex-shrink: 0;
 }
 
-#theme-options {
-    display: grid;
-    gap: 1.25rem;
+#theme-options-scroll {
     flex: 0 1 auto;
     max-height: min(60vh, 30rem);
     min-width: 0;
     min-height: 0;
     overflow-y: auto;
-    border: 0;
     padding: 0.25rem;
+}
+
+#theme-options {
+    display: grid;
+    gap: 1.25rem;
+    min-width: 0;
+    border: 0;
 }
 
 .theme-setting {
@@ -587,7 +603,13 @@ body > .basic-menu {
 .theme-color-options {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
-    gap: 0.625rem;
+}
+
+.theme-color-options,
+.theme-corner-options,
+.theme-header-options {
+    gap: 12px;
+    padding: 6px;
 }
 
 .theme-color-option,
@@ -615,21 +637,6 @@ body > .basic-menu {
     border-color: var(--border-color, currentColor);
 }
 
-.theme-color-option::after,
-.theme-choice-option::after {
-    content: "";
-    flex: none;
-    width: 1.1em;
-    height: 1.1em;
-    margin-inline-start: auto;
-}
-
-.theme-color-option:has(input:checked)::after,
-.theme-choice-option:has(input:checked)::after {
-    content: "✓";
-    font-weight: 800;
-}
-
 .theme-choice-option {
     background: var(--palette-color);
     color: var(--palette-button-text, #fff);
@@ -646,8 +653,15 @@ body > .basic-menu {
 
 .theme-color-option:focus-within,
 .theme-choice-option:focus-within {
-    outline: 3px solid #211a4d;
-    outline-offset: 2px;
+    box-shadow: 0 0 0 2px #211a4d;
+}
+
+.theme-color-option:has(> input[name="color"]:checked),
+.theme-corner-option:has(> input[name="corners"]:checked),
+.theme-toggle-option:has(> input[type="checkbox"]:checked) {
+    z-index: 1;
+    outline: 3px solid var(--border-color, #222);
+    outline-offset: 3px;
 }
 
 .theme-color-option input,
@@ -670,7 +684,10 @@ body > .basic-menu {
 .theme-header-options {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.625rem;
+}
+
+.theme-header-options {
+    gap: 10px;
 }
 
 .theme-header-options .theme-toggle-option {

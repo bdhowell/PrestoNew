@@ -14,6 +14,9 @@
 
     document.addEventListener("click", (event) => {
         for (let element = event.target; element instanceof Element; element = element.parentElement) {
+            if (element.matches(
+                "#editor-controls button, .theme-color-option, .theme-choice-option, .theme-option",
+            )) continue;
             const style = getComputedStyle(element);
             if (!["none", "hidden"].includes(style.outlineStyle) && parseFloat(style.outlineWidth) > 0) {
                 element.style.outline = "none";
