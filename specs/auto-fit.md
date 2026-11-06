@@ -42,13 +42,19 @@ Save these settings with the poster, preserve them across template/font/theme
 changes, and apply them to read-only previews. Report save errors with a retry
 action and warn before navigating away with unsaved adjustments.
 
-= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
-
 When a poster is created, fix its resizeable areas to the initial layout dimensions, so that subsequent adjustments to font sizing or content do not alter the original layout proportions.
 Initialize and save these proportions on the first rendered editor visit once
 the poster has dimensions, separately for each template. Restore them on reopen.
 Clip content that outgrows its fixed area. Manual gutter resizing remains
 available and its saved adjustments apply relative to the original proportions.
+
+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+
+# Template Selection
+
+Clicking the `#template` button displays a dialog modeled on the template selection interface in the included keynote document (`/specs/template-selection.key`).
+
+Set the category, template, and dimensions based on the poster's current dimensions and template choice.
 
 # Graphics Handling
 
