@@ -1254,6 +1254,11 @@ Implementation contract:
   Every theme defines `--header-background-color` and `--header-font-color` for
   the poster header, independently of the poster background and section headings.
   These colors are shared by the editor, theme previews, and read-only documents.
+  When both poster-header and section-header coloring are enabled, layout
+  section headings sit flush at the section top and span its full inner width.
+  Section and grouped-section outlines clip the colored heading backgrounds to
+  their top corner radii; body content retains padding. Without a separately
+  colored poster header, section headings retain their previous inset styling.
   The ocean, forest, plum, terracotta, slate, and gold palettes coordinate dark
   headers and light header text with pale poster backgrounds and dark body text.
 - The last poster lookup is cached by owner and poster ID for two seconds;

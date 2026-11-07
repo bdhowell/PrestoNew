@@ -152,10 +152,33 @@
     border-radius: calc(var(--border-radius, 0px) / 2);
 }
 
+.colored-poster-header.colored-section-headers .layout .section {
+    padding: 0;
+    overflow: hidden;
+}
+
+.colored-poster-header.colored-section-headers .layout .section > .content {
+    padding: 0 5rem 5rem;
+}
+
+.colored-poster-header.colored-section-headers .layout .section-parent:not(.vertical):not(.column):not([data-direction="vertical"]):not([data-orientation="vertical"]):not([style*="column"]) {
+    overflow: hidden;
+}
+
+.colored-poster-header.colored-section-headers .layout .section-parent:not(.vertical):not(.column):not([data-direction="vertical"]):not([data-orientation="vertical"]):not([style*="column"]) > .section {
+    border-radius: 0;
+}
+
 .colored-section-headers .layout .section > .header {
     padding: 0.1em 0.35em;
     color: var(--heading-text-color);
     background: var(--heading-background-color);
+}
+
+.colored-poster-header.colored-section-headers .layout .section > .header {
+    box-sizing: border-box;
+    width: 100%;
+    border-radius: 0;
 }
 
 .poster-document h2,

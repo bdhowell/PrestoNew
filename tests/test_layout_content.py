@@ -20,6 +20,71 @@ FORMATTING = {
 
 
 class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
+    async def test_colored_section_headers_are_flush_and_clipped_to_section_corners(self) -> None:
+        await self.page.set_content("""<body class="blue colored-section-headers">
+            <div class="layout" style="width: 900px">
+                <div class="section"><div class="header">Heading</div><div class="content">Body</div></div>
+                <div class="section-parent">
+                    <div class="section"><div class="header">Left</div><div class="content">Body</div></div>
+                    <div class="section"><div class="header">Right</div><div class="content">Body</div></div>
+                </div>
+                <div class="section-parent vertical">
+                    <div class="section"><div class="header">Stacked</div><div class="content">Body</div></div>
+                </div>
+            </div></body>""")
+        for stylesheet in ("layout", "themes"):
+            await self.page.add_style_tag(path=str(ROOT / f"static/css/{stylesheet}.css"))
+        for corner in ("square", "slightly-rounded", "rounded", "very-rounded"):
+            await self.page.locator("body").evaluate(
+                "(el, corner) => {el.className = `blue colored-poster-header colored-section-headers corners-${corner}`}", corner,
+            )
+            for section in await self.page.locator(".section").all():
+                geometry = await section.evaluate("""el => {
+                    const r = el.getBoundingClientRect();
+                    const style = getComputedStyle(el);
+                    const heading = el.querySelector('.header');
+                    const h = heading.getBoundingClientRect();
+                    return {
+                        left: h.left - r.left,
+                        top: h.top - r.top,
+                        width: h.width,
+                        innerWidth: el.clientWidth,
+                        borderLeft: parseFloat(style.borderLeftWidth),
+                        borderTop: parseFloat(style.borderTopWidth),
+                        overflow: style.overflow,
+                        radius: getComputedStyle(heading).borderTopLeftRadius,
+                        padding: getComputedStyle(el.querySelector('.content')).paddingLeft,
+                    };
+                }""")
+                self.assertAlmostEqual(geometry["left"], geometry["borderLeft"], delta=0.1)
+                self.assertAlmostEqual(geometry["top"], geometry["borderTop"], delta=0.1)
+                self.assertAlmostEqual(geometry["width"], geometry["innerWidth"], delta=1)
+                self.assertEqual(geometry["overflow"], "hidden")
+                self.assertEqual(geometry["radius"], "0px")
+                self.assertEqual(geometry["padding"], "80px")
+            row = self.page.locator(".section-parent:not(.vertical)")
+            self.assertEqual(await row.evaluate("el => getComputedStyle(el).overflow"), "hidden")
+            self.assertEqual(await row.locator(".section").first.evaluate(
+                "el => getComputedStyle(el).borderTopLeftRadius",
+            ), "0px")
+            await self.page.locator("body").evaluate("el => el.classList.remove('colored-poster-header')")
+            section = self.page.locator(".section").first
+            self.assertEqual(await section.evaluate("el => getComputedStyle(el).paddingTop"), "48px")
+            self.assertEqual(await section.locator(".content").evaluate(
+                "el => getComputedStyle(el).paddingLeft",
+            ), "0px")
+            self.assertEqual(await section.locator(".header").evaluate(
+                "el => getComputedStyle(el).backgroundColor",
+            ), "rgb(35, 99, 165)")
+            self.assertEqual(await section.locator(".header").evaluate(
+                "el => getComputedStyle(el).borderTopLeftRadius",
+            ), {"square": "0px", "slightly-rounded": "10px", "rounded": "20px", "very-rounded": "30px"}[corner])
+            self.assertEqual(await row.evaluate("el => getComputedStyle(el).overflow"), "visible")
+        await self.page.locator("body").evaluate("el => el.classList.remove('colored-section-headers')")
+        self.assertEqual(await self.page.locator(".section").first.evaluate(
+            "el => getComputedStyle(el).paddingTop",
+        ), "48px")
+
     async def asyncSetUp(self) -> None:
         playwright = await async_playwright().start()
         self.addAsyncCleanup(playwright.stop)
