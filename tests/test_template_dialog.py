@@ -94,13 +94,13 @@ class TemplateDialogTests(unittest.TestCase):
         }""")
         self.assertNotIn("dragging", self.page.locator("#template-dialog").get_attribute("class") or "")
 
-    def test_dialog_is_capped_at_700_pixels_and_fits_smaller_viewports(self) -> None:
+    def test_dialog_is_capped_at_650_pixels_and_fits_smaller_viewports(self) -> None:
         for width, height in ((1000, 900), (480, 600)):
             self.page.set_viewport_size({"width": width, "height": height})
             self.choose_category("landscape")
             bounds = self.page.locator("#template-dialog").bounding_box()
-            self.assertLessEqual(bounds["width"], min(700, width - 32))
-            self.assertLessEqual(bounds["height"], min(700, height - 32))
+            self.assertAlmostEqual(bounds["width"], min(650, width - 32), delta=1)
+            self.assertAlmostEqual(bounds["height"], min(650, height - 32), delta=1)
             self.assertGreaterEqual(bounds["x"], 0)
             self.assertGreaterEqual(bounds["y"], 0)
             self.page.locator("#template-cancel").click()
@@ -115,7 +115,7 @@ class TemplateDialogTests(unittest.TestCase):
             for category in ("square", "landscape", "portrait", "custom", "landscape"):
                 self.choose_category(category)
                 bounds = self.page.locator("#template-dialog").bounding_box()
-                self.assertAlmostEqual(bounds["height"], min(700, height - 32), delta=1)
+                self.assertAlmostEqual(bounds["height"], min(650, height - 32), delta=1)
                 self.assertEqual(bounds, initial)
 
     def test_action_buttons_keep_constant_height_across_categories(self) -> None:
@@ -127,6 +127,31 @@ class TemplateDialogTests(unittest.TestCase):
                     self.assertAlmostEqual(
                         self.page.locator(button).bounding_box()["height"], 44, delta=0.1,
                     )
+
+    def test_status_uses_space_left_of_buttons_without_moving_them(self) -> None:
+        for width, height in ((1000, 900), (480, 600)):
+            self.page.set_viewport_size({"width": width, "height": height})
+            buttons = {
+                selector: self.page.locator(selector).bounding_box()
+                for selector in ("#template-cancel", "#template-apply")
+            }
+            for message in (
+                "Saving dimensions and template...",
+                "No presets are available for this category and units. Choose another category or Custom.",
+                "A very long server error. " * 20,
+                "",
+            ):
+                self.page.locator("#template-status").evaluate(
+                    "(el, message) => {el.textContent = message}", message,
+                )
+                status = self.page.locator("#template-status").bounding_box()
+                actions = self.page.locator(".template-dialog-actions").bounding_box()
+                self.assertLessEqual(status["x"] + status["width"], buttons["#template-cancel"]["x"])
+                self.assertGreaterEqual(status["y"], actions["y"])
+                self.assertLessEqual(status["y"] + status["height"], actions["y"] + actions["height"])
+                for selector, bounds in buttons.items():
+                    self.assertEqual(self.page.locator(selector).bounding_box(), bounds)
+                self.assertEqual(self.page.locator("#template-status").get_attribute("aria-live"), "polite")
 
     def test_controls_and_actions_stay_anchored_across_categories_and_units(self) -> None:
         self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
@@ -192,8 +217,8 @@ class TemplateDialogTests(unittest.TestCase):
             form = self.page.locator("#template-form")
             self.assertTrue(form.evaluate("el => el.scrollHeight <= el.clientHeight + 1"))
             dialog = self.page.locator("#template-dialog").bounding_box()
-            self.assertLessEqual(dialog["width"], min(700, width - 32))
-            self.assertAlmostEqual(dialog["height"], min(700, height - 32), delta=1)
+            self.assertLessEqual(dialog["width"], min(650, width - 32))
+            self.assertAlmostEqual(dialog["height"], min(650, height - 32), delta=1)
             actions = self.page.locator(".template-dialog-actions").bounding_box()
             self.assertLessEqual(actions["x"] + actions["width"], dialog["x"] + dialog["width"])
             self.assertAlmostEqual(
@@ -316,6 +341,45 @@ class TemplateDialogTests(unittest.TestCase):
         self.assertEqual(
             self.page.locator(".template-size-option:has(input:checked)").text_content(), "ISO A0",
         )
+
+    def test_selected_size_is_revealed_on_open_and_unit_changes(self) -> None:
+        self.page.set_viewport_size({"width": 480, "height": 900})
+        for width, height, axis in ((96, 48, "scrollTop"), (48, 96, "scrollLeft")):
+            with self.subTest(orientation=(width, height)):
+                self.page.locator("#template-cancel").click()
+                self.page.locator("#template-dialog").evaluate(
+                    "(el, size) => Object.assign(el.dataset, size)",
+                    {"width": str(width), "height": str(height), "units": "in"},
+                )
+                self.page.locator("#template").click()
+                self.page.wait_for_function("""() => {
+                    const list = document.querySelector('.template-size-options');
+                    const tile = list.querySelector('input:checked').nextElementSibling.getBoundingClientRect();
+                    const r = list.getBoundingClientRect();
+                    const visible = (start, end, origin, size) =>
+                        (start >= origin - 1 && end <= origin + size + 1)
+                        || (start <= origin && end >= origin + size);
+                    return visible(tile.left, tile.right, r.left, list.clientWidth)
+                        && visible(tile.top, tile.bottom, r.top, list.clientHeight);
+                }""")
+                self.assertGreater(self.page.locator(".template-size-options").evaluate(
+                    "(el, axis) => el[axis]", axis,
+                ), 0)
+                actions = self.page.locator(".template-dialog-actions").bounding_box()
+                for units in ("cm", "mm", "in"):
+                    self.page.locator("#template-units-select").select_option(units)
+                    self.page.wait_for_function("""() => {
+                        const list = document.querySelector('.template-size-options');
+                        const tile = list.querySelector('input:checked').nextElementSibling.getBoundingClientRect();
+                        const r = list.getBoundingClientRect();
+                        const visible = (start, end, origin, size) =>
+                            (start >= origin - 1 && end <= origin + size + 1)
+                            || (start <= origin && end >= origin + size);
+                        return visible(tile.left, tile.right, r.left, list.clientWidth)
+                            && visible(tile.top, tile.bottom, r.top, list.clientHeight);
+                    }""")
+                    self.assertEqual(self.page.locator(".template-dialog-actions").bounding_box(), actions)
+                    self.assertEqual(self.page.locator("#template-form").evaluate("el => el.scrollTop"), 0)
 
     def test_landscape_height_groups_alignment_and_vertical_scrolling(self) -> None:
         self.page.set_viewport_size({"width": 480, "height": 900})

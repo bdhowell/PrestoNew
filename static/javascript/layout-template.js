@@ -93,6 +93,23 @@
         heightInput.value = String(Number(height.toFixed(9)));
     }
 
+    function revealSelectedSize() {
+        if (!dialog.open || sizeOptions.hidden) return;
+        const selected = sizeOptions.querySelector("input:checked");
+        if (!selected) return;
+        const tile = selected.nextElementSibling.getBoundingClientRect();
+        const viewport = sizeOptions.getBoundingClientRect();
+        const offset = (start, end, size) => {
+            if (start < 0 && end > size) return 0;
+            return start < 0 ? start : Math.max(0, end - size);
+        };
+        sizeOptions.scrollBy({
+            left: offset(tile.left - viewport.left, tile.right - viewport.left, sizeOptions.clientWidth),
+            top: offset(tile.top - viewport.top, tile.bottom - viewport.top, sizeOptions.clientHeight),
+            behavior: "instant",
+        });
+    }
+
     function renderSizes(category) {
         dialog.dataset.category = category;
         sizeOptions.replaceChildren();
@@ -148,6 +165,7 @@
             radio.addEventListener("change", () => {
                 selectedSize = options[index];
                 setDimensions(width, height);
+                revealSelectedSize();
             });
         }
         sizeOptions.hidden = isCustom;
@@ -164,6 +182,7 @@
                 `<p>I&rsquo;ve disabled ${quantity} ${category} option${disabledCount > 1 ? "s" : ""} because they&rsquo;re too large for your conference requirements.</p>`,
             );
         }
+        requestAnimationFrame(revealSelectedSize);
     }
 
     function initialize() {
@@ -188,6 +207,7 @@
         dialog.style.removeProperty("left");
         dialog.style.removeProperty("top");
         dialog.showModal();
+        revealSelectedSize();
         button.setAttribute("aria-expanded", "true");
     });
     dialog.addEventListener("close", () => button.setAttribute("aria-expanded", "false"));

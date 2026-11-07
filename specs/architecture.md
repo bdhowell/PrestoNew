@@ -1280,14 +1280,18 @@ Implementation contract:
   left of each group, vertically centered and scrolling with it.
   The list shrinks to the available dialog height so scrolling leaves the
   lower-right Cancel and Apply buttons visible and stationary.
-  Every category uses the same viewport-constrained 700px outer height and a
-  maximum outer width of 700px, including padding, borders, and action buttons.
+  Every category uses the same viewport-constrained 650px outer height and a
+  maximum outer width of 650px, including padding, borders, and action buttons.
+  Status messages occupy the space to the left of Cancel and Apply in the same
+  row; long messages scroll within that space without moving the buttons.
   Changing category does not change the dialog height or position.
   Units, Category, and Template stay at fixed vertical positions across categories.
   Only the dimensions area scrolls; Cancel and Apply stay 1.5rem from the
   dialog's inner bottom edge in every category.
   Dragging the dialog title moves it within the viewport; resizing the viewport
   keeps it on-screen, and reopening centers it again.
+  Opening the dialog or changing size options reveals the selected tile within
+  the vertical heights or horizontal widths list without scrolling the form.
 - The dialog disables incompatible presets and shows validation reasons in hover
   tooltips rather than inline within the width and height lists,
   using server-computed errors from the same conference and application dimension
