@@ -155,11 +155,11 @@
 .template-selector-row {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 0.5rem;
 }
 
 .template-layout-options {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
 }
 
 .template-layout-options .template-choice {
@@ -169,7 +169,7 @@
 
 .template-choice-preview {
     position: relative;
-    width: 2.25rem;
+    width: calc(2.25rem * 1.1);
     aspect-ratio: 1;
     flex: none;
 }
