@@ -73,8 +73,8 @@ CREATE TABLE poster (
     resumption   TEXT,
     logo         BYTEA,
     logotype     TEXT,        -- type of the logo (e.g., 'png', 'jpg', 'svg')
-    width        INTEGER DEFAULT NULL,
-    height       INTEGER DEFAULT NULL,
+    width        DOUBLE PRECISION DEFAULT NULL,
+    height       DOUBLE PRECISION DEFAULT NULL,
     units        TEXT NOT NULL DEFAULT 'cm' CHECK (units IN ('cm', 'mm', 'in')),
     description  TEXT,
     moreinfo     TEXT,

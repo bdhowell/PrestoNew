@@ -1261,14 +1261,39 @@ Implementation contract:
 - Media endpoints require ownership. QR PNG bytes come from `poster.moreinfopng`,
   logos from `poster.logo` with an allowlisted `poster.logotype`, and source files
   from owner-scoped source storage. Responses are private and non-cacheable.
-- `poster.width` and `poster.height` are nullable integers, stored in the units
+- `poster.width` and `poster.height` are nullable double-precision numbers, stored in the units
   selected in `poster.units` (`cm`, `mm`, or `in`). New posters have null
   dimensions until the user sets them. Pixel previews convert those dimensions
   to inches at the rendering boundary.
-- User input is **height x width**; whole numbers and `cm`, `mm`, and `in` are accepted.
+- User input is **height x width**; fractional dimensions and `cm`, `mm`, and `in` are accepted.
   Missing units use the
   conference units, or the poster display units without a conference.
-- Landscape and square posters select `arena`; portrait posters select `vertical`.
+- Without an explicit template choice, landscape and square posters select
+  `arena`; portrait posters select `vertical`. The template dialog saves its
+  selected template together with the dimensions and units.
+- Portrait presets in the template dialog scroll horizontally in ascending width
+  groups. Tiles are vertically centered, with thin black vertical separators
+  between groups and a small centered `{width}{units} wide` label below each group
+  that scrolls with it.
+- Landscape presets scroll vertically in ascending height groups, separated by
+  thin black horizontal rules. A small `{height}{units} Hgh` label sits to the
+  left of each group, vertically centered and scrolling with it.
+  The list shrinks to the available dialog height so scrolling leaves the
+  lower-right Cancel and Apply buttons visible and stationary.
+  Every category uses the same viewport-constrained 700px outer height and a
+  maximum outer width of 700px, including padding, borders, and action buttons.
+  Changing category does not change the dialog height or position.
+  Units, Category, and Template stay at fixed vertical positions across categories.
+  Only the dimensions area scrolls; Cancel and Apply stay 1.5rem from the
+  dialog's inner bottom edge in every category.
+- The dialog disables incompatible presets and shows validation reasons in hover
+  tooltips rather than inline within the width and height lists,
+  using server-computed errors from the same conference and application dimension
+  rules enforced when saving. It selects only eligible presets; custom dimensions
+  remain subject to server validation.
+- When a displayed preset list contains disabled options, Wikkit explains that
+  they are too large for the conference requirements, using "one option",
+  "a couple of options", or "some options" for one, two, or more disabled presets.
 - `/layout/dimensions` uses the `layout-dimensions` Wikkit workflow: save exact
   required sizes and wait for confirmation, otherwise offer complete maximum
   sizes, then request custom input as necessary. `idk` uses complete maximum

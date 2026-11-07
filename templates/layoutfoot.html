@@ -8,7 +8,8 @@
             <div id="appearance-controls" class="appearance-controls" role="group" aria-label="Appearance controls" hidden>
                 <button id="theme" aria-label="Theme" title="Theme settings" aria-haspopup="dialog" aria-controls="theme-dialog"><i class="fa-solid fa-palette"></i></button>
                 <button id="font" aria-label="Font" title="Font sets" aria-haspopup="dialog" aria-controls="font-dialog"><i class="fa-solid fa-font"></i></button>
-                <button id="template" aria-label="Template" title="Dimensions and template"><i class="fa-solid fa-columns-3"></i></button>
+                <button id="template" aria-label="Template" title="Dimensions and template"
+                        aria-haspopup="dialog" aria-expanded="false" aria-controls="template-dialog"><i class="fa-solid fa-columns-3"></i></button>
             </div>
             | <button id="bold" aria-label="Bold" title="Bold"><i class="fa-solid fa-bold"></i></button>
             <button id="italic" aria-label="Italic" title="Italic"><i class="fa-solid fa-italic"></i></button>
@@ -135,6 +136,59 @@
             <div class="theme-dialog-actions">
                 <button id="theme-cancel" type="button">Cancel</button>
                 <button id="theme-apply" type="submit">Apply theme</button>
+            </div>
+        </form>
+    </dialog>
+    <dialog id="template-dialog" aria-labelledby="template-dialog-title"
+            data-pid="{{ poster.pid }}" data-width="{{ poster.width or '' }}"
+            data-height="{{ poster.height or '' }}" data-units="{{ poster.units }}"
+            data-template="{{ layout_template }}"
+            data-preset-errors="{{ poster_preset_errors | default({}) | tojson | forceescape }}"
+            data-presets="{{ poster_presets | default({}) | tojson | forceescape }}">
+        <form id="template-form">
+            <h2 id="template-dialog-title">Dimensions and Template</h2>
+            <fieldset id="template-units">
+                <label for="template-units-select">Units</label>
+                <select id="template-units-select" name="units">
+                    <option value="in">in</option>
+                    <option value="cm">cm</option>
+                    <option value="mm">mm</option>
+                </select>
+            </fieldset>
+            <fieldset id="template-categories">
+                <legend>Category</legend>
+                <div class="template-category-options">
+                    {% for category in ["square", "landscape", "portrait", "custom"] %}
+                    <label class="template-choice">
+                        <input type="radio" name="category" value="{{ category }}" required>
+                        <span>{{ category | capitalize }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </fieldset>
+            <fieldset id="template-options">
+                <legend>Template</legend>
+                <div class="template-layout-options">
+                    {% for option in ["arena", "central", "vertical"] %}
+                    <label class="template-choice">
+                        <input type="radio" name="template" value="{{ option }}" required>
+                        <span>{{ option | capitalize }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </fieldset>
+            <fieldset id="template-dimensions">
+                <legend>Dimensions</legend>
+                <div class="template-size-options"></div>
+                <div class="template-custom-dimensions" hidden>
+                    <label>Width <input name="width" type="number" min="0.000001" step="any" required></label>
+                    <label>Height <input name="height" type="number" min="0.000001" step="any" required></label>
+                </div>
+            </fieldset>
+            <p id="template-status" role="status" aria-live="polite"></p>
+            <div class="template-dialog-actions">
+                <button id="template-cancel" type="button">Cancel</button>
+                <button id="template-apply" type="submit">Apply</button>
             </div>
         </form>
     </dialog>

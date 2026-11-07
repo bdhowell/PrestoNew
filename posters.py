@@ -61,6 +61,18 @@ POSTER_MIN_HEIGHT_CM = 36 * 2.54  # cm
 POSTER_MAX_WIDTH_CM = 96 * 2.54  # cm
 POSTER_MAX_HEIGHT_CM = 96 * 2.54  # cm
 POSTER_UNIT_TO_CM = {"cm": 1, "mm": 0.1, "in": 2.54}
+POSTER_PRESETS = {
+    "in": [
+        ("", 44, 44), ("", 48, 48), ("", 30, 40), ("", 36, 56),
+        ("", 36, 72), ("", 36, 96), ("", 42, 60), ("", 42, 72),
+        ("", 42, 90), ("", 48, 72), ("", 48, 96),
+    ],
+    "cm": [
+        ("", 91, 122), ("", 70, 100), ("", 100, 140), ("", 100, 100),
+        ("", 100, 200), ("ISO A0", 84.1, 118.9), ("ISO A1", 59.4, 84.1),
+    ],
+    "mm": [("ISO A0", 841, 1189), ("ISO A1", 594, 841)],
+}
 
 
 class FontSizing(BaseModel):
@@ -150,8 +162,8 @@ class Poster:
     pid: int
     name: str
     description: str | None
-    width: int | None
-    height: int | None
+    width: float | None
+    height: float | None
     template: str | None
     theme: str | None
     purchased: bool
@@ -610,21 +622,16 @@ class PosterStore:
 
     async def set_dimensions(
         self, uid: int, pid: int, width: float, height: float, units: str,
+        template: str | None = None,
     ) -> bool:
         scale = POSTER_UNIT_TO_CM.get(units)
         if scale is None or not all(
             math.isfinite(value) and 0 < value <= 609.6 for value in (width, height)
         ):
             raise ValueError("Invalid poster dimensions or units")
+        if template is not None and template not in TEMPLATES:
+            raise ValueError("Unknown poster template")
         unit_width, unit_height = width / scale, height / scale
-        rounded_width, rounded_height = round(unit_width), round(unit_height)
-        if not all(
-            math.isclose(value, rounded, abs_tol=0.001)
-            for value, rounded in (
-                (unit_width, rounded_width), (unit_height, rounded_height),
-            )
-        ):
-            raise ValueError("Poster dimensions must be whole numbers in the selected units")
         self.invalidate(uid, pid)
         connection = await self._connect()
         async with connection:
@@ -634,8 +641,8 @@ class PosterStore:
                 "WHERE p.uid = %s AND p.pid = %s AND NOT EXISTS "
                 "(SELECT 1 FROM purchase b WHERE b.pid = p.pid) RETURNING p.pid",
                 (
-                    rounded_width, rounded_height, units,
-                    "arena" if width >= height else "vertical", uid, pid,
+                    unit_width, unit_height, units,
+                    template or ("arena" if width >= height else "vertical"), uid, pid,
                 ),
             )
             saved = await cursor.fetchone() is not None

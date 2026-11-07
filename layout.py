@@ -106,12 +106,15 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
     values["author"] = values["authors"]
     if request is None:
         request = Request({"type": "http", "headers": [], "state": {"user_id": uid}})
+    dimension_rules = await rules_for(uid, pid)
     raw = templates.env.get_template(f"layouts/{template}.html").render(
         request=request, poster=poster, layout_template=template,
         theme=posters.theme_classes(poster.theme, poster.theme_settings),
         fonts=poster.fonts if poster.fonts in posters.installed_fonts() else "",
         themes=posters.installed_themes(),
         font_sets=posters.installed_fonts(),
+        poster_presets=posters.POSTER_PRESETS,
+        poster_preset_errors=dimension_rules.preset_errors(),
     )
     document = dom.document_fromstring(raw)
     sizing = posters.LayoutSizing.model_validate((poster.layout_settings or {}).get(template, {}))
@@ -173,6 +176,10 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
         f"--poster-font-scale: {poster.font_scale:.9f}; "
         + "; ".join(f"--{target}-font-scale: {value:g}" for target, value in poster.font_sizes.model_dump().items())
     ))
+    template_dialog = document.get_element_by_id("template-dialog")
+    template_dialog.set("data-width", str(poster.width))
+    template_dialog.set("data-height", str(poster.height))
+    template_dialog.set("data-units", poster.units)
     font_controls = document.get_element_by_id("font-size-controls")
     font_controls.set("data-pid", str(pid))
     font_controls.set("data-sizing", poster.font_sizes.model_dump_json())
@@ -521,10 +528,32 @@ class DimensionRules:
     def fixed(self) -> bool:
         return self.required_width is not None and self.required_height is not None
 
+    def preset_errors(self) -> dict[str, dict[str, list[list[str]]]]:
+        return {
+            units: {
+                category: [
+                    self.errors(
+                        (max(width, height) if category == "landscape" else min(width, height)) * SCALE[units],
+                        (min(width, height) if category == "landscape" else max(width, height)) * SCALE[units],
+                        units,
+                    )
+                    for _, width, height in presets
+                ]
+                for category in ("square", "portrait", "landscape")
+            }
+            for units, presets in posters.POSTER_PRESETS.items()
+        }
+
     def errors(self, width: float, height: float, units: str | None = None) -> list[str]:
         units = units or self.units
         scale = SCALE[units]
         errors = []
+        is_preset = any(
+            math.isclose(min(width, height), min(preset_width, preset_height) * SCALE[preset_units], abs_tol=0.001)
+            and math.isclose(max(width, height), max(preset_width, preset_height) * SCALE[preset_units], abs_tol=0.001)
+            for preset_units, presets in posters.POSTER_PRESETS.items()
+            for _, preset_width, preset_height in presets
+        )
         for label, value, minimum, required, maximum in (
             ("width", width, posters.POSTER_MIN_WIDTH_CM, self.required_width,
              min(self.max_width, posters.POSTER_MAX_WIDTH_CM)
@@ -537,14 +566,10 @@ class DimensionRules:
                 errors.append(f"Poster {label} must be a positive finite number.")
             elif required is not None and not math.isclose(value, required, abs_tol=0.001):
                 errors.append(f"Poster {label} must match the conference requirement.")
-            elif value < minimum and required is None:
+            elif value < minimum and required is None and not is_preset:
                 errors.append(f"Your poster {label} is too small. Nobody will be able to read it. The minimum is {minimum / scale:g} {units}.")
             if value > maximum + 0.001:
                 errors.append(f"Poster {label} is too big. The maximum is {maximum / scale:g} {units}.")
-            if math.isfinite(value) and value > 0 and not math.isclose(
-                value / scale, round(value / scale), abs_tol=0.001,
-            ):
-                errors.append(f"Poster {label} must be a whole number using the selected units.")
         return errors
 
 
@@ -579,8 +604,15 @@ def dimensions_payload(width: float, height: float, units: str) -> dict[str, obj
     return {"width": width / SCALE[units], "height": height / SCALE[units], "units": units}
 
 
-async def save_dimensions(uid: int, pid: int, width: float, height: float, units: str) -> None:
-    if not await posters.store().set_dimensions(uid, pid, width, height, units):
+async def save_dimensions(
+    uid: int, pid: int, width: float, height: float, units: str,
+    template: str | None = None,
+) -> None:
+    if template is None:
+        saved = await posters.store().set_dimensions(uid, pid, width, height, units)
+    else:
+        saved = await posters.store().set_dimensions(uid, pid, width, height, units, template)
+    if not saved:
         raise HTTPException(409, "This poster can no longer be edited.")
 
 
@@ -604,6 +636,9 @@ async def update_dimensions(request: Request) -> JSONResponse:
     text = data.get("dimensions")
     if not isinstance(text, str) or len(text) > 100:
         raise HTTPException(422, "Enter height x width and units.")
+    template = data.get("template")
+    if template is not None and template not in posters.TEMPLATES:
+        raise HTTPException(422, "Choose a valid poster template.")
     try:
         poster = await owned(request, draft=True)
         rules = await rules_for(uid_for(request), poster.pid)
@@ -612,7 +647,7 @@ async def update_dimensions(request: Request) -> JSONResponse:
         payload = dimensions_payload(width, height, units)
         if errors:
             return JSONResponse({"ok": False, "errors": errors, "preview": payload}, status_code=422)
-        await save_dimensions(uid_for(request), poster.pid, width, height, units)
+        await save_dimensions(uid_for(request), poster.pid, width, height, units, template)
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
     except psycopg.Error:

@@ -52,9 +52,32 @@ available and its saved adjustments apply relative to the original proportions.
 
 # Template Selection
 
-Clicking the `#template` button displays a dialog modeled on the template selection interface in the included keynote document (`/specs/template-selection.key`).
+Clicking the `#template` button opens a dialog with Square, Landscape, Portrait,
+and Custom categories, the Arena, Central, and Vertical templates, and selectable
+poster dimensions. A general units selector before the categories sets both the
+preset catalog and the saved poster units (`in`, `cm`, or `mm`).
+Inch sizes are 44 x 44, 48 x 48, 30 x 40, 36 x 56, 36 x 72, 36 x 96,
+42 x 60, 42 x 72, 42 x 90, 48 x 72, and 48 x 96.
+Centimeter sizes are 91 x 122, 70 x 100, 100 x 140, 100 x 100, 100 x 200,
+ISO A0 (84.1 x 118.9), and ISO A1 (59.4 x 84.1).
+Millimeter sizes are ISO A0 (841 x 1189) and ISO A1 (594 x 841).
+Filter square presets separately and orient rectangular presets to the selected
+Landscape or Portrait category. Scale preset previews at 1 inch = 2 pixels in
+all units. Empty combinations (such as Square in mm) show an explicit message
+and cannot be applied; Custom remains available.
 
-Set the category, template, and dimensions based on the poster's current dimensions and template choice.
+On open, select the category and preset matching the poster's current dimensions,
+or Custom when no preset matches, and select the poster's current template.
+Custom dimensions retain the current values and units until edited. Applying the
+dialog saves the selected dimensions and template together.
+Changing units converts custom dimensions without changing physical size.
+Fractional dimensions retain the selected units, including ISO sizes in cm.
+Listed presets may be below the general minimum dimensions; conference
+requirements and maximum dimensions still apply.
+
+Existing databases must apply `schema/poster-dimensions.sql` before deploying
+fractional dimension support. This repeatable migration preserves current
+values while converting `poster.width` and `poster.height` to double precision.
 
 # Graphics Handling
 
