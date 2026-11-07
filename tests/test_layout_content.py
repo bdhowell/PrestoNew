@@ -20,6 +20,57 @@ FORMATTING = {
 
 
 class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
+    async def test_flush_header_doubles_height_and_aligns_text_with_body(self) -> None:
+        await self.page.set_content("""<body class="blue colored-section-headers">
+            <div class="layout" style="width: 900px">
+                <div class="section">
+                    <div class="header"><span>Heading</span></div>
+                    <div class="content">Body</div>
+                </div>
+            </div></body>""")
+        for stylesheet in ("layout", "themes"):
+            await self.page.add_style_tag(path=str(ROOT / f"static/css/{stylesheet}.css"))
+        heading = self.page.locator(".header")
+        for font_size in (16, 32):
+            await self.page.locator(".layout").evaluate(
+                "(el, size) => {el.style.fontSize = `${size}px`}", font_size,
+            )
+            baseline = await heading.bounding_box()
+            await self.page.locator("body").evaluate("el => el.classList.add('colored-poster-header')")
+            bounds = await heading.bounding_box()
+            text = await heading.locator("span").bounding_box()
+            body_left = await self.page.locator(".content").evaluate(
+                "el => el.getBoundingClientRect().left + parseFloat(getComputedStyle(el).paddingLeft)",
+            )
+            self.assertAlmostEqual(bounds["height"], baseline["height"] * 2, delta=1)
+            self.assertAlmostEqual(
+                text["y"] + text["height"] / 2, bounds["y"] + bounds["height"] / 2, delta=1,
+            )
+            self.assertAlmostEqual(text["x"], body_left, delta=0.1)
+            self.assertEqual(await self.page.locator(".content").evaluate(
+                "el => getComputedStyle(el).paddingTop",
+            ), "48px")
+            self.assertEqual(await heading.evaluate(
+                "el => getComputedStyle(el).marginBottom",
+            ), "0px")
+            self.assertEqual(await heading.evaluate(
+                "el => getComputedStyle(el).paddingRight",
+            ), await self.page.locator(".content").evaluate(
+                "el => getComputedStyle(el).paddingRight",
+            ))
+            await self.page.locator("body").evaluate("el => el.classList.remove('colored-poster-header')")
+            self.assertEqual(await heading.bounding_box(), baseline)
+            self.assertEqual(await self.page.locator(".content").evaluate(
+                "el => getComputedStyle(el).paddingTop",
+            ), "0px")
+            self.assertEqual(await heading.evaluate(
+                "el => getComputedStyle(el).marginBottom",
+            ), "16px")
+            content = await self.page.locator(".content").bounding_box()
+            self.assertAlmostEqual(
+                content["y"] - baseline["y"] - baseline["height"], 16, delta=0.1,
+            )
+
     async def test_colored_section_headers_are_flush_and_clipped_to_section_corners(self) -> None:
         await self.page.set_content("""<body class="blue colored-section-headers">
             <div class="layout" style="width: 900px">

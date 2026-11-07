@@ -158,7 +158,7 @@
 }
 
 .colored-poster-header.colored-section-headers .layout .section > .content {
-    padding: 0 5rem 5rem;
+    padding: 3rem 5rem 5rem;
 }
 
 .colored-poster-header.colored-section-headers .layout .section-parent:not(.vertical):not(.column):not([data-direction="vertical"]):not([data-orientation="vertical"]):not([style*="column"]) {
@@ -171,13 +171,17 @@
 
 .colored-section-headers .layout .section > .header {
     padding: 0.1em 0.35em;
+    margin-bottom: 1.667rem;
     color: var(--heading-text-color);
     background: var(--heading-background-color);
 }
 
 .colored-poster-header.colored-section-headers .layout .section > .header {
     box-sizing: border-box;
+    margin-bottom: 0;
     width: 100%;
+    min-height: calc(2lh + 0.4em);
+    padding-inline: 5rem;
     border-radius: 0;
 }
 

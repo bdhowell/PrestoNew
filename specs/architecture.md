@@ -1261,6 +1261,10 @@ Implementation contract:
   Section and grouped-section outlines clip the colored heading backgrounds to
   their top corner radii; body content retains padding. Without a separately
   colored poster header, section headings retain their previous inset styling.
+  Flush colored headings have twice the default single-line height, vertically
+  centered text, and the same horizontal padding as the body content below.
+  Body content below flush colored headings has 3rem of top padding.
+  Non-flush colored section headings have a 1rem bottom margin.
   The ocean, forest, plum, terracotta, slate, and gold palettes coordinate dark
   headers and light header text with pale poster backgrounds and dark body text.
 - The last poster lookup is cached by owner and poster ID for two seconds;
