@@ -767,8 +767,15 @@ Write a local function that takes a Python text or binary object and produces a 
   Pages, Numbers and Keynote files are submitted directly to Docling on every
   platform. No local Apple apps, AppleScript or PDF export is required;
   unsupported service conversions fail explicitly.
-- Nonempty source text is summarized into `source.summary`. Uploaded images
-  receive model-generated descriptions. Configure `DOCLING_SERVICE_URL`,
+- Saved poster sections are summarized by the asynchronous
+  `source_processing.summarize(pid, section, words)` API. It reuses the largest
+  cached summary in the inclusive range `words - floor(words / divisor)` to
+  `words`, where `SUMMARIZATION_VARIANCE_DIVISOR` defaults to 22.
+  `SUMMARIZATION_MODEL` defaults to `gpt-4.1`. New summaries must meet that range
+  and are stored with their actual word count and section-content hash, preventing
+  reuse after edits. Apply `schema/section-summarization.sql` to existing databases.
+  Callers must authorize poster access before summarization.
+  Uploaded images receive model-generated descriptions. Configure `DOCLING_SERVICE_URL`,
   optionally `DOCLING_SERVICE_API_KEY`, and `OPENAI_API_KEY`;
   `OPENAI_POSTER_MODEL` defaults to `gpt-4.1`. Source analysis uses no browsing
   tools or shared prompt cache. Model/converter failures are reported on the

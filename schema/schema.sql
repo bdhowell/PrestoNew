@@ -227,8 +227,8 @@ CREATE TABLE summarization (
     which       section_which NOT NULL,
     words       INTEGER NOT NULL,
     summary     TEXT NOT NULL,
-    created     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (pid, which)
+    source_hash TEXT NOT NULL DEFAULT '', -- summaries of older section content are not reused
+    created     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX idx_summarization_pid_which_words ON summarization (pid, which, words);

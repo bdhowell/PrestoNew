@@ -48,25 +48,34 @@ the poster has dimensions, separately for each template. Restore them on reopen.
 Clip content that outgrows its fixed area. Manual gutter resizing remains
 available and its saved adjustments apply relative to the original proportions.
 
-= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
-
 # Section Summarization
 
-Change `source_processing.summarize(text:str)->str` to `def summarize(pid: int, section:str, words:int)->str`
+The asynchronous API is `source_processing.summarize(pid: int, section: str, words: int) -> str`.
+Callers must authorize access to the poster before invoking it. Use canonical
+`section.which` names, such as `conclusion` and `acknowledgements`.
 Retrieve the corresponding poster section using the `pid` and `section` parameters and find an existing suitable summary or use ChatGPT to generate a summary based on the specified number of words.
 
+Existing databases must apply `schema/section-summarization.sql` before deployment.
+Summaries are stored with their actual whitespace-delimited word count and a SHA-256
+hash of the section content. Summaries of different lengths can coexist; legacy
+summaries without a matching content hash are not reused.
+
 ## Check for Existing Summary
-Before generating a new summary, check the summarization table to see if there is an existing summary for the given pid, section, and words within the computed allowed word range: words - math.floor(words/os.environ.get("SUMMARIZATION_VARIANCE_DIVISOR", 22)), words
+Before generating a new summary, check the summarization table for the given pid,
+section, and current content hash within the inclusive range
+`words - math.floor(words / int(os.environ.get("SUMMARIZATION_VARIANCE_DIVISOR", "22")))`
+through `words`.
 if a summary exists within the allowed word range:
     return largest_matching_summary
 
 ## Generate New Summary with ChatGPT
+```python
 async with openai.AsyncOpenAI(timeout=120, max_retries=0) as client:
 	response = await client.responses.create(
 		model=os.environ.get("SUMMARIZATION_MODEL", "gpt-4.1"),
 		instructions=f"""
 Summarize the {section} section of a well-structured research presentation poster (Introduction, Materials and Methods, Results, Conclusions, Literature Cited, Acknowledgments, Additional Information) in not more than {words} words.
-As few as {math.floor(words/os.environ.get("SUMMARIZATION_VARIANCE_DIVISOR", 22))} words is acceptable. 
+As few as {words - math.floor(words/int(os.environ.get("SUMMARIZATION_VARIANCE_DIVISOR", "22")))} words is acceptable.
 Preserve factual results, limitations and key claims. 
 Maintain clarity and conciseness within the specified word limit.
 As much as possible, maintain the tone of the source.
@@ -80,12 +89,10 @@ if not summary:
 	raise ProcessingError("The summarizer returned no summary.")
 ```
 
-
-Clicking an outlined object does not hide its outline.
-
-After any change content and 
-
-= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+The variance divisor must be a positive integer (default 22). Empty sections,
+missing sections, empty model output, and generated summaries outside the allowed
+word range fail explicitly. Successful summaries are saved for reuse; if the
+section changed during generation, report a retryable error instead of saving.
 
 # Template Selection
 
@@ -403,13 +410,17 @@ If 'resize':
 - Wikkit says: f"Ok, {identity.username}, make your adjustments and then let me know that you&rsquo;re ready to auto-fit your text and I&rquo;ll get right on it.
 
 
-
 ## Create a function, `def auto_fit(pid:int, sections:[str]|None=None):
+FOR each section in sections:
+	- Determine amount of vertical overflow
+	- word_count = count words in existing text
+	- word_target = word_count * percentage of the text's vertical visual overflow
+
 Determine amount of vertical overflow
 word_count = count words in existing text
 word_target = word_count * percentage of the text's vertical visual overflow
 
-check the `sizings` table for a sizing with a word count +/- os.env.get('SIZINGS_WORDS_PERCENTAGE', 8%) of the percentage of vertical overflow
+Check the `sizings` table for a sizing with a word count  of the percentage of vertical overflow
 
 source_text = the full-length original section text
 prior_text = source_text

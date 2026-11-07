@@ -752,7 +752,10 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(source_processing.ProcessingError):
                 source_processing.extract("file.md", b"# Research")
             with self.assertRaises(source_processing.ProcessingError):
-                await source_processing.summarize("research")
+                connection = AsyncMock()
+                connection.execute.return_value.fetchone.side_effect = [("research",), None]
+                with patch.object(posters.store(), "_connect", AsyncMock(return_value=connection)):
+                    await source_processing.summarize(11, "results", 1)
 
     async def test_upload_chat_finished_replies_invoke_the_same_validated_finish_command(self) -> None:
         from routers.wikkit import finished_uploading, upload_workflow
@@ -789,9 +792,12 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         client.responses.create.return_value.output_text = "Summary of research"
         context = AsyncMock()
         context.__aenter__.return_value = client
+        connection = AsyncMock()
+        connection.execute.return_value.fetchone.side_effect = [("Research facts",), None, (1,)]
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), \
-                patch.object(source_processing.openai, "AsyncOpenAI", return_value=context):
-            self.assertEqual(await source_processing.summarize("Research facts"), "Summary of research")
+                patch.object(source_processing.openai, "AsyncOpenAI", return_value=context), \
+                patch.object(posters.store(), "_connect", AsyncMock(return_value=connection)):
+            self.assertEqual(await source_processing.summarize(11, "results", 3), "Summary of research")
         self.assertNotIn("tools", client.responses.create.call_args.kwargs)
 
     async def test_real_docling_manifest_with_injected_client_never_calls_network(self) -> None:

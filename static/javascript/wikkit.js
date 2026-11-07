@@ -22,7 +22,7 @@
                 element.style.outline = "none";
             }
         }
-    });
+    }, {capture: true});
 
     window.registerWikkitCommands = function registerWikkitCommands({ commands }) {
         if (!commands || typeof commands !== "object" || Array.isArray(commands)) {

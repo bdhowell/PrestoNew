@@ -757,7 +757,10 @@ class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
             element.id = 'outlined';
             element.style.outline = '4px solid red';
             element.innerHTML = '<span>Outlined</span>';
-            element.onclick = () => { element.dataset.clicked = 'true'; };
+            element.onclick = event => {
+                element.dataset.clicked = 'true';
+                event.stopPropagation();
+            };
             document.body.prepend(element);
         }""")
         await self.page.locator("#outlined span").click()
