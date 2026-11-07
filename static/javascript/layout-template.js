@@ -8,6 +8,7 @@
 
     const categoryOptions = [...form.querySelectorAll("input[name='category']")];
     const templateOptions = [...form.querySelectorAll("input[name='template']")];
+    const templatePreview = form.querySelector(".template-choice-preview");
     const sizeOptions = form.querySelector(".template-size-options");
     const customDimensions = form.querySelector(".template-custom-dimensions");
     const widthInput = form.elements.width;
@@ -93,8 +94,11 @@
         heightInput.value = String(Number(height.toFixed(9)));
     }
 
-    function renderTemplatePreview(shape) {
-        const template = form.querySelector("input[name='template']:checked").value;
+    function renderTemplatePreview(
+        shape,
+        template = form.querySelector("input[name='template']:checked").value,
+        previewClass = "template-size-preview",
+    ) {
         const central = template === "central";
         const bottom = central ? 94 : 76;
         const middle = (22 + bottom) / 2;
@@ -109,7 +113,7 @@
                 : [[6, 76, 29, 18], [35, 76, 30, 18], [65, 76, 29, 18]]),
         ];
         const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        svg.classList.add("template-size-preview");
+        svg.classList.add(previewClass);
         svg.setAttribute("viewBox", "0 0 100 100");
         svg.setAttribute("preserveAspectRatio", "none");
         svg.setAttribute("aria-hidden", "true");
@@ -121,7 +125,7 @@
             }
             svg.append(rect);
         }
-        shape.querySelector(".template-size-preview")?.remove();
+        shape.querySelector("svg")?.remove();
         shape.prepend(svg);
     }
 
@@ -233,6 +237,11 @@
         for (const option of templateOptions) {
             option.checked = option.value === dialog.dataset.template;
         }
+        renderTemplatePreview(
+            templatePreview,
+            dialog.dataset.template,
+            "template-choice-layout-preview",
+        );
         setDimensions(width, height);
         renderSizes(category);
     }
@@ -253,7 +262,14 @@
     form.addEventListener("change", event => {
         if (event.target.name === "category") renderSizes(event.target.value);
         if (event.target.name === "template") {
-            sizeOptions.querySelectorAll(".template-size-shape").forEach(renderTemplatePreview);
+            renderTemplatePreview(
+                templatePreview,
+                event.target.value,
+                "template-choice-layout-preview",
+            );
+            sizeOptions.querySelectorAll(".template-size-shape").forEach(
+                shape => renderTemplatePreview(shape),
+            );
         }
         if (event.target === unitsInput) {
             const conversion = scales[activeUnits] / scales[unitsInput.value];

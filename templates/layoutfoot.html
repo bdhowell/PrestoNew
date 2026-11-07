@@ -168,13 +168,16 @@
             </fieldset>
             <fieldset id="template-options">
                 <legend>Template</legend>
-                <div class="template-layout-options">
-                    {% for option in ["arena", "central", "vertical"] %}
-                    <label class="template-choice">
-                        <input type="radio" name="template" value="{{ option }}" required>
-                        <span>{{ option | capitalize }}</span>
-                    </label>
-                    {% endfor %}
+                <div class="template-selector-row">
+                    <div class="template-layout-options">
+                        {% for option in ["arena", "central", "vertical"] %}
+                        <label class="template-choice">
+                            <input type="radio" name="template" value="{{ option }}" required>
+                            <span>{{ option | capitalize }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    <span class="template-choice-preview" aria-hidden="true"></span>
                 </div>
             </fieldset>
             <fieldset id="template-dimensions">

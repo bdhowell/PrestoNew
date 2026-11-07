@@ -176,6 +176,39 @@ class TemplateDialogTests(unittest.TestCase):
             ))
             self.page.locator("#template-units-select").select_option("in")
 
+    def test_template_choices_preview_sections_without_selected_outlines(self) -> None:
+        for category in ("square", "landscape", "portrait", "custom"):
+            self.choose_category(category)
+            category_background = self.page.locator(
+                f"label:has(input[name=category][value={category}])",
+            ).evaluate("el => getComputedStyle(el).backgroundColor")
+            for template in ("arena", "central", "vertical"):
+                choice = self.page.locator(
+                    f"label:has(input[name=template][value={template}])",
+                )
+                choice.click()
+                preview = self.page.locator(".template-choice-layout-preview")
+                self.assertEqual(preview.get_attribute("data-template"), template)
+                self.assertEqual(preview.locator("rect").count(), 8)
+                self.assertTrue(preview.evaluate("""svg => {
+                    const style = getComputedStyle(svg);
+                    return style.fill === "none"
+                        && style.stroke !== getComputedStyle(svg.parentElement).backgroundColor;
+                }"""))
+                self.assertEqual(
+                    choice.evaluate("el => getComputedStyle(el).outlineStyle"), "none",
+                )
+            selected = self.page.locator("label:has(input[name=template]:checked)")
+            self.assertEqual(
+                selected.evaluate("el => getComputedStyle(el).backgroundColor"),
+                category_background,
+            )
+            self.assertGreaterEqual(
+                self.page.locator(".template-choice-preview").bounding_box()["x"],
+                self.page.locator(".template-layout-options").bounding_box()["x"]
+                + self.page.locator(".template-layout-options").bounding_box()["width"],
+            )
+
     def test_status_uses_space_left_of_buttons_without_moving_them(self) -> None:
         for width, height in ((1000, 900), (480, 600)):
             self.page.set_viewport_size({"width": width, "height": height})
