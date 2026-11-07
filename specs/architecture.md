@@ -1286,6 +1286,8 @@ Implementation contract:
   Units, Category, and Template stay at fixed vertical positions across categories.
   Only the dimensions area scrolls; Cancel and Apply stay 1.5rem from the
   dialog's inner bottom edge in every category.
+  Dragging the dialog title moves it within the viewport; resizing the viewport
+  keeps it on-screen, and reopening centers it again.
 - The dialog disables incompatible presets and shows validation reasons in hover
   tooltips rather than inline within the width and height lists,
   using server-computed errors from the same conference and application dimension

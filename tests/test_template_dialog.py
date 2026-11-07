@@ -47,6 +47,53 @@ class TemplateDialogTests(unittest.TestCase):
     def choose_category(self, category: str) -> None:
         self.page.locator(f"label:has(input[name=category][value={category}])").click()
 
+    def test_title_drag_moves_dialog_and_preserves_anchored_controls(self) -> None:
+        layout_style = self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
+        initial = self.page.locator("#template-dialog").bounding_box()
+        title = self.page.locator("#template-dialog-title").bounding_box()
+        x, y = title["x"] + 20, title["y"] + 20
+        self.page.mouse.move(x, y)
+        self.page.mouse.down()
+        self.page.mouse.move(x + 75, y + 50, steps=5)
+        self.page.mouse.up()
+        moved = self.page.locator("#template-dialog").bounding_box()
+        self.assertAlmostEqual(moved["x"], initial["x"] + 75)
+        self.assertAlmostEqual(moved["y"], initial["y"] + 50)
+        self.assertEqual(moved["width"], initial["width"])
+        self.assertEqual(moved["height"], initial["height"])
+        for category in ("square", "landscape", "portrait", "custom"):
+            self.choose_category(category)
+            self.assertEqual(self.page.locator("#template-dialog").bounding_box(), moved)
+            actions = self.page.locator(".template-dialog-actions").bounding_box()
+            self.assertAlmostEqual(
+                moved["y"] + moved["height"] - actions["y"] - actions["height"], 25,
+            )
+        self.page.mouse.move(x, y)
+        self.assertEqual(self.page.locator("#template-dialog").bounding_box(), moved)
+        self.page.locator("#template-cancel").click()
+        layout_style.evaluate("el => el.remove()")
+        self.page.locator("#template").click()
+        self.assertEqual(self.page.locator("#template-dialog").bounding_box(), initial)
+
+    def test_drag_is_clamped_and_viewport_resize_keeps_dialog_visible(self) -> None:
+        title = self.page.locator("#template-dialog-title").bounding_box()
+        self.page.mouse.move(title["x"] + 20, title["y"] + 20)
+        self.page.mouse.down()
+        self.page.mouse.move(-100, -100)
+        bounds = self.page.locator("#template-dialog").bounding_box()
+        self.assertEqual((bounds["x"], bounds["y"]), (0, 0))
+        self.page.mouse.move(1500, 1500)
+        self.page.mouse.up()
+        bounds = self.page.locator("#template-dialog").bounding_box()
+        self.assertEqual(bounds["x"] + bounds["width"], 1000)
+        self.assertEqual(bounds["y"] + bounds["height"], 900)
+        self.page.set_viewport_size({"width": 480, "height": 600})
+        self.page.wait_for_function("""() => {
+            const r = document.querySelector('#template-dialog').getBoundingClientRect();
+            return r.x >= 0 && r.y >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;
+        }""")
+        self.assertNotIn("dragging", self.page.locator("#template-dialog").get_attribute("class") or "")
+
     def test_dialog_is_capped_at_700_pixels_and_fits_smaller_viewports(self) -> None:
         for width, height in ((1000, 900), (480, 600)):
             self.page.set_viewport_size({"width": width, "height": height})

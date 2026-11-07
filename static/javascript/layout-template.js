@@ -16,6 +16,7 @@
     const status = document.getElementById("template-status");
     const cancel = document.getElementById("template-cancel");
     const apply = document.getElementById("template-apply");
+    const dragHandle = document.getElementById("template-dialog-title");
     const scales = {in: 2.54, cm: 1, mm: 0.1};
     const tilePixelsPerInch = 2;
     const presets = JSON.parse(dialog.dataset.presets);
@@ -23,6 +24,49 @@
     let activeUnits = dialog.dataset.units;
     let selectedSize = null;
     let saving = false;
+    let dragging = null;
+
+    function moveDialog(left, top) {
+        const bounds = dialog.getBoundingClientRect();
+        const clamp = (value, max) => Math.min(Math.max(value, 0), Math.max(max, 0));
+        dialog.style.margin = "0";
+        dialog.style.left = `${clamp(left, window.innerWidth - bounds.width)}px`;
+        dialog.style.top = `${clamp(top, window.innerHeight - bounds.height)}px`;
+    }
+
+    dragHandle.addEventListener("pointerdown", event => {
+        if (event.button !== 0 || dragging) return;
+        const bounds = dialog.getBoundingClientRect();
+        dragging = {
+            pointer: event.pointerId,
+            offsetX: event.clientX - bounds.left,
+            offsetY: event.clientY - bounds.top,
+        };
+        moveDialog(bounds.left, bounds.top);
+        dragHandle.setPointerCapture(event.pointerId);
+        dialog.classList.add("dragging");
+        event.preventDefault();
+    });
+    dragHandle.addEventListener("pointermove", event => {
+        if (!dragging || dragging.pointer !== event.pointerId) return;
+        moveDialog(event.clientX - dragging.offsetX, event.clientY - dragging.offsetY);
+    });
+    function finishDrag(event) {
+        if (!dragging || dragging.pointer !== event.pointerId) return;
+        dragging = null;
+        dialog.classList.remove("dragging");
+        if (dragHandle.hasPointerCapture(event.pointerId)) {
+            dragHandle.releasePointerCapture(event.pointerId);
+        }
+    }
+    dragHandle.addEventListener("pointerup", finishDrag);
+    dragHandle.addEventListener("pointercancel", finishDrag);
+    dragHandle.addEventListener("lostpointercapture", finishDrag);
+    window.addEventListener("resize", () => {
+        if (!dialog.open || !dialog.style.left) return;
+        const bounds = dialog.getBoundingClientRect();
+        moveDialog(bounds.left, bounds.top);
+    });
 
     function sizesFor(category) {
         if (category === "custom") return [];
@@ -140,6 +184,9 @@
 
     button.addEventListener("click", () => {
         initialize();
+        dialog.style.removeProperty("margin");
+        dialog.style.removeProperty("left");
+        dialog.style.removeProperty("top");
         dialog.showModal();
         button.setAttribute("aria-expanded", "true");
     });

@@ -28,6 +28,13 @@
 #template-form > h2 {
     margin: 0;
     font-size: 1.5rem;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+}
+
+#template-dialog.dragging #template-dialog-title {
+    cursor: grabbing;
 }
 
 #template-form fieldset {
