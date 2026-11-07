@@ -1284,6 +1284,9 @@ Implementation contract:
   maximum outer width of 650px, including padding, borders, and action buttons.
   Status messages occupy the space to the left of Cancel and Apply in the same
   row; long messages scroll within that space without moving the buttons.
+  Each preset tile shows contrasting section outlines for the selected template.
+  Adjacent sections share edges without gaps, retaining an outer preview margin.
+  Changing the template updates all outlines while keeping size labels centered.
   Changing category does not change the dialog height or position.
   Units, Category, and Template stay at fixed vertical positions across categories.
   Only the dimensions area scrolls; Cancel and Apply stay 1.5rem from the

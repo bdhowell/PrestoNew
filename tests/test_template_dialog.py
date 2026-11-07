@@ -128,6 +128,54 @@ class TemplateDialogTests(unittest.TestCase):
                         self.page.locator(button).bounding_box()["height"], 44, delta=0.1,
                     )
 
+    def test_size_tiles_preview_selected_template_and_keep_labels_centered(self) -> None:
+        for category in ("square", "landscape", "portrait"):
+            self.choose_category(category)
+            selected = self.page.locator("input[name=size]:checked").input_value()
+            for template in ("arena", "central", "vertical"):
+                self.page.locator(f"label:has(input[name=template][value={template}])").click()
+                shapes = self.page.locator(".template-size-shape")
+                self.assertEqual(self.page.locator(".template-size-preview").count(), shapes.count())
+                for shape in shapes.all():
+                    preview = shape.locator(".template-size-preview")
+                    self.assertEqual(preview.get_attribute("data-template"), template)
+                    self.assertEqual(preview.get_attribute("aria-hidden"), "true")
+                    self.assertEqual(preview.locator("rect").count(), 8)
+                    self.assertEqual(preview.locator("rect").last.get_attribute("x"),
+                                     "72" if template == "central" else "65")
+                    self.assertTrue(preview.evaluate("""svg => {
+                        const rects = [...svg.children].map(rect =>
+                            Object.fromEntries(['x', 'y', 'width', 'height'].map(
+                                key => [key, Number(rect.getAttribute(key))],
+                            )));
+                        const area = rects.reduce((sum, r) => sum + r.width * r.height, 0);
+                        return area === 88 * 88 && rects.every((r, i) =>
+                            r.x >= 6 && r.y >= 6 && r.x + r.width <= 94 && r.y + r.height <= 94
+                            && rects.slice(i + 1).every(other =>
+                                r.x + r.width <= other.x || other.x + other.width <= r.x
+                                || r.y + r.height <= other.y || other.y + other.height <= r.y));
+                    }"""))
+                    bounds = shape.bounding_box()
+                    caption = shape.locator(".template-size-caption").bounding_box()
+                    self.assertAlmostEqual(
+                        bounds["x"] + bounds["width"] / 2,
+                        caption["x"] + caption["width"] / 2, delta=1,
+                    )
+                    self.assertAlmostEqual(
+                        bounds["y"] + bounds["height"] / 2,
+                        caption["y"] + caption["height"] / 2, delta=1,
+                    )
+                    self.assertTrue(shape.evaluate("""el => {
+                        const preview = getComputedStyle(el.querySelector('svg'));
+                        return preview.stroke !== getComputedStyle(el).backgroundColor;
+                    }"""))
+                self.assertEqual(self.page.locator("input[name=size]:checked").input_value(), selected)
+            self.page.locator("#template-units-select").select_option("cm")
+            self.assertTrue(self.page.locator(".template-size-preview").evaluate_all(
+                "previews => previews.every(preview => preview.dataset.template === 'vertical')",
+            ))
+            self.page.locator("#template-units-select").select_option("in")
+
     def test_status_uses_space_left_of_buttons_without_moving_them(self) -> None:
         for width, height in ((1000, 900), (480, 600)):
             self.page.set_viewport_size({"width": width, "height": height})

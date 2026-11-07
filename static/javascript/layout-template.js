@@ -93,6 +93,38 @@
         heightInput.value = String(Number(height.toFixed(9)));
     }
 
+    function renderTemplatePreview(shape) {
+        const template = form.querySelector("input[name='template']:checked").value;
+        const central = template === "central";
+        const bottom = central ? 94 : 76;
+        const middle = (22 + bottom) / 2;
+        const sections = [
+            [6, 6, 88, 16],
+            [6, 22, 22, middle - 22],
+            [6, middle, 22, bottom - middle],
+            [28, 22, 44, bottom - 22],
+            [72, 22, 22, central ? 36 : bottom - 22],
+            ...(central
+                ? [[72, 58, 22, 12], [72, 70, 22, 12], [72, 82, 22, 12]]
+                : [[6, 76, 29, 18], [35, 76, 30, 18], [65, 76, 29, 18]]),
+        ];
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.classList.add("template-size-preview");
+        svg.setAttribute("viewBox", "0 0 100 100");
+        svg.setAttribute("preserveAspectRatio", "none");
+        svg.setAttribute("aria-hidden", "true");
+        svg.dataset.template = template;
+        for (const [x, y, width, height] of sections) {
+            const rect = document.createElementNS(svg.namespaceURI, "rect");
+            for (const [attribute, value] of Object.entries({x, y, width, height})) {
+                rect.setAttribute(attribute, String(value));
+            }
+            svg.append(rect);
+        }
+        shape.querySelector(".template-size-preview")?.remove();
+        shape.prepend(svg);
+    }
+
     function revealSelectedSize() {
         if (!dialog.open || sizeOptions.hidden) return;
         const selected = sizeOptions.querySelector("input:checked");
@@ -154,8 +186,12 @@
             radio.checked = selectedSize !== null && matches(selectedSize, width, height);
             const shape = document.createElement("span");
             shape.className = "template-size-shape";
-            shape.textContent = name || (unitsInput.value === "in"
+            const caption = document.createElement("span");
+            caption.className = "template-size-caption";
+            caption.textContent = name || (unitsInput.value === "in"
                 ? `${width}" x ${height}"` : `${width} x ${height} ${unitsInput.value}`);
+            shape.append(caption);
+            renderTemplatePreview(shape);
             label.title = `${width} x ${height} ${unitsInput.value}`;
             label.append(radio, shape);
             if (errors.length) {
@@ -216,6 +252,9 @@
     });
     form.addEventListener("change", event => {
         if (event.target.name === "category") renderSizes(event.target.value);
+        if (event.target.name === "template") {
+            sizeOptions.querySelectorAll(".template-size-shape").forEach(renderTemplatePreview);
+        }
         if (event.target === unitsInput) {
             const conversion = scales[activeUnits] / scales[unitsInput.value];
             setDimensions(Number(widthInput.value) * conversion, Number(heightInput.value) * conversion);

@@ -1,9 +1,9 @@
 #template-dialog {
     box-sizing: border-box;
     margin: auto;
-    width: min(700px, calc(100% - 2rem));
-    max-width: 700px;
-    max-height: min(740px, calc(100dvh - 2rem));
+    width: min(714px, calc(100% - 2rem));
+    max-width: 714px;
+    /* max-height: min(650px, calc(100dvh - 2rem)); */
     padding: 1.5rem;
     border: 1px solid #8e85c2;
     border-radius: 0.75rem;
@@ -52,7 +52,7 @@
 #template-dialog[open] {
     display: flex;
     flex-direction: column;
-    height: min(650px, calc(100dvh - 2rem));
+    height: min(660px, calc(100dvh - 2rem));
     overflow: hidden;
 }
 
@@ -212,6 +212,7 @@
 }
 
 .template-size-shape {
+    position: relative;
     display: grid;
     width: 100%;
     aspect-ratio: var(--tile-ratio, 1);
@@ -219,14 +220,34 @@
     padding: 0.5rem;
     border: 2px solid #f2736b;
     border-radius: 0.75rem;
-    background: #ff938d;
+    background: rgba(242, 115, 107, 1);
     font-weight: 700;
     text-align: center;
 }
 
+.template-size-preview {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1;
+}
+
+.template-size-preview rect {
+    vector-effect: non-scaling-stroke;
+}
+
+.template-size-caption {
+    position: relative;
+    background: inherit;
+}
+
 .template-size-option:has(input:checked) .template-size-shape {
     border-color: #e31508;
-    background: #f21f10;
+    background-color: rgba(242, 31, 16, 1);
     color: #fff;
 }
 
