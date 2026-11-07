@@ -219,6 +219,19 @@ CREATE TABLE section (
     UNIQUE (pid, which)
 );
 
+CREATE UNIQUE INDEX idx_section_pid_which ON section (pid, which);
+
+CREATE TABLE summarization (
+    zid         SERIAL PRIMARY KEY,
+    pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    which       section_which NOT NULL,
+    words       INTEGER NOT NULL,
+    summary     TEXT NOT NULL,
+    created     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (pid, which)
+);
+
+CREATE UNIQUE INDEX idx_summarization_pid_which_words ON summarization (pid, which, words);
 
 CREATE TABLE keyterm (
     cid         INTEGER REFERENCES conference(cid) ON DELETE CASCADE,

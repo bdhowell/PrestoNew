@@ -25,6 +25,9 @@ OPENAI_TIKTOKEN="cl100k_base"
 OPENAI_TOKEN_LIMIT=8192
 OPENAI_EMBEDDING="text-embedding-3-small"
 
+SUMMARIZATION_MODEL="gpt-4.1"
+SUMMARIZATION_VARIANCE_DIVISOR=22 # allow one word of variable length for ever n words summarized
+
 # CONTENT_SWEEP_INTERVAL=600
 
 # FILE_SHARDING_MODULO=100

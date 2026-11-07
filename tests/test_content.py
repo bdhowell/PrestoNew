@@ -580,10 +580,10 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     files.read.assert_called_once_with("/sources/document")
                     content.processing.extract.assert_called_once_with("file.md", b"text")
-                    content.processing.summarize.assert_awaited_once_with("text")
+                    content.processing.summarize.assert_not_awaited()
                     statement, params = connection.execute.await_args_list[-1].args
                     self.assertIn("extracted = TRUE", statement)
-                    self.assertEqual(params, ("text", "Summary", None, None, None, "text", 1))
+                    self.assertEqual(params, ("text", None, None, None, None, "text", 1))
 
     async def test_failed_conversion_keeps_original_for_retry(self) -> None:
         store = content.SourceStore()

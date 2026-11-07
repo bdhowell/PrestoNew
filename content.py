@@ -336,7 +336,6 @@ class SourceStore(PosterStore):
                     )
                 else:
                     result = await run_in_threadpool(processing.extract, filename, data)
-                    result.summary = await processing.summarize(result.text)
                 for asset in result.assets:
                     if asset.width is not None and not asset.description:
                         asset.description = await processing.describe_image(asset.data)
