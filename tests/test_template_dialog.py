@@ -129,10 +129,14 @@ class TemplateDialogTests(unittest.TestCase):
                     )
 
     def test_size_tiles_preview_selected_template_and_keep_labels_centered(self) -> None:
-        for category in ("square", "landscape", "portrait"):
+        for category, templates in (
+            ("square", ("arena", "central")),
+            ("landscape", ("arena", "central")),
+            ("portrait", ("vertical", "central")),
+        ):
             self.choose_category(category)
             selected = self.page.locator("input[name=size]:checked").input_value()
-            for template in ("arena", "central", "vertical"):
+            for template in templates:
                 self.page.locator(f"label:has(input[name=template][value={template}])").click()
                 shapes = self.page.locator(".template-size-shape")
                 self.assertEqual(self.page.locator(".template-size-preview").count(), shapes.count())
@@ -170,6 +174,8 @@ class TemplateDialogTests(unittest.TestCase):
                         return preview.stroke !== getComputedStyle(el).backgroundColor;
                     }"""))
                 self.assertEqual(self.page.locator("input[name=size]:checked").input_value(), selected)
+            self.choose_category("portrait")
+            self.page.locator("label:has(input[name=template][value=vertical])").click()
             self.page.locator("#template-units-select").select_option("cm")
             self.assertTrue(self.page.locator(".template-size-preview").evaluate_all(
                 "previews => previews.every(preview => preview.dataset.template === 'vertical')",
@@ -179,10 +185,23 @@ class TemplateDialogTests(unittest.TestCase):
     def test_template_choices_preview_sections_without_selected_outlines(self) -> None:
         for category in ("square", "landscape", "portrait", "custom"):
             self.choose_category(category)
+            if category == "custom":
+                self.page.locator("input[name=width]").fill("48")
+                self.page.locator("input[name=height]").fill("36")
+            expected_templates = {
+                "square": ("arena", "central"),
+                "landscape": ("arena", "central"),
+                "portrait": ("vertical", "central"),
+                "custom": ("arena", "central"),
+            }[category]
+            visible_templates = self.page.locator(
+                "label:has(input[name=template]:visible)",
+            ).evaluate_all("labels => labels.map(label => label.querySelector('input').value)")
+            self.assertEqual(visible_templates, list(expected_templates))
             category_background = self.page.locator(
                 f"label:has(input[name=category][value={category}])",
             ).evaluate("el => getComputedStyle(el).backgroundColor")
-            for template in ("arena", "central", "vertical"):
+            for template in expected_templates:
                 choice = self.page.locator(
                     f"label:has(input[name=template][value={template}])",
                 )
@@ -208,6 +227,30 @@ class TemplateDialogTests(unittest.TestCase):
                 self.page.locator(".template-layout-options").bounding_box()["x"]
                 + self.page.locator(".template-layout-options").bounding_box()["width"],
             )
+
+    def test_custom_dimensions_update_available_templates(self) -> None:
+        self.choose_category("custom")
+        width = self.page.locator("input[name=width]")
+        height = self.page.locator("input[name=height]")
+
+        width.fill("36")
+        height.fill("48")
+        visible = self.page.locator(
+            "label:has(input[name=template]:visible)",
+        ).evaluate_all("labels => labels.map(label => label.querySelector('input').value)")
+        self.assertEqual(visible, ["vertical", "central"])
+        self.page.locator("label:has(input[name=template][value=vertical])").click()
+
+        width.fill("48")
+        visible = self.page.locator(
+            "label:has(input[name=template]:visible)",
+        ).evaluate_all("labels => labels.map(label => label.querySelector('input').value)")
+        self.assertEqual(visible, ["arena", "central"])
+        self.assertEqual(self.page.locator("input[name=template]:checked").input_value(), "central")
+        self.assertEqual(
+            self.page.locator(".template-choice-layout-preview").get_attribute("data-template"),
+            "central",
+        )
 
     def test_status_uses_space_left_of_buttons_without_moving_them(self) -> None:
         for width, height in ((1000, 900), (480, 600)):

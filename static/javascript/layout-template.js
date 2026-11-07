@@ -94,6 +94,52 @@
         heightInput.value = String(Number(height.toFixed(9)));
     }
 
+    function updateTemplateOptions(category) {
+        let availableTemplates;
+        if (category === "portrait") {
+            availableTemplates = ["vertical", "central"];
+        } else if (category === "custom") {
+            const width = Number(widthInput.value);
+            const height = Number(heightInput.value);
+            if (!(width > 0 && height > 0)) {
+                availableTemplates = ["arena", "central", "vertical"];
+            } else if (height > width) {
+                availableTemplates = ["vertical", "central"];
+            } else {
+                availableTemplates = ["arena", "central"];
+            }
+        } else {
+            availableTemplates = ["arena", "central"];
+        }
+
+        const selected = form.querySelector("input[name='template']:checked")?.value;
+        const selectedTemplate = availableTemplates.includes(selected)
+            ? selected
+            : availableTemplates.includes("central") ? "central" : availableTemplates[0];
+        for (const option of templateOptions) {
+            const available = availableTemplates.includes(option.value);
+            option.closest("label").hidden = !available;
+            option.checked = available && option.value === selectedTemplate;
+        }
+        const layoutOptions = form.querySelector(".template-layout-options");
+        for (const template of availableTemplates) {
+            layoutOptions.append(templateOptions.find(option => option.value === template).closest("label"));
+        }
+        for (const option of templateOptions) {
+            if (!availableTemplates.includes(option.value)) {
+                layoutOptions.append(option.closest("label"));
+            }
+        }
+        renderTemplatePreview(
+            templatePreview,
+            selectedTemplate,
+            "template-choice-layout-preview",
+        );
+        sizeOptions.querySelectorAll(".template-size-shape").forEach(
+            shape => renderTemplatePreview(shape, selectedTemplate),
+        );
+    }
+
     function renderTemplatePreview(
         shape,
         template = form.querySelector("input[name='template']:checked").value,
@@ -155,6 +201,7 @@
         selectedSize = availableOptions.find(size =>
             matches(size, Number(widthInput.value), Number(heightInput.value))) || availableOptions[0] || null;
         if (!isCustom && selectedSize) setDimensions(selectedSize.width, selectedSize.height);
+        updateTemplateOptions(category);
         const dimensionGroups = new Map();
         const groupDimension = category === "portrait" ? "width" : "height";
         if (category === "portrait" || category === "landscape") {
@@ -237,11 +284,6 @@
         for (const option of templateOptions) {
             option.checked = option.value === dialog.dataset.template;
         }
-        renderTemplatePreview(
-            templatePreview,
-            dialog.dataset.template,
-            "template-choice-layout-preview",
-        );
         setDimensions(width, height);
         renderSizes(category);
     }
@@ -276,6 +318,12 @@
             setDimensions(Number(widthInput.value) * conversion, Number(heightInput.value) * conversion);
             activeUnits = unitsInput.value;
             renderSizes(categoryValue());
+        }
+    });
+    form.addEventListener("input", event => {
+        if ((event.target === widthInput || event.target === heightInput)
+            && categoryValue() === "custom") {
+            updateTemplateOptions("custom");
         }
     });
     cancel.addEventListener("click", () => dialog.close());

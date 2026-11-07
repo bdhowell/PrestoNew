@@ -94,6 +94,10 @@
     cursor: pointer;
 }
 
+.template-choice[hidden] {
+    display: none;
+}
+
 .template-choice:has(input[value="square"]:checked) {
     background: #7bd34d;
     border-color: #28691d;
