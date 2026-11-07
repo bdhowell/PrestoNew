@@ -55,7 +55,6 @@
         frame();
         content.dataset.fixedGeometry = "true";
         header.style.height = `${geometry.header * 100}%`;
-        layout.style.height = `${geometry.layout * 100}%`;
         const style = getComputedStyle(layout);
         const columnsGap = parseFloat(style.columnGap) * (geometry.columns.length - 1);
         const rowsGap = parseFloat(style.rowGap) * (geometry.rows.length - 1);

@@ -1182,8 +1182,10 @@ Implementation contract:
   Font-sizing progress, success, and error messages use the shared
   `#content-save-status` output; the font controls retain their retry button.
   Once dimensions exist and a template first renders, `layout-geometry.js`
-  waits for fonts and the initial content fit, then freezes the header, layout
-  frame, grid tracks, and nested section shares. Font and content edits clip
+  waits for fonts and the initial content fit, then freezes the header, grid
+  tracks, and nested section shares. The layout frame fills the space between
+  the header gap and the bottom gutter, including for previously saved geometry.
+  Font and content edits clip
   within these areas instead of redistributing space or rerunning whole-poster
   auto-fit. Viewport zoom remains independent, and explicit gutter resizing
   still adjusts the saved proportions.
@@ -1233,7 +1235,7 @@ Implementation contract:
   pane, no footer row is reserved; a single row of panes stretches to the bottom
   of `#layout`.
   Other subsequent rows use their content height.
-  `#layout` has left, right, and bottom margins of `2 * var(--gutter)`.
+  `#layout` has left, right, and bottom margins of `var(--gutter)`.
   Content fitting includes the layout's trailing bottom margin explicitly, since
   scroll height can omit that margin when the flex layout overflows.
   Layout grid columns share the space left after gutters to avoid overflowing

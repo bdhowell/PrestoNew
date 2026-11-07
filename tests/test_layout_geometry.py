@@ -172,6 +172,37 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
             }))""",
         )
 
+    async def test_bottom_gutter_matches_header_gap_with_saved_geometry_and_canvas_resize(self) -> None:
+        for template in posters.TEMPLATES:
+            with self.subTest(template=template):
+                await self.load(template)
+                initial = await self.page.evaluate("geometryRequests[0].data.geometry")
+                for factor in (0.9, 1.05):
+                    with self.subTest(saved_layout_factor=factor):
+                        await self.load(template, initial=initial | {"layout": initial["layout"] * factor})
+                        for height_delta, zoom in ((0, "100"), (500, "50")):
+                            await self.page.evaluate("""({delta, zoom}) => {
+                                const canvas = document.getElementById('poster-canvas');
+                                canvas.style.height = `${parseFloat(canvas.style.height) + delta}px`;
+                                const slider = document.getElementById('poster-zoom');
+                                slider.value = zoom;
+                                slider.dispatchEvent(new Event('input'));
+                            }""", {"delta": height_delta, "zoom": zoom})
+                            await self.page.wait_for_timeout(100)
+                            gaps = await self.page.evaluate("""() => {
+                                const rect = id => document.getElementById(id).getBoundingClientRect();
+                                const content = rect('poster-content');
+                                const header = rect('poster-header');
+                                const layout = rect('layout');
+                                const paneBottom = Math.max(...[...document.querySelectorAll('#layout > .pane')]
+                                    .map(pane => pane.getBoundingClientRect().bottom));
+                                return {top: layout.top - header.bottom, bottom: content.bottom - layout.bottom,
+                                    paneBottom: layout.bottom - paneBottom};
+                            }""")
+                            self.assertGreater(gaps["top"], 0)
+                            self.assertAlmostEqual(gaps["bottom"], gaps["top"], delta=0.1)
+                            self.assertAlmostEqual(gaps["paneBottom"], 0, delta=0.1)
+
     async def test_initial_geometry_does_not_change_with_content_or_any_font_target(self) -> None:
         for template in posters.TEMPLATES:
             with self.subTest(template=template):

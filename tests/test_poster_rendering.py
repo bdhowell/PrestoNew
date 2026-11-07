@@ -158,6 +158,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         store = AsyncMock()
         store.get.return_value = poster
         store.content.return_value = ([("title", "Poster title"), ("results", "<p>Results</p>")], [])
+        store.conference_details.return_value = ("", {})
         with patch.object(posters, "store", return_value=store), patch.object(
             layout, "balance_header_widths", AsyncMock(return_value={"#title": 80, "#authors": 100}),
         ):

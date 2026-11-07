@@ -277,9 +277,13 @@ input[name="height"] {
     min-width: 0;
 }
 
-#poster-content[data-fixed-geometry="true"] #poster-header,
-#poster-content[data-fixed-geometry="true"] #layout {
+#poster-content[data-fixed-geometry="true"] #poster-header {
     flex: none;
+    min-height: 0;
+}
+
+#poster-content[data-fixed-geometry="true"] #layout {
+    flex: 1 1 0;
     min-height: 0;
 }
 
