@@ -307,8 +307,7 @@ async def review_page(request: Request) -> Response:
     try:
         uid, pid = await selected_draft(request)
         saved, _ = await posters.store().content(uid, pid)
-        if request.query_params.get("xyzzy") != "arpa":
-            await common.resume(request, "/content/review")
+        await common.resume(request, "/content/review")
     except STORAGE_ERRORS:
         logger.exception("Could not load poster sections for review")
         raise HTTPException(503, "Your sections could not be loaded. Please try again.") from None

@@ -65,9 +65,9 @@ class ReviewRouteTests(unittest.TestCase):
         with self.assertLogs("routers.content", "ERROR"):
             self.assertEqual(self.client.get("/content/review").status_code, 503)
 
-    def test_resumed_review_does_not_restore_the_resumption_marker(self) -> None:
+    def test_resumed_review_restores_its_own_resumption_marker(self) -> None:
         self.assertEqual(self.client.get("/content/review?xyzzy=arpa").status_code, 200)
-        self.posters.set_resumption.assert_not_awaited()
+        self.posters.set_resumption.assert_awaited_once_with(7, 11, "/content/review?xyzzy=arpa")
 
 
 class ReviewWorkflowTests(unittest.IsolatedAsyncioTestCase):
