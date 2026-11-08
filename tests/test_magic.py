@@ -138,6 +138,25 @@ class ProfileMeasurementsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile["underflowing_sections"], ["below"])
         self.assertEqual(profile["overflowing_sections"], ["above"])
 
+    async def test_empty_section_and_nested_clipping_use_section_scroll_box(self) -> None:
+        await self.page.set_content("""
+            <style>
+                .section { width: 100px; height: 100px; overflow: hidden; }
+                .clipped { width: 100px; height: 100px; overflow: hidden; }
+                .long { width: 100px; height: 200px; }
+            </style>
+            <div class="section" id="empty"></div>
+            <div class="section" id="nested"><div class="clipped"><div class="long">Text</div></div></div>
+        """)
+        with patch.dict("os.environ", {}, clear=True):
+            profile = await magic._profile_page(self.page)
+        for name in ("empty", "nested"):
+            section = profile["sections"][name]
+            self.assertEqual(section["occupied"], 10000)
+            self.assertEqual(section["density"], 1)
+            self.assertEqual(section["vertical_overflow"], 1)
+            self.assertEqual(section["fit"], ">")
+
     async def test_invalid_layout_and_settings_fail(self) -> None:
         for markup in ("", '<div class="section" id="x" style="width:0;height:0"></div>',
                        '<div class="section" id="x"></div><div class="section" id="x"></div>'):
