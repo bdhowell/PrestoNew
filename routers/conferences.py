@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 import conferences
+import common
 import identity
 import posters
 from common import clean_response
@@ -157,6 +158,8 @@ async def query_page(request: Request) -> Response:
         raise HTTPException(503, "Your poster could not be loaded. Please try again.") from None
     if pid is None:
         return RedirectResponse("/posters/list", status_code=303)
+    if request.query_params.get("xyzzy") != "arpa":
+        await common.resume(request, "/conferences/query")
     return render_page(request, "conferences/query.html", "conferences-query")
 
 

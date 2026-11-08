@@ -334,17 +334,31 @@ async def update_content(request: Request) -> JSONResponse:
         raise HTTPException(422, "Choose a valid poster section.")
     if not isinstance(value, str) or len(value) > 100_000:
         raise HTTPException(422, "Poster section content is invalid or too long.")
+    pid = data.get("pid")
+    if pid is not None and (type(pid) is not int or pid <= 0):
+        raise HTTPException(422, "Choose a valid poster.")
+    expected = data.get("expected")
+    if expected is not None and (
+        not isinstance(expected, str) or len(expected) > 100_000
+    ):
+        raise HTTPException(422, "The original section content is invalid or too long.")
 
     try:
-        poster = await owned(request, draft=True)
-        saved = await posters.store().save_section(
-            uid_for(request), poster.pid, which, elucidation.clean_html(value),
-        )
+        poster = await owned(request, pid, draft=True)
+        if "expected" in data:
+            saved = await posters.store().save_section_if_unchanged(
+                uid_for(request), poster.pid, which, elucidation.clean_html(value), expected,
+            )
+        else:
+            saved = await posters.store().save_section(
+                uid_for(request), poster.pid, which, elucidation.clean_html(value),
+            )
     except psycopg.Error:
         logger.exception("Could not save poster section %s", which)
         raise HTTPException(503, "Your changes could not be saved.") from None
     if not saved:
-        raise HTTPException(409, "This poster can no longer be edited.")
+        raise HTTPException(409, "The section changed or this poster can no longer be edited. "
+                                "Copy your edits and reload before trying again.")
     return JSONResponse({"ok": True})
 
 

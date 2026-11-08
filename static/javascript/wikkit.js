@@ -15,7 +15,8 @@
     document.addEventListener("click", (event) => {
         for (let element = event.target; element instanceof Element; element = element.parentElement) {
             if (element.matches(
-                "#editor-controls button, .theme-color-option, .theme-choice-option, .theme-option",
+                "#editor-controls button, .theme-color-option, .theme-choice-option, .theme-option, "
+                    + "#review nav a[aria-current='location']",
             )) continue;
             const style = getComputedStyle(element);
             if (!["none", "hidden"].includes(style.outlineStyle) && parseFloat(style.outlineWidth) > 0) {

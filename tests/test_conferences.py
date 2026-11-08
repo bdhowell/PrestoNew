@@ -129,7 +129,7 @@ class ConferenceRouteTests(unittest.TestCase):
             connection.state.user_id = self.uid
             connection.state.poster_id = self.pid
             connection.state.user = {"user-name": "<Ada>"}
-            connection.scope["session"] = {}
+            connection.scope["session"] = {"poster_id": self.pid}
 
         application = FastAPI(dependencies=[Depends(identity)])
         application.include_router(routes.router)
@@ -164,6 +164,7 @@ class ConferenceRouteTests(unittest.TestCase):
         self.assertIn('id="conferences-list"', response.text)
         self.assertIn("/static/javascript/pages/conferences-query.js", response.text)
         self.posters.get.assert_awaited_once_with(7, 11)
+        self.posters.set_resumption.assert_awaited_once_with(7, 11, "/conferences/query?xyzzy=arpa")
         self.posters.get.return_value = posters.Poster(11, "Research", None, None, None, None, None, True, None)
         response = self.client.get("/conferences/query", follow_redirects=False)
         self.assertEqual(response.headers["location"], "/posters/list")

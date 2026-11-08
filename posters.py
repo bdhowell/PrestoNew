@@ -486,6 +486,34 @@ class PosterStore:
         self.invalidate(uid, pid)
         return True
 
+    async def save_section_if_unchanged(
+        self, uid: int, pid: int, which: str, value: str, expected: str | None,
+    ) -> bool:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "INSERT INTO section (pid, which, content, updated, embedding) "
+                "SELECT p.pid, %s::section_which, %s, now(), NULL FROM poster p "
+                "WHERE p.uid = %s AND p.pid = %s "
+                "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
+                "AND (EXISTS (SELECT 1 FROM section s WHERE s.pid = p.pid "
+                "AND s.which = %s::section_which AND s.content = %s) "
+                "OR (%s::text IS NULL AND NOT EXISTS (SELECT 1 FROM section s "
+                "WHERE s.pid = p.pid AND s.which = %s::section_which))) "
+                "ON CONFLICT (pid, which) DO UPDATE SET content = excluded.content, "
+                "updated = excluded.updated, embedding = NULL "
+                "WHERE section.content = %s RETURNING xid",
+                (which, value, uid, pid, which, expected, expected, which, expected),
+            )
+            if await cursor.fetchone() is None:
+                return False
+            await connection.execute(
+                "UPDATE poster SET updated = now(), embedding = NULL WHERE uid = %s AND pid = %s",
+                (uid, pid),
+            )
+        self.invalidate(uid, pid)
+        return True
+
     async def conference_details(self, uid: int, pid: int) -> tuple[str, dict]:
         connection = await self._connect()
         async with connection:

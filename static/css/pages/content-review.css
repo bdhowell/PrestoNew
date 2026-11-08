@@ -1,0 +1,167 @@
+#review {
+  display: grid;
+  grid-template-columns: minmax(10rem, 15rem) minmax(0, 1fr);
+  gap: 1.5rem;
+  max-width: 90rem;
+}
+
+#review nav ul {
+  padding: 0;
+  list-style: none;
+}
+
+#review nav a:link,
+#review nav a:visited,
+#review nav a:hover,
+#review nav a:active,
+#review nav a:focus-visible {
+  color: mediumblue;
+  font-weight: bold;
+  text-decoration: none;
+}
+
+#review nav a[aria-current="location"] {
+  color: rgb(244, 211, 94);
+  outline: 1px solid #000;
+}
+
+#review-sections section:target > h2 {
+  color: rgb(244, 211, 94);
+}
+
+.review-main {
+  min-width: 0;
+}
+
+#editor-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+#editor-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid #8e85c2;
+  border-radius: 0.5rem;
+  background: #443a80;
+  color: #fff;
+  font: 1.125rem/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+#editor-controls button:hover {
+  background: #5b4e9e;
+  border-color: #c4bdeb;
+}
+
+#editor-controls button:active {
+  background: #211a4d;
+}
+
+#editor-controls button[aria-pressed="true"] {
+  background: #211a4d;
+  border-color: #fff;
+}
+
+#editor-controls button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+#editor-controls button:focus-visible {
+  box-shadow: 0 0 0 2px #fff;
+}
+
+#review-sections {
+  height: min(60vh, 42rem);
+  overflow: auto;
+  border: 1px solid #8e85c2;
+  border-radius: 0.5rem;
+  background: rgba(24, 20, 48, 1);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+#review-sections section {
+  scroll-margin-top: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+#review-sections h2 {
+  margin-bottom: 0.25rem;
+  color: #bfbfbf;
+  font: 1.125rem/1 aladin, sans-serif;
+}
+
+#review-sections .content {
+  min-height: 3rem;
+  padding: 0.5rem;
+  border: 1px solid #bdb8d8;
+  background-color: white;
+  border-radius: 0.25rem;
+  overflow-wrap: anywhere;
+}
+
+#review-sections .content:focus {
+  outline: 2px solid #514080;
+}
+
+#review-sections .content > h2:first-child,
+#review-sections .content > h3:first-child {
+  display: none;
+}
+
+#revision-dialog {
+  box-sizing: border-box;
+  width: min(60rem, calc(100% - 2rem));
+  max-height: min(90vh, 60rem);
+  overflow: auto;
+  border: 1px solid #8e85c2;
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  color: #292343;
+}
+
+#revision-dialog::backdrop {
+  background: rgb(0 0 0 / 65%);
+}
+
+.revision-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.revision-content {
+  max-height: 40vh;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  border: 1px solid #bdb8d8;
+  border-radius: 0.25rem;
+  padding: 0.75rem;
+}
+
+.revision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+@media (max-width: 42rem) {
+  #review {
+    grid-template-columns: 1fr;
+  }
+  #review nav ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.5rem;
+  }
+  .revision-comparison {
+    grid-template-columns: 1fr;
+  }
+}

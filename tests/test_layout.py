@@ -119,6 +119,38 @@ class LayoutRouteTests(unittest.TestCase):
             7, 11, "materials and methods", "<p>Updated</p>",
         )
 
+    def test_section_save_with_explicit_poster_is_owner_scoped(self) -> None:
+        self.store.save_section.return_value = True
+        response = self.client.post(
+            "/layout/content", json={"pid": 11, "section": "results", "content": "<p>Updated</p>"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.store.get.assert_awaited_with(7, 11)
+        self.store.save_section.assert_awaited_once_with(7, 11, "results", "<p>Updated</p>")
+        for pid in (0, -1, True, "11"):
+            self.assertEqual(self.client.post(
+                "/layout/content", json={"pid": pid, "section": "results", "content": "Text"},
+            ).status_code, 422)
+        self.store.get.return_value = None
+        self.assertEqual(self.client.post(
+            "/layout/content", json={"pid": 12, "section": "results", "content": "Text"},
+        ).status_code, 404)
+
+    def test_revision_save_is_conditional_on_original_content(self) -> None:
+        self.store.save_section_if_unchanged.return_value = True
+        data = {"pid": 11, "section": "results", "content": "<p>Revised</p>",
+                "expected": "<p>Original</p>"}
+        self.assertEqual(self.client.post("/layout/content", json=data).status_code, 200)
+        self.store.save_section_if_unchanged.assert_awaited_once_with(
+            7, 11, "results", "<p>Revised</p>", "<p>Original</p>",
+        )
+        self.store.save_section_if_unchanged.return_value = False
+        response = self.client.post("/layout/content", json=data)
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Copy your edits", response.json()["detail"])
+        data["expected"] = 123
+        self.assertEqual(self.client.post("/layout/content", json=data).status_code, 422)
+
     def test_section_save_rejects_invalid_input_and_cross_origin_requests(self) -> None:
         for data in (
             {"section": "not a section", "content": "text"},

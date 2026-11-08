@@ -1,0 +1,68 @@
+{% extends "page.html" %}
+{% block title %}Review poster sections - {{ app_name() }}{% endblock %}
+{% block scripts %}
+<script src="https://kit.fontawesome.com/938fc9d55b.js" crossorigin="anonymous"></script>
+<script src="/static/javascript/layout-editor.js" defer></script>
+{% endblock %}
+{% block content %}
+<h1>Review your poster sections</h1>
+<p>Choose a section, edit it directly, or tell Wikkit which section you would like revised.</p>
+<div id="review" data-pid="{{ pid }}" data-username="{{ username }}">
+    <nav aria-label="Poster sections">
+        <h2>Sections</h2>
+        <ul>
+        {% for which, label, content in sections %}
+            <li><a href="#review-{{ loop.index }}">{{ label }}</a></li>
+        {% endfor %}
+        </ul>
+    </nav>
+    <div class="review-main">
+        <div id="review-sections" tabindex="0" aria-label="Scrollable poster sections">
+            {% for which, label, content in sections %}
+            <section id="review-{{ loop.index }}" aria-labelledby="review-heading-{{ loop.index }}">
+                <h2 id="review-heading-{{ loop.index }}">{{ label }}</h2>
+                <div class="content" contenteditable="true" role="textbox" aria-multiline="true"
+                     aria-labelledby="review-heading-{{ loop.index }}" data-section="{{ which }}">{{ content }}</div>
+            </section>
+            {% endfor %}
+        </div>
+        <div id="editor-controls" role="toolbar" aria-label="Text formatting">
+            <button type="button" id="bold" aria-label="Bold" title="Bold"><i class="fa-solid fa-bold" aria-hidden="true"></i></button>
+            <button type="button" id="italic" aria-label="Italic" title="Italic"><i class="fa-solid fa-italic" aria-hidden="true"></i></button>
+            <button type="button" id="underline" aria-label="Underline" title="Underline"><i class="fa-solid fa-underline" aria-hidden="true"></i></button>
+            <button type="button" id="strikethrough" aria-label="Strikethrough" title="Strikethrough"><i class="fa-solid fa-strikethrough" aria-hidden="true"></i></button>
+            <button type="button" id="plaintext" aria-label="Plain Text" title="Plain Text"><i class="fa-solid fa-text-slash" aria-hidden="true"></i></button>
+            <button type="button" id="code" aria-label="Code" title="Code"><i class="fa-solid fa-code" aria-hidden="true"></i></button>
+            <button type="button" id="superscript" aria-label="Superscript" title="Superscript"><i class="fa-solid fa-superscript" aria-hidden="true"></i></button>
+            <button type="button" id="subscript" aria-label="Subscript" title="Subscript"><i class="fa-solid fa-subscript" aria-hidden="true"></i></button>
+            <button type="button" id="ullist" aria-label="Unordered List" title="Unordered List"><i class="fa-solid fa-list-ul" aria-hidden="true"></i></button>
+            <button type="button" id="ollist" aria-label="Ordered List" title="Ordered List"><i class="fa-solid fa-list-ol" aria-hidden="true"></i></button>
+            <button type="button" id="cut" aria-label="Cut" title="Cut"><i class="fa-solid fa-cut" aria-hidden="true"></i></button>
+            <button type="button" id="copy" aria-label="Copy" title="Copy"><i class="fa-solid fa-copy" aria-hidden="true"></i></button>
+            <button type="button" id="paste" aria-label="Paste" title="Paste"><i class="fa-solid fa-paste" aria-hidden="true"></i></button>
+        </div>
+        <p><output id="content-save-status" role="status" aria-live="polite"></output></p>
+        <button type="button" id="review-continue">Continue to conference details</button>
+    </div>
+</div>
+<dialog id="revision-dialog" aria-labelledby="revision-title" aria-describedby="revision-description">
+    <h2 id="revision-title">Review Wikkit&rsquo;s revision</h2>
+    <p id="revision-description">Compare the current section with the proposed revision before deciding.</p>
+    <p id="revision-section"></p>
+    <div class="revision-comparison">
+        <section aria-labelledby="revision-original-heading">
+            <h3 id="revision-original-heading">Current</h3>
+            <div id="revision-original" class="revision-content"></div>
+        </section>
+        <section aria-labelledby="revision-proposed-heading">
+            <h3 id="revision-proposed-heading">Proposed</h3>
+            <div id="revision-proposed" class="revision-content"></div>
+        </section>
+    </div>
+    <p id="revision-status" role="status" aria-live="polite"></p>
+    <div class="revision-actions">
+        <button type="button" id="revision-accept">Accept revision</button>
+        <button type="button" id="revision-reject">Reject revision</button>
+    </div>
+</dialog>
+{% endblock %}

@@ -691,6 +691,19 @@ class PosterDatabaseTests(unittest.TestCase):
         sections, _ = asyncio.run(self.store.content(7, pid))
         self.assertIn(("results", "<p>Quasar evidence</p>"), sections)
 
+    def test_revision_save_checks_original_and_owner_atomically(self) -> None:
+        pid = self.create("Research")
+        save = self.store.save_section_if_unchanged
+        self.assertTrue(asyncio.run(save(7, pid, "results", "First", None)))
+        self.assertFalse(asyncio.run(save(7, pid, "results", "Stale", None)))
+        self.assertFalse(asyncio.run(save(7, pid, "results", "Stale", "Older")))
+        self.assertFalse(asyncio.run(save(8, pid, "results", "Private", "First")))
+        self.assertTrue(asyncio.run(save(7, pid, "results", "Revised", "First")))
+        self.purchase(pid)
+        self.assertFalse(asyncio.run(save(7, pid, "results", "Purchased", "Revised")))
+        sections, _ = asyncio.run(self.store.content(7, pid))
+        self.assertIn(("results", "Revised"), sections)
+
     def test_fts_tracks_description_sections_authors_and_keyterms(self) -> None:
         pid = self.create("Ocean science")
         private = self.create("Ocean science", uid=8)

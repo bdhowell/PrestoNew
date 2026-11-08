@@ -257,7 +257,7 @@ Create a table named `sizings` in
 	version		TIMESTAMPZ NOT NULL'
 
 ============================================================
-
+VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
 # Create a function in common.py, `def friendly_list(items:list[str]):
 ```
 def friendly_list(items: list[str]) -> str:
@@ -271,21 +271,12 @@ def friendly_list(items: list[str]) -> str:
 # Create a Python module and router named `magic`
 
 The owner-scoped `GET /magic/{pid}/profile` endpoint profiles the saved editor
-layout. Unsaved editor changes are not included. Section area is its
-`offsetWidth * offsetHeight`; occupied area is `scrollWidth * scrollHeight`,
-and density is occupied area divided by section area. `vertical_overflow` is
-`offsetHeight / scrollHeight`, not the fraction overflowing. `graph_area`
-separately sums rendered `.graphic` areas and `graph_density` divides that sum
-by the section area; overlapping graphics are counted separately.
-
-Scroll dimensions measure the section's scrollable box, not the actual area of
-text and graphics: they are normally at least the inner box dimensions even
-when the section is empty, exclude borders, and can exceed the section when
-content overflows. Overflow clipped inside a nested element may not appear in
-the section's scroll dimensions. Therefore, the default 30%/75% thresholds
-do not directly represent how much space text fills. The current content
-sanitizer does not yet preserve graphics, so saved section content currently
-cannot produce graphic measurements until graphics support is added.
+layout. Unsaved editor changes are not included. Section density is the sum of
+the rendered areas of `.graphic` elements divided by the section area; text is
+not counted and overlapping graphics are counted separately. Consequently, a
+text-only section is underfilled by this metric. The current content sanitizer
+does not yet preserve graphics, so saved section content currently cannot
+produce graphic measurements until graphics support is added.
 
 Threshold environment variables `SECTION_MIN_OCCUPIED` (30),
 `SECTION_MAX_OCCUPIED` (75), and `SECTION_UNDERFLOW_OCCUPIED` (0.40) are
@@ -408,6 +399,29 @@ def profile_poster(pid:int):
 		"oversized_graphics": all_oversized_graphics,
 	}
 ```
+
+## Content Review
+Create a new page: `/content/review` that is interposed between `/content/elucidate` and '/conferences/query'
+
+Show each of the sections in a scrollable list for easy navigation and review.
+Give the user the ability to navigate through sections and make adjustments as needed.
+Borrow the text editing interface to support dynamic updates and user interactions for each section.
+Clicking in a section will allow you to edit its content directly.
+
+After elucidation the review page loads the selected draft's saved sections and
+autosaves edits. Continue waits for outstanding saves before opening
+`/conferences/query`. Failed saves can be retried. Wikkit accepts feedback
+naming exactly one section and shows the current and proposed text for the user
+to accept or reject. Reject leaves the section unchanged; accepting saves the
+revision only if the section has not changed locally or in storage.
+
+Wikki says:
+"""
+Here is my  draft of each of the sections of your poster.
+Please take a look at each section and give me feedback or make adjustments as needed.
+When you give me feedback on a particular section, please be sure to include the section name so I know which part you are referring to.
+"""
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 # Asssessing:
 # 
