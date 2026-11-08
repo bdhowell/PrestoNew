@@ -80,6 +80,14 @@ AGENT_NAME = "Wikkit"
 AGENT_THE_NAME = f"{AGENT_NAME}, the PrestoPresentations Wizard"
 
 
+def friendly_list(items: list[str]) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
 def format_date(datetime_obj):
     day = num2words.num2words(datetime_obj.day, to='ordinal')
     return datetime_obj.strftime(f"%A, %B {day}, %Y")

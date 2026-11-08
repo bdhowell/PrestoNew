@@ -258,7 +258,43 @@ Create a table named `sizings` in
 
 ============================================================
 
+# Create a function in common.py, `def friendly_list(items:list[str]):
+```
+def friendly_list(items: list[str]) -> str:
+	if not items:
+		return ""
+	if len(items) == 1:
+		return items[0]
+	return ", ".join(items[:-1]) + " and " + items[-1]
+```
+
 # Create a Python module and router named `magic`
+
+The owner-scoped `GET /magic/{pid}/profile` endpoint profiles the saved editor
+layout. Unsaved editor changes are not included. Section area is its
+`offsetWidth * offsetHeight`; occupied area is `scrollWidth * scrollHeight`,
+and density is occupied area divided by section area. `vertical_overflow` is
+`offsetHeight / scrollHeight`, not the fraction overflowing. `graph_area`
+separately sums rendered `.graphic` areas and `graph_density` divides that sum
+by the section area; overlapping graphics are counted separately.
+
+Scroll dimensions measure the section's scrollable box, not the actual area of
+text and graphics: they are normally at least the inner box dimensions even
+when the section is empty, exclude borders, and can exceed the section when
+content overflows. Overflow clipped inside a nested element may not appear in
+the section's scroll dimensions. Therefore, the default 30%/75% thresholds
+do not directly represent how much space text fills. The current content
+sanitizer does not yet preserve graphics, so saved section content currently
+cannot produce graphic measurements until graphics support is added.
+
+Threshold environment variables `SECTION_MIN_OCCUPIED` (30),
+`SECTION_MAX_OCCUPIED` (75), and `SECTION_UNDERFLOW_OCCUPIED` (0.40) are
+percentages; the latter defaults to 0.4%, as specified below. `TOO_WIDE`
+(0.33), `TOO_TALL` (0.33), and `EXTREMELY_TALL` (0.50) are ratios. Section
+IDs use the editor names, except `conclusions` is reported as `conclusion`.
+Oversized graphics are JSON objects containing `section`, `id`, `width_ratio`,
+`height_ratio`, `too_wide`, and `too_tall`; DOM elements cannot be serialized.
+Only sections actually present in the selected layout are returned.
 
 SECTIONS = [    
 	"title", "abstract", "introduction", "methods", "results", "conclusion", 
@@ -275,101 +311,102 @@ GRAPHICS_EXTREMELY_TALL = os.environ.get('EXTREMELY_TALL', 0.50)
 GRAPHICS_TOO_TALL = os.environ.get('TOO_TALL', 0.33)
 GRAPHICS_TOO_WIDE = os.environ.get('TOO_WIDE', 0.33)
 
-## Create a function, `def friendly_list(items:list[str]):
-	def friendly_list(items: list[str]) -> str:
-		if not items:
-			return ""
-		if len(items) == 1:
-			return items[0]
-		return ", ".join(items[:-1]) + " and " + items[-1]
-
-## Create a function, `def profile_poster(pid:int):`
+## Create a function
 ```python
-section_min_area = os.environ.get('SECTION_MIN_OCCUPIED', 30) / 100
-section_max_area = os.environ.get('SECTION_MAX_OCCUPIED', 75) / 100
-poster_underflow = os.environ.get('SECTION_UNDERFLOW_OCCUPIED', 0.40) / 100
+def profile_poster(pid:int):
+	section_min_area = os.environ.get('SECTION_MIN_OCCUPIED', 30) / 100
+	section_max_area = os.environ.get('SECTION_MAX_OCCUPIED', 75) / 100
+	poster_underflow = os.environ.get('SECTION_UNDERFLOW_OCCUPIED', 0.40) / 100
 
-overflowing_sections = []
-underflowing_sections = []
-all_oversized_graphics = []
+	overflowing_sections = []
+	underflowing_sections = []
+	all_oversized_graphics = []
 
-total_area = 0
-occupied_area = 0
+	total_area = 0
+	occupied_area = 0
 
-sections = {}
+	sections = {}
 
-Using the playwright library:
-dom_sections = await page.locator('.section').all()
+	Using the playwright library:
+	dom_sections = await page.locator('.section').all()
 
-for section_element in dom_sections:
-	details = {}
-	name = await section_element.evaluate("element => element.ID")
-	sections[name] = details
-	oversized_graphics = []
-	graphics = []
+	for section_element in dom_sections:
+		details = {}
+		name = await section_element.evaluate("element => element.ID")
+		sections[name] = details
+		oversized_graphics = []
+		graphics = []
 
-	for graphic in await section_element.locator('.graphic').all(): # graphic DOM elements within the section
-		width_ratio = graphic.width / await section_element.evaluate("element => element.offsetWidth")
-		height_ratio = graphic.height / await section_element.evaluate("element => element.offsetHeight")
+		for graphic in await section_element.locator('.graphic').all(): # graphic DOM elements within the section
+			width_ratio = graphic.width / await section_element.evaluate("element => element.offsetWidth")
+			height_ratio = graphic.height / await section_element.evaluate("element => element.offsetHeight")
 
-		too_wide = width_ratio > GRAPHICS_TOO_WIDE
-		too_tall = height_ratio > (GRAPHICS_TOO_TALL if name != 'results' else GRAPHICS_EXTREMELY_TALL)
+			too_wide = width_ratio > GRAPHICS_TOO_WIDE
+			too_tall = height_ratio > (GRAPHICS_TOO_TALL if name != 'results' else GRAPHICS_EXTREMELY_TALL)
 
-		if too_wide or too_tall:
-			oversized_graphics.append((name, section_element, graphic.id, width_ratio, height_ratio, too_wide, too_tall))
+			if too_wide or too_tall:
+				oversized_graphics.append((name, section_element, graphic.id, width_ratio, height_ratio, too_wide, too_tall))
 
-		occupied_area = graphic.width * graphic.height
-		occupied_percentage = occupied_area / details['area']
+			occupied_area = graphic.width * graphic.height
+			occupied_percentage = occupied_area / details['area']
 
-		graphic = {
-			"id": graphic.id,
-			"width": graphic.width,
-			"height": graphic.height,
-			"area": occupied_area,
-			"percentage": occupied_percentage,	
-			"overflow": occupied_percentage > 1.00,
-			"underflow": occupied_percentage < poster_underflow,
-			"too_wide": too_wide,
-			"too_tall": too_tall,
-			"oversized": too_wide or too_tall,
-		}
-		graphics.append(graphic)
+			graphic = {
+				"id": graphic.id,
+				"width": graphic.width,
+				"height": graphic.height,
+				"area": occupied_area,
+				"percentage": occupied_percentage,	
+				"overflow": occupied_percentage > 1.00,
+				"underflow": occupied_percentage < poster_underflow,
+				"too_wide": too_wide,
+				"too_tall": too_tall,
+				"oversized": too_wide or too_tall,
+			}
+			graphics.append(graphic)
 
-	all_oversized_graphics.extend(oversized_graphics)
+		all_oversized_graphics.extend(oversized_graphics)
 
-	details['area'] = await section_element.evaluate("element => element.offsetWidth * element.offsetHeight")
-	details['occupied'] = occupied_area = sum(graphic['width'] * graphic['height'] for graphic in graphics)
-	details['density'] = details['occupied'] / details['area']
+		offsetHeight = await section_element.evaluate("element => element.offsetHeight")
+		scrollHeight = await section_element.evaluate("element => element.scrollHeight")
+		
+		details['area'] = await section_element.evaluate("element => element.offsetWidth") * offsetHeight
+		details['occupied'] = await section_element.evaluate("element => element.scrollWidth") * scrollHeight
+		details['density'] = details['occupied'] / details['area']
+		details['graph_area'] = sum(graphic['width'] * graphic['height'] for graphic in graphics)
+		details['graph_density'] = details['graph_area'] / details['area']
+		details['vertical_overflow'] = offsetHeight / scrollHeight
 
-	if details['density'] < section_min_area:
-		underflowing_sections.append(name)
-	if details['density'] > section_max_area:
-		overflowing_sections.append(name)
+		if details['density'] < section_min_area:
+			underflowing_sections.append(name)
+		if details['density'] > section_max_area:
+			overflowing_sections.append(name)
 
-	total_area += details['area']
-	occupied_area += details['occupied']
+		total_area += details['area']
+		occupied_area += details['occupied']
 
-	poster_density = occupied_area / total_area
+		poster_density = occupied_area / total_area
 
-	details['overflow'] = details['density'] > 1.00
-	details['underflow'] = details['density'] < section_min_area
-	
-	details['fit'] = TOO_SHORT if details['density'] < section_min_area \
-				 else TOO_LONG if details['density'] > section_max_area \
-				 else JUST_RIGHT
+		details['overflow'] = details['density'] > 1.00
+		details['underflow'] = details['density'] < section_min_area
+		
+		details['fit'] = TOO_SHORT if details['density'] < section_min_area \
+					else TOO_LONG if details['density'] > section_max_area \
+					else JUST_RIGHT
 
-	details['oversized_graphics'] = oversized_graphics
-	details['graphics'] = graphics
+		details['oversized_graphics'] = oversized_graphics
+		details['graphics'] = graphics
 
-return {
-    "total_area": total_area,
-    "occupied_area": occupied_area,
-	"density": poster_density,
-	"sections": sections,
-	"overflowing_sections": overflowing_sections,
-	"underflowing_sections": underflowing_sections,	
-	"oversized_graphics": all_oversized_graphics,
-}
+		sections[name] = details
+
+	return {
+		"total_area": total_area,
+		"occupied_area": occupied_area,
+		"density": poster_density,
+		"sections": sections,
+		"overflowing_sections": overflowing_sections,
+		"underflowing_sections": underflowing_sections,	
+		"oversized_graphics": all_oversized_graphics,
+	}
 ```
 
 # Asssessing:

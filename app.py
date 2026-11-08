@@ -15,6 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
 import layout  # noqa: E402
+import magic  # noqa: E402
 from content import SourceFiles  # noqa: E402
 from routers import account, conferences, content, posters, system, wikkit  # noqa: E402  (loaded after .env so routers see its settings)
 from identity import identity_context  # noqa: E402
@@ -52,6 +53,7 @@ app.include_router(wikkit.router)
 app.include_router(account.router)
 app.include_router(posters.router)
 app.include_router(layout.router)
+app.include_router(magic.router)
 app.include_router(content.router)
 app.include_router(conferences.router)
 app.include_router(system.router)
