@@ -61,7 +61,7 @@ class ContentRouteTests(unittest.TestCase):
     def test_empty_page_shows_introduction_and_all_supported_extensions(self) -> None:
         response = self.client.get("/content/upload")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("start by uploading your source content", response.text)
+        self.assertIn("upload your source content", response.text)
         self.assertIn("Apple Numbers, Pages, and Keynote", response.text)
         self.assertIn("Markdown (MD)", response.text)
         self.assertIn('id="items-list"', response.text)
@@ -70,11 +70,23 @@ class ContentRouteTests(unittest.TestCase):
             self.assertIn(suffix, response.text)
         self.sources.list_sources.assert_awaited_once_with(7, 11)
 
+    def test_content_pages_save_the_requested_resumption_url(self) -> None:
+        for path in ("/content/upload", "/content/extract", "/content/elucidate"):
+            for query in ("tag=a%2Fb&tag=two", "tag=a%2Fb&tag=two&xyzzy=arpa"):
+                with self.subTest(path=path, query=query):
+                    self.posters.set_resumption.reset_mock()
+                    response = self.client.get(f"{path}?{query}")
+                    self.assertEqual(response.status_code, 200)
+                    marker = "" if query.endswith("xyzzy=arpa") else "&xyzzy=arpa"
+                    self.posters.set_resumption.assert_awaited_once_with(
+                        7, 11, f"http://testserver{path}?{query}{marker}",
+                    )
+
     def test_existing_files_escape_names_and_do_not_repeat_first_upload_intro(self) -> None:
         self.sources.list_sources.return_value = [ITEM]
         response = self.client.get("/content/upload")
         self.assertIn("&lt;paper&gt;.pdf", response.text)
-        self.assertNotIn("start by uploading your source content", response.text)
+        self.assertNotIn("upload your source content", response.text)
         self.assertNotIn("Rich Text Format", response.text)
 
     def test_reduced_conversion_notice_is_visible_on_page_and_upload_response(self) -> None:

@@ -36,6 +36,7 @@ class ReviewRouteTests(unittest.TestCase):
         self.assertIn("give me feedback", response.text)
         self.assertIn('href="#review-1"', response.text)
         self.assertIn('data-username="&lt;Ada&gt;"', response.text)
+        self.assertIn('data-next-page="/layout/edit"', response.text)
         self.assertLess(response.text.index('id="review-sections"'), response.text.index('id="editor-controls"'))
         self.assertIn("https://kit.fontawesome.com/938fc9d55b.js", response.text)
         self.assertIn('aria-label="Bold" title="Bold"><i class="fa-solid fa-bold"', response.text)
@@ -45,7 +46,13 @@ class ReviewRouteTests(unittest.TestCase):
         self.assertIn('id="revision-accept"', response.text)
         self.assertIn('id="revision-reject"', response.text)
         self.posters.content.assert_awaited_once_with(7, 11)
-        self.posters.set_resumption.assert_awaited_once_with(7, 11, "/content/review?xyzzy=arpa")
+        self.posters.set_resumption.assert_awaited_once_with(7, 11, "http://testserver/content/review?xyzzy=arpa")
+
+    def test_review_continues_to_edit_when_dimensions_are_missing(self) -> None:
+        self.posters.get.return_value = replace(DRAFT, width=None, height=None)
+        response = self.client.get("/content/review")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data-next-page="/layout/edit"', response.text)
 
     def test_review_requires_signed_in_owner_and_draft(self) -> None:
         self.uid = None
@@ -66,8 +73,10 @@ class ReviewRouteTests(unittest.TestCase):
             self.assertEqual(self.client.get("/content/review").status_code, 503)
 
     def test_resumed_review_restores_its_own_resumption_marker(self) -> None:
-        self.assertEqual(self.client.get("/content/review?xyzzy=arpa").status_code, 200)
-        self.posters.set_resumption.assert_awaited_once_with(7, 11, "/content/review?xyzzy=arpa")
+        self.assertEqual(self.client.get("/content/review?tag=a%2Fb&tag=two&xyzzy=arpa").status_code, 200)
+        self.posters.set_resumption.assert_awaited_once_with(
+            7, 11, "http://testserver/content/review?tag=a%2Fb&tag=two&xyzzy=arpa",
+        )
 
 
 class ReviewWorkflowTests(unittest.IsolatedAsyncioTestCase):
@@ -167,7 +176,7 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
                 })
             else:
                 await route.fulfill(body="""
-                    <div id="review" data-pid="11" data-username="Ada">
+                    <div id="review" data-pid="11" data-username="Ada" data-next-page="/layout/edit">
                     <nav aria-label="Poster sections"><ul><li><a href="#review-1">Results</a></li></ul></nav>
                     <div class="review-main">
                     <div id="review-sections">
@@ -380,7 +389,7 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("#bold").click()
         self.assertIn("<b>Original</b>", await editor.inner_html())
         await self.page.locator("#review-continue").click()
-        await self.page.wait_for_url("https://review.test/conferences/query")
+        await self.page.wait_for_url("https://review.test/layout/edit")
         self.assertEqual(self.requests[-1]["content"], "<p><b>Original</b></p>")
 
     async def test_failed_save_blocks_continue_and_rewrite_blocks_navigation(self) -> None:

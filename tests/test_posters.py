@@ -95,14 +95,13 @@ class PosterRouteTests(unittest.TestCase):
             response = self.client.get("/posters/list?q=research")
         self.assertIn("Keyword search only", response.text)
 
-    def test_create_poster_selects_draft_and_returns_upload_redirect(self) -> None:
+    def test_create_poster_selects_draft_and_returns_conference_query_redirect(self) -> None:
         self.store.new_or_existing.return_value = (11, True)
         response = self.client.post("/posters/create", json={})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True, "redirect": "/content/upload"})
+        self.assertEqual(response.json(), {"ok": True, "redirect": "/conferences/query"})
         self.assertEqual(self.session["poster_id"], 11)
-        self.assertEqual(self.request_state.poster, {"pid": 11})
-        self.assertEqual(self.request_state.poster_id, 11)
+        self.assertEqual(self.request_state.pid, 11)
         self.store.new_or_existing.assert_awaited_once_with(7)
         self.store.initialize.assert_not_awaited()
 

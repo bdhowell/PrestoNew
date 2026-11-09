@@ -641,6 +641,7 @@ async def dimensions_page(request: Request) -> Response:
         raise HTTPException(503, "Your poster could not be loaded.") from None
     if poster.purchased:
         return RedirectResponse(f"/posters/{poster.pid}/view", status_code=303)
+    await common.resume(request)
     return render_page(request, "layout/dimensions.html", "layout-dimensions", poster=poster)
 
 
@@ -667,7 +668,10 @@ async def update_dimensions(request: Request) -> JSONResponse:
     except psycopg.Error:
         logger.exception("Could not save poster dimensions")
         raise HTTPException(503, "Your poster dimensions could not be saved.") from None
-    return JSONResponse({"ok": True, "preview": payload, "redirect": "/layout/edit"})
+    return JSONResponse({
+        "ok": True, "preview": payload,
+        "redirect": "/layout/edit" if template is not None else "/content/upload",
+    })
 
 
 async def dimensions_workflow(bot: Chatbot) -> None:
@@ -746,7 +750,7 @@ async def dimensions_workflow(bot: Chatbot) -> None:
                     "does": "correct-dimensions", "payload": dimensions_payload(width, height, units),
                 }})
                 width = height = None
-        await bot.send({"command": {"does": "redirect", "payload": "/layout/edit"}})
+        await bot.send({"command": {"does": "redirect", "payload": "/content/upload"}})
     except (psycopg.Error, ValueError, HTTPException):
         logger.exception("Could not set dimensions for poster %s", pid)
         await bot.send({"say": "<p>Your poster dimensions could not be saved. Please reload and try again.</p>"})

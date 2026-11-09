@@ -22,7 +22,7 @@ from wikkit import Chatbot
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/conferences", tags=["conferences"])
 
-LAYOUT_PAGE = "/layout/dimensions"
+DIMENSIONS_PAGE = "/layout/dimensions"
 MATCH_RATIO = 0.7
 MAX_CRITERIA_LENGTH = 2000
 DECLINES = ["none", "noneofthese", "nomatch", "continue", "skip", "moveon", "continuewithoutconferenceinformation"]
@@ -158,17 +158,19 @@ async def query_page(request: Request) -> Response:
         raise HTTPException(503, "Your poster could not be loaded. Please try again.") from None
     if pid is None:
         return RedirectResponse("/posters/list", status_code=303)
-    if request.query_params.get("xyzzy") != "arpa":
-        await common.resume(request, "/conferences/query")
-    return render_page(request, "conferences/query.html", "conferences-query")
+    await common.resume(request)
+    return render_page(
+        request, "conferences/query.html", "conferences-query",
+        dimensions_page=DIMENSIONS_PAGE,
+    )
 
 
 async def continue_without(bot: Chatbot, message: str) -> None:
-    await bot.send({"say": f"<p>{message}</p>", "command": {"does": "redirect", "payload": LAYOUT_PAGE}})
+    await bot.send({"say": f"<p>{message}</p>", "command": {"does": "redirect", "payload": DIMENSIONS_PAGE}})
 
 
 async def choose(bot: Chatbot, uid: int, pid: int, conference: Conference) -> bool:
-    """Store and attach the conference, remember it, and move on to uploads."""
+    """Store and attach the conference, remember it, and move on to dimensions."""
     try:
         conference = await conferences.store().select(uid, pid, conference)
         if bot.long_term_memory is None:
@@ -181,7 +183,7 @@ async def choose(bot: Chatbot, uid: int, pid: int, conference: Conference) -> bo
         logger.exception("Could not select conference for poster %s", pid)
         await bot.send({"say": "<p>I&rsquo;m sorry, I couldn&rsquo;t save that conference. Please try again.</p>"})
         return False
-    await bot.send({"command": {"does": "redirect", "payload": LAYOUT_PAGE}})
+    await bot.send({"command": {"does": "redirect", "payload": DIMENSIONS_PAGE}})
     return True
 
 
@@ -194,7 +196,10 @@ async def query_workflow(bot: Chatbot) -> None:
         return
     name = identity.display_name(bot.websocket)
     latest = await bot.request_response(INTRO)
-    if (clean_response(latest) or {}).get("response") in ("idk", "no"):
+    if (
+        (clean_response(latest) or {}).get("response") in ("idk", "no")
+        or common.clean_string(latest) in DECLINES
+    ):
         await continue_without(bot, NO_INFORMATION)
         return
     criteria = latest.strip()
@@ -235,7 +240,7 @@ async def query_workflow(bot: Chatbot) -> None:
             if answer == "yes":
                 reply = await bot.request_response(MORE_INFORMATION)
                 answer = (clean_response(reply) or {}).get("response")
-            if answer in ("no", "idk"):
+            if answer in ("no", "idk") or common.clean_string(reply) in DECLINES:
                 await continue_without(bot, CONTINUE_WITHOUT)
                 return
         else:

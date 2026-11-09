@@ -46,6 +46,8 @@ class ResumeTests(unittest.IsolatedAsyncioTestCase):
             ("/layout/edit#title", "/layout/edit?xyzzy=arpa#title"),
             ("/layout/edit?", "/layout/edit?xyzzy=arpa"),
             ("/layout/edit?pid=11&", "/layout/edit?pid=11&xyzzy=arpa"),
+            ("/layout/edit?tag=one&xyzzy=arpa&tag=two", "/layout/edit?tag=one&xyzzy=arpa&tag=two"),
+            ("/layout/edit?xyzzy=other", "/layout/edit?xyzzy=other&xyzzy=arpa"),
             (
                 URL("https://example.com/edit?tag=a%2Fb&tag=two&blank=#title"),
                 "https://example.com/edit?tag=a%2Fb&tag=two&blank=&xyzzy=arpa#title",

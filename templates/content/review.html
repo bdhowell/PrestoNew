@@ -7,7 +7,7 @@
 {% block content %}
 <h1>Review your poster sections</h1>
 <p>Choose a section, edit it directly, or tell Wikkit which section you would like revised.</p>
-<div id="review" data-pid="{{ pid }}" data-username="{{ username }}">
+<div id="review" data-pid="{{ pid }}" data-username="{{ username }}" data-next-page="{{ next_page }}">
     <nav aria-label="Poster sections">
         <h2>Sections</h2>
         <ul>
@@ -42,7 +42,7 @@
             <button type="button" id="paste" aria-label="Paste" title="Paste"><i class="fa-solid fa-paste" aria-hidden="true"></i></button>
         </div>
         <p><output id="content-save-status" role="status" aria-live="polite"></output></p>
-        <button type="button" id="review-continue">Continue to conference details</button>
+        <button type="button" id="review-continue">Continue to poster layout</button>
     </div>
 </div>
 <dialog id="revision-dialog" aria-labelledby="revision-title" aria-describedby="revision-description">

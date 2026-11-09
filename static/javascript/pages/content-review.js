@@ -129,7 +129,7 @@
         continuing = true;
         next.disabled = true;
         if (await saveAll()) {
-            location.assign("/conferences/query");
+            location.assign(root.dataset.nextPage);
         } else {
             continuing = false;
             updateContinue();

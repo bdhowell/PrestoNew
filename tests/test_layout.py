@@ -236,7 +236,7 @@ class LayoutRouteTests(unittest.TestCase):
         self.balancer.assert_not_awaited()
         self.store.set_resumption.assert_not_awaited()
 
-    def test_missing_dimensions_can_be_set_before_returning_to_editor(self) -> None:
+    def test_missing_dimensions_can_be_set_before_upload(self) -> None:
         self.store.get.return_value = replace(DRAFT, width=None, height=None)
         response = self.client.get("/layout/edit?pid=11")
         self.assertEqual(response.status_code, 200)
@@ -245,10 +245,7 @@ class LayoutRouteTests(unittest.TestCase):
         response = self.client.post("/layout/dimensions", json={"dimensions": "48 in x 36 in"})
         self.assertEqual(response.status_code, 200)
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 36 * 2.54, 48 * 2.54, "in")
-        self.store.get.return_value = DRAFT
-        response = self.client.get(response.json()["redirect"])
-        self.assertEqual(response.status_code, 200)
-        self.assertIn('id="poster-canvas"', response.text)
+        self.assertEqual(response.json()["redirect"], "/content/upload")
 
     def test_saved_theme_and_fonts_are_applied_to_layout(self) -> None:
         self.store.get.return_value = replace(DRAFT, theme="blues", fonts="technical")
@@ -516,13 +513,23 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertIn('data-page="layout-dimensions"', response.text)
         self.assertIn('id="dimension-correction" hidden', response.text)
         self.assertIs(wikkit.WORKFLOWS["layout-dimensions"], routes.dimensions_workflow)
+        self.store.set_resumption.assert_awaited_once_with(
+            7, 11, "http://testserver/layout/dimensions?xyzzy=arpa",
+        )
+
+    def test_resumed_dimensions_page_restores_its_own_resumption_marker(self) -> None:
+        response = self.client.get("/layout/dimensions?tag=a%2Fb&tag=two&xyzzy=arpa")
+        self.assertEqual(response.status_code, 200)
+        self.store.set_resumption.assert_awaited_once_with(
+            7, 11, "http://testserver/layout/dimensions?tag=a%2Fb&tag=two&xyzzy=arpa",
+        )
 
     def test_dimension_updates_store_centimeters_and_report_the_display_units(self) -> None:
         response = self.client.post("/layout/dimensions", json={"dimensions": "36 in x 48 in"})
         self.assertEqual(response.status_code, 200)
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 121.92, 91.44, "in")
         self.assertEqual(response.json()["preview"], {"height": 36, "width": 48, "units": "in"})
-        self.assertEqual(response.json()["redirect"], "/layout/edit")
+        self.assertEqual(response.json()["redirect"], "/content/upload")
 
     def test_dimension_updates_can_preserve_a_selected_template(self) -> None:
         response = self.client.post(
@@ -531,6 +538,7 @@ class LayoutRouteTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 91.44, 121.92, "in", "central")
+        self.assertEqual(response.json()["redirect"], "/layout/edit")
         response = self.client.post(
             "/layout/dimensions",
             json={"dimensions": "48 in x 36 in", "template": "unknown"},
@@ -741,7 +749,7 @@ class DimensionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         await routes.dimensions_workflow(self.bot)
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 121.92, 91.44, "in")
         self.assertIn("&lt;Meeting&gt;", self.bot.request_response.await_args.args[0])
-        self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/layout/edit")
+        self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/content/upload")
 
     async def test_accept_maximum_and_idk_use_cm_and_correct_display_units(self) -> None:
         self.store.conference_details.return_value = ("Meeting", {

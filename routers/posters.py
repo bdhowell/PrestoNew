@@ -162,7 +162,7 @@ async def create_poster(request: Request) -> JSONResponse:
                    "unpurchased poster. Here it is.</p>",
             "redirect": f"/layout/edit?pid={pid}",
         })
-    return JSONResponse({"ok": True, "redirect": "/content/upload"})
+    return JSONResponse({"ok": True, "redirect": "/conferences/query"})
 
 
 @router.get("/{pid}/open")

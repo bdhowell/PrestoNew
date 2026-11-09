@@ -30,7 +30,7 @@ from routers.wikkit import check_origin, read_json, render_page
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/content", tags=["content"])
 INTRO = (
-    "<p>Let&rsquo;s start by uploading your source content. I&rsquo;ll read through it "
+    "<p>Now let&rsquo;s upload your source content. I&rsquo;ll read through it "
     "once you&rsquo;ve finished uploading. "
     "You can always upload additional content later if needed, or delete content you "
     "no longer want to include.</p>"
@@ -93,6 +93,7 @@ async def upload_page(request: Request) -> Response:
     try:
         uid, pid = await selected_draft(request)
         items = await content.store().list_sources(uid, pid)
+        await common.resume(request)
     except STORAGE_ERRORS:
         logger.exception("Could not load source uploads")
         raise HTTPException(503, "Your source files could not be loaded. Please try again.") from None
@@ -166,6 +167,7 @@ async def extract_page(request: Request) -> Response:
     try:
         uid, pid = await selected_draft(request)
         items = await content.store().list_sources(uid, pid)
+        await common.resume(request)
     except STORAGE_ERRORS:
         logger.exception("Could not load content for extraction")
         raise HTTPException(503, "Your content could not be loaded. Please try again.") from None
@@ -237,10 +239,9 @@ async def extracted(request: Request) -> JSONResponse:
 async def elucidate_page(request: Request) -> Response:
     if getattr(request.state, "user_id", None) is None:
         return RedirectResponse("/account/signin", status_code=303)
-    if request.query_params.get("xyzzy") != 'arpa':
-        await common.resume(request)
     try:
         await selected_draft(request)
+        await common.resume(request)
     except STORAGE_ERRORS:
         logger.exception("Could not load the poster for elucidation")
         raise HTTPException(503, "Your poster could not be loaded. Please try again.") from None
@@ -307,7 +308,7 @@ async def review_page(request: Request) -> Response:
     try:
         uid, pid = await selected_draft(request)
         saved, _ = await posters.store().content(uid, pid)
-        await common.resume(request, "/content/review")
+        await common.resume(request)
     except STORAGE_ERRORS:
         logger.exception("Could not load poster sections for review")
         raise HTTPException(503, "Your sections could not be loaded. Please try again.") from None
@@ -321,7 +322,9 @@ async def review_page(request: Request) -> Response:
         username=(getattr(request.state, "user", None) or {}).get(
             "user-name", identity.DEFAULT_NAME,
         ),
-        pid=pid, sections=[
+        pid=pid,
+        next_page="/layout/edit",
+        sections=[
             (which, label, Markup(elucidation.clean_html(values.get(which, ""))))
             for which, label in REVIEW_SECTIONS
         ],

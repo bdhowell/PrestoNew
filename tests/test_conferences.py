@@ -163,8 +163,9 @@ class ConferenceRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('id="conferences-list"', response.text)
         self.assertIn("/static/javascript/pages/conferences-query.js", response.text)
+        self.assertIn('<a href="/layout/dimensions">Continue without conference information</a>', response.text)
         self.posters.get.assert_awaited_once_with(7, 11)
-        self.posters.set_resumption.assert_awaited_once_with(7, 11, "/conferences/query?xyzzy=arpa")
+        self.posters.set_resumption.assert_awaited_once_with(7, 11, "http://testserver/conferences/query?xyzzy=arpa")
         self.posters.get.return_value = posters.Poster(11, "Research", None, None, None, None, None, True, None)
         response = self.client.get("/conferences/query", follow_redirects=False)
         self.assertEqual(response.headers["location"], "/posters/list")
@@ -175,6 +176,13 @@ class ConferenceRouteTests(unittest.TestCase):
 
     def test_query_workflow_is_registered_for_the_page(self) -> None:
         self.assertIs(wikkit_routes.WORKFLOWS["conferences-query"], routes.query_workflow)
+
+    def test_query_resumption_preserves_parameters_and_does_not_duplicate_marker(self) -> None:
+        response = self.client.get("/conferences/query?tag=a%2Fb&tag=two&xyzzy=arpa")
+        self.assertEqual(response.status_code, 200)
+        self.posters.set_resumption.assert_awaited_once_with(
+            7, 11, "http://testserver/conferences/query?tag=a%2Fb&tag=two&xyzzy=arpa",
+        )
 
 
 class QueryWorkflowTests(unittest.IsolatedAsyncioTestCase):
@@ -217,8 +225,8 @@ class QueryWorkflowTests(unittest.IsolatedAsyncioTestCase):
     def redirected(self, bot: SimpleNamespace) -> bool:
         return bot.sent[-1]["command"] == {"does": "redirect", "payload": "/layout/dimensions"}
 
-    async def test_no_information_continues_to_uploads(self) -> None:
-        for reply in ("I don't know", "idk", "No"):
+    async def test_no_information_continues_to_dimensions(self) -> None:
+        for reply in ("I don't know", "idk", "No", "skip", "continue without conference information"):
             with self.subTest(reply=reply):
                 bot = await self.run_workflow(reply)
                 self.assertIn("Many conferences and fairs", bot.prompts[0])
@@ -265,6 +273,12 @@ class QueryWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.store.search.return_value = [conference("Stored Meeting", 3), conference("Other Meeting", 4)]
         bot = await self.run_workflow("meeting", "none of these")
         self.assertIn("Okay, we will continue without conference information.", bot.sent[-1]["say"])
+        self.assertTrue(self.redirected(bot))
+        self.store.select.assert_not_awaited()
+
+    async def test_skip_after_no_results_continues_to_dimensions(self) -> None:
+        bot = await self.run_workflow("mystery meeting", "skip")
+        self.assertTrue(self.redirected(bot))
         self.store.select.assert_not_awaited()
 
     async def test_search_failures_are_reported_and_selection_failures_reprompt(self) -> None:
