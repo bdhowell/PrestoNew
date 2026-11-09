@@ -222,7 +222,7 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
                 await self.page.wait_for_timeout(150)
                 self.assertEqual(await self.all_areas(), before)
                 self.assertTrue(await self.page.locator("#results").evaluate(
-                    "element => element.scrollHeight > element.clientHeight && getComputedStyle(element).overflow === 'hidden'",
+                    "element => element.scrollHeight > element.clientHeight && getComputedStyle(element).overflow === 'auto'",
                 ))
                 self.assertEqual(await self.page.evaluate("geometryRequests.length"), 1)
                 self.store.get.return_value = replace(DRAFT, template=template)
@@ -233,6 +233,53 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
                 })
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(self.errors, [])
+
+    async def test_overflowing_sections_scroll_without_changing_geometry(self) -> None:
+        for template in posters.TEMPLATES:
+            with self.subTest(template=template):
+                await self.load(template)
+                before = await self.all_areas()
+                for colored_headers in (False, True):
+                    await self.page.locator("body").evaluate(
+                        """(body, enabled) => {
+                            body.classList.toggle("colored-poster-header", enabled);
+                            body.classList.toggle("colored-section-headers", enabled);
+                        }""", colored_headers,
+                    )
+                    selectors = ["#results", "#methods"]
+                    if await self.page.locator(".pane.horizontal .section").count():
+                        selectors.append(".pane.horizontal .section")
+                    for selector in selectors:
+                        with self.subTest(colored_headers=colored_headers, section=selector):
+                            section = self.page.locator(selector).first
+                            result = await section.evaluate("""section => {
+                                section.querySelector(".content").innerHTML =
+                                    "<p>Scientific observations.</p>".repeat(1000)
+                                    + "<p>End of section</p>";
+                                section.scrollTop = section.scrollHeight;
+                                return {
+                                    overflow: getComputedStyle(section).overflowY,
+                                    clientHeight: section.clientHeight,
+                                    scrollHeight: section.scrollHeight,
+                                    scrollTop: section.scrollTop,
+                                };
+                            }""")
+                            self.assertEqual(result["overflow"], "auto")
+                            self.assertGreater(result["scrollHeight"], result["clientHeight"])
+                            self.assertGreater(result["scrollTop"], 0)
+                            self.assertAlmostEqual(
+                                result["scrollTop"] + result["clientHeight"],
+                                result["scrollHeight"], delta=1,
+                            )
+                self.assertEqual(await self.all_areas(), before)
+                await self.page.emulate_media(media="print")
+                self.assertEqual(
+                    await self.page.locator("#results").evaluate(
+                        "section => getComputedStyle(section).overflowY",
+                    ),
+                    "hidden",
+                )
+                await self.page.emulate_media(media="screen")
 
     async def test_reopening_restores_baseline_and_manual_resizing_still_works(self) -> None:
         for template in posters.TEMPLATES:

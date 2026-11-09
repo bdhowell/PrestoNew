@@ -296,6 +296,12 @@ input[name="height"] {
     min-width: 0;
 }
 
+@media screen {
+    #poster-content[data-fixed-geometry="true"] .layout .section {
+        overflow: auto;
+    }
+}
+
 .resize-overlay {
     position: absolute;
     inset: 0;
