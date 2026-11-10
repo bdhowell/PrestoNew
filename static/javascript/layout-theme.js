@@ -8,6 +8,7 @@
     const themeCancel = document.getElementById("theme-cancel");
     const themeApply = document.getElementById("theme-apply");
     const themeStatus = document.getElementById("theme-status");
+    const allColors = themeDialog.dataset.colors.split(/\s+/).filter(Boolean);
     const colors = [...themeForm.querySelectorAll("input[name='color']")];
     const corners = [...themeForm.querySelectorAll("input[name='corners']")];
     const posterHeader = themeForm.querySelector("input[name='colored_poster_header']");
@@ -17,7 +18,7 @@
     const updateThemeExamples = () => {
         const color = themeForm.querySelector("input[name='color']:checked")?.value;
         const corner = themeForm.querySelector("input[name='corners']:checked")?.value;
-        themeDialog.classList.remove(...colors.map(input => input.value));
+        themeDialog.classList.remove(...allColors);
         if (color) themeDialog.classList.add(color);
         themeDialog.classList.remove(...corners.map(input => `corners-${input.value}`));
         if (corner) themeDialog.classList.add(`corners-${corner}`);
@@ -45,7 +46,12 @@
         event.preventDefault();
         if (savingTheme || !themeForm.reportValidity()) return;
 
-        const color = themeForm.querySelector("input[name='color']:checked").value;
+        const color = themeForm.querySelector("input[name='color']:checked")?.value
+            || allColors.find(value => document.body.classList.contains(value));
+        if (!color) {
+            themeStatus.textContent = "Choose a theme color before applying.";
+            return;
+        }
         const corner = themeForm.querySelector("input[name='corners']:checked").value;
         const settings = {
             pid: Number(themeDialog.dataset.pid),
@@ -74,7 +80,7 @@
                 throw new Error(result.detail || "Your theme could not be saved.");
             }
             document.body.classList.remove(
-                ...colors.map(input => input.value),
+                ...allColors,
                 ...corners.map(input => `corners-${input.value}`),
                 "colored-poster-header",
                 "colored-section-headers",

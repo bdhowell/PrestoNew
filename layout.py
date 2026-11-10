@@ -123,6 +123,7 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
         theme=posters.theme_classes(poster.theme, poster.theme_settings),
         fonts=poster.fonts if poster.fonts in posters.installed_fonts() else "",
         themes=posters.installed_themes(),
+        theme_options=posters.THEME_PICKER_COLORS,
         font_sets=posters.installed_fonts(),
         poster_presets=posters.POSTER_PRESETS,
         poster_preset_errors=dimension_rules.preset_errors(),

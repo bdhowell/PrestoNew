@@ -247,7 +247,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         """
         image = await poster_thumbnail(rendered)
         self.assertTrue(image.startswith(b"\x89PNG\r\n\x1a\n"))
-        self.assertEqual(source_processing.image_dimensions(image), (640, 480))
+        self.assertEqual(source_processing.image_dimensions(image), (640, 640))
 
     async def test_thumbnail_preserves_landscape_square_and_portrait_dimensions(self) -> None:
         for width, height in ((4800, 3600), (7200, 2400), (3600, 3600), (2400, 7200)):
@@ -260,15 +260,17 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 """
                 image = Image.open(BytesIO(await poster_thumbnail(rendered))).convert("RGB")
                 bounds = ImageChops.difference(
-                    image, Image.new("RGB", image.size, "white"),
+                    image, Image.new("RGB", image.size, "#d6d8da"),
                 ).getbbox()
                 self.assertIsNotNone(bounds)
                 left, top, right, bottom = bounds
-                scale = min(616 / width, 456 / height)
+                self.assertEqual(image.size, (640, 640))
+                self.assertEqual(image.getpixel((0, 0)), (214, 216, 218))
+                scale = min(616 / width, 616 / height)
                 self.assertAlmostEqual(right - left, width * scale, delta=2)
                 self.assertAlmostEqual(bottom - top, height * scale, delta=2)
                 self.assertAlmostEqual((left + right) / 2, 320, delta=1)
-                self.assertAlmostEqual((top + bottom) / 2, 240, delta=1)
+                self.assertAlmostEqual((top + bottom) / 2, 320, delta=1)
 
     async def test_preview_authors_flow_horizontally_and_wrap_as_a_list(self) -> None:
         rendered = layout.templates.env.get_template("posters/document.html").render(
@@ -290,6 +292,24 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         )
         last = await authors.last.bounding_box()
         self.assertGreater(last["y"], first["y"])
+
+    async def test_thumbnail_containers_are_square_in_both_display_modes(self) -> None:
+        for mode in ("list", "grid"):
+            for width in (200, 600):
+                with self.subTest(mode=mode, width=width):
+                    await self.page.set_content(f"""
+                        <div class="poster-items {mode}" style="width: {width}px">
+                            <div class="poster-thumbnail"><img alt="Poster"></div>
+                        </div>
+                    """)
+                    await self.page.add_style_tag(
+                        path=str(ROOT / "static/css/pages/posters-list.css"),
+                    )
+                    bounds = await self.page.locator(".poster-thumbnail").bounding_box()
+                    self.assertAlmostEqual(bounds["width"], bounds["height"], delta=1)
+                    self.assertEqual(await self.page.locator("img").evaluate(
+                        "element => getComputedStyle(element).objectFit",
+                    ), "contain")
 
     async def test_preview_sections_fill_the_poster_below_the_header(self) -> None:
         rendered = layout.templates.env.get_template("posters/document.html").render(
@@ -349,7 +369,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_placeholder_preview_can_be_saved_as_a_thumbnail(self) -> None:
         image = await poster_thumbnail("<p>Preview unavailable: dimensions are not set.</p>")
-        self.assertEqual(source_processing.image_dimensions(image), (640, 480))
+        self.assertEqual(source_processing.image_dimensions(image), (640, 640))
 
     async def dimensions(self) -> dict:
         return await self.page.evaluate("""() => {
@@ -415,12 +435,28 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("#theme-cancel").click()
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
         self.assertEqual(await self.page.evaluate("window.themeRequests.length"), 1)
+        await self.page.evaluate("""() => {
+            document.body.className = "yellow corners-rounded technical";
+            window.themeRequests = [];
+        }""")
+        await self.page.locator("#theme").click()
+        self.assertFalse(await self.page.locator("#theme-options input[name='color']:checked").count())
+        await self.page.locator("#theme-apply").click()
+        self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
+        self.assertEqual(set((await self.page.locator("body").get_attribute("class")).split()), {
+            "technical", "yellow", "corners-rounded",
+        })
+        self.assertEqual(await self.page.evaluate("window.themeRequests[0].data.color"), "yellow")
 
     async def test_theme_options_show_all_controls_and_fit_small_screens(self) -> None:
         await self.page.set_viewport_size({"width": 1200, "height": 1100})
         await self.editor()
         await self.page.evaluate("document.getElementById('theme-dialog').showModal()")
-        self.assertEqual(await self.page.locator("#theme-options input[name='color']").count(), 10)
+        color_inputs = self.page.locator("#theme-options input[name='color']")
+        self.assertEqual(
+            await color_inputs.evaluate_all("inputs => inputs.map(input => input.value)"),
+            list(posters.THEME_COLORS),
+        )
         self.assertEqual(await self.page.locator("#theme-options input[name='corners']").count(), 4)
         self.assertEqual(await self.page.locator("#theme-options input[type='checkbox']").count(), 2)
         for width, height in ((1200, 1100), (360, 500)):

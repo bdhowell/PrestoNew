@@ -12,6 +12,12 @@
     gap: 0.25rem;
 }
 
+.poster-filters > button {
+    align-self: flex-end;
+    position: relative;
+    top: -2px;
+}
+
 .poster-filters input {
     width: min(30rem, 75vw);
 }
@@ -53,7 +59,9 @@
 
 .poster-thumbnail {
     position: relative;
-    height: 20rem;
+    width: 100%;
+    aspect-ratio: 1;
+    background: #d6d8da;
     overflow: hidden;
     pointer-events: none;
 }
@@ -74,7 +82,6 @@
 
 .poster-items.list .poster-thumbnail {
     width: min(100%, 16rem);
-    height: 12rem;
 }
 
 dialog {

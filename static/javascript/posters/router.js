@@ -83,9 +83,12 @@
             }
             const width = Number(poster.dataset.width);
             const height = Number(poster.dataset.height);
+            const scale = Math.min(frame.parentElement.clientWidth / width, frame.parentElement.clientHeight / height);
             frame.style.width = `${width}px`;
             frame.style.height = `${height}px`;
-            frame.style.transform = `scale(${Math.min(frame.parentElement.clientWidth / width, frame.parentElement.clientHeight / height)})`;
+            frame.style.transform = `scale(${scale})`;
+            frame.style.left = `${(frame.parentElement.clientWidth - width * scale) / 2}px`;
+            frame.style.top = `${(frame.parentElement.clientHeight - height * scale) / 2}px`;
             frame.style.visibility = "visible";
         };
         frame.addEventListener("load", fit);

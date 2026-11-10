@@ -9,7 +9,7 @@ from playwright.async_api import Page, Route, async_playwright
 ROOT = Path(__file__).resolve().parent
 BALANCE_SCRIPT = (ROOT / "static/javascript/layout-balance.js").read_text()
 THUMBNAIL_WIDTH = 640
-THUMBNAIL_HEIGHT = 480
+THUMBNAIL_HEIGHT = 640
 
 
 async def balance_text_width(page: Page, selector: str) -> float:
@@ -93,7 +93,7 @@ async def balance_header_widths(rendered: str, width: float) -> dict[str, float]
 
 
 async def poster_thumbnail(rendered: str) -> bytes:
-    """Render a poster preview into a fixed-size PNG thumbnail."""
+    """Contain a proportionally scaled poster on a contrasting square PNG."""
     document = dom.document_fromstring(rendered)
     for link in document.xpath("//link[@rel='stylesheet']"):
         href = link.get("href", "")
@@ -125,18 +125,18 @@ async def poster_thumbnail(rendered: str) -> bytes:
     for child in list(body):
         body.remove(child)
     body.append(frame)
-    body.set("style", "margin: 0; width: 640px; height: 480px; overflow: hidden;")
+    body.set("style", "margin: 0; width: 640px; height: 640px; overflow: hidden;")
     head = document.find("head")
     if head is None:
         head = etree.Element("head")
         document.insert(document.index(body), head)
     style = etree.SubElement(head, "style")
     style.text = """
-        html, body { width: 640px; height: 480px; margin: 0; }
+        html, body { width: 640px; height: 640px; margin: 0; }
         #thumbnail-frame {
-            position: relative; width: 640px; height: 480px; overflow: hidden;
+            position: relative; width: 640px; height: 640px; overflow: hidden;
             display: flex; align-items: center; justify-content: center;
-            background: #fff; color: #111;
+            background: #d6d8da; color: #111;
         }
     """
 

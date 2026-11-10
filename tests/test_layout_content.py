@@ -149,6 +149,7 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         footer = Environment(autoescape=True).from_string(
             (ROOT / "templates/layoutfoot.html").read_text(),
         ).render(poster={"pid": 11}, themes=posters.installed_themes(),
+                 theme_options=posters.THEME_PICKER_COLORS,
                  font_sets=posters.installed_fonts())
         await self.page.set_content(
             '<body class="blue corners-square elegant"><div class="content" contenteditable="true">Sample text</div>'
@@ -259,7 +260,7 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_corner_and_header_examples_follow_selected_color_and_shape(self) -> None:
         await self.page.locator("#theme").click()
-        await self.page.locator('label:has(input[name="color"][value="yellow"])').click()
+        await self.page.locator('label:has(input[name="color"][value="green"])').click()
         await self.page.locator('label:has(input[name="corners"][value="rounded"])').click()
         examples = await self.page.locator(
             ".theme-corner-option, .theme-toggle-option",
@@ -272,8 +273,8 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
             };
         })""")
         for example in examples:
-            self.assertEqual(example["background"], "rgb(225, 181, 28)")
-            self.assertEqual(example["color"], "rgb(34, 34, 34)")
+            self.assertEqual(example["background"], "rgb(52, 131, 75)")
+            self.assertEqual(example["color"], "rgb(255, 255, 255)")
         for example, expected in zip(examples[:4], (0, 20 / 3, 40 / 3, 20)):
             self.assertAlmostEqual(float(example["radius"].removesuffix("px")), expected, places=2)
         for example in examples[4:]:
@@ -282,6 +283,21 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
                 40 / 3,
                 places=2,
             )
+
+    async def test_theme_controls_match_the_current_theme_button_text_color(self) -> None:
+        await self.page.locator("#theme").click()
+        for theme in posters.THEME_COLORS:
+            with self.subTest(theme=theme):
+                await self.page.locator(
+                    f'label:has(input[name="color"][value="{theme}"])',
+                ).click()
+                colors = await self.page.locator(
+                    ".theme-color-option:has(input[name='color']:checked), "
+                    ".theme-corner-option, .theme-toggle-option",
+                ).evaluate_all(
+                    "elements => elements.map(element => getComputedStyle(element).color)",
+                )
+                self.assertEqual(len(set(colors)), 1)
 
     async def test_header_controls_have_ten_pixel_gap(self) -> None:
         await self.page.locator("#theme").click()
@@ -353,7 +369,7 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_selected_theme_buttons_use_contrasting_three_pixel_outlines(self) -> None:
         await self.page.locator("#theme").click()
-        await self.page.locator('label:has(input[name="color"][value="yellow"])').click()
+        await self.page.locator('label:has(input[name="color"][value="blue"])').click()
         await self.page.locator('label:has(input[name="corners"][value="rounded"])').click()
         await self.page.locator('label:has(input[name="colored_poster_header"])').click()
         await self.page.locator('label:has(input[name="colored_section_headers"])').click()
@@ -406,7 +422,7 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
             ).inner_text(),
             "Colored Poster Header",
         )
-        await self.page.locator('label:has(input[name="color"][value="light-grey"])').click()
+        await self.page.locator('label:has(input[name="color"][value="dark-grey"])').click()
         light_selected = await self.page.locator(
             ".theme-color-option:has(> input[name='color']:checked)",
         ).evaluate("""element => {
@@ -475,7 +491,18 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("#theme").click()
         self.assertEqual(
             await self.page.locator(".theme-color-option").count(),
-            len(posters.THEME_COLORS),
+            len(posters.THEME_PICKER_COLORS),
+        )
+        self.assertEqual(
+            await self.page.locator(".theme-color-option").evaluate_all(
+                "elements => elements.map(element => [element.querySelector('input').value, "
+                "getComputedStyle(element).color])",
+            ),
+            [
+                [theme, "rgb(0, 0, 0)" if theme in {"yellow", "orange", "light-grey"}
+                 else "rgb(255, 255, 255)"]
+                for theme in posters.THEME_COLORS
+            ],
         )
         buttons = await self.page.locator(".theme-color-option").evaluate_all("""elements =>
             elements.map(element => {

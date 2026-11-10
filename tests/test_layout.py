@@ -276,7 +276,7 @@ class LayoutRouteTests(unittest.TestCase):
         document = html.fromstring(self.client.get("/layout/edit").text)
         self.assertEqual(
             document.xpath('//*[@id="theme-options"]//input[@name="color"]/@value'),
-            posters.installed_themes(),
+            list(posters.THEME_PICKER_COLORS),
         )
         self.assertEqual(
             document.xpath('//*[@id="theme-options"]//input[@name="corners"]/@value'),

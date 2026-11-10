@@ -33,7 +33,7 @@
 
 .yellow {
     --palette-color: #e1b51c;
-    --palette-button-text: #222222;
+    --palette-button-text: #000000;
     --background-color: #fff9df;
     --header-background-color: #69520c;
     --header-font-color: #ffffff;
@@ -62,7 +62,7 @@
 
 .orange {
     --palette-color: #df7629;
-    --palette-button-text: #222222;
+    --palette-button-text: #000000;
     --background-color: #fff2e6;
     --header-background-color: #8b4313;
     --heading-background-color: #b85b1b;
@@ -90,7 +90,7 @@
 
 .light-grey {
     --palette-color: #d6d8da;
-    --palette-button-text: #222222;
+    --palette-button-text: #000000;
     --background-color: #f2f3f4;
     --header-background-color: #656a6e;
     --heading-background-color: #6c7277;

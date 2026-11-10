@@ -83,7 +83,8 @@
             </div>
         </form>
     </dialog>
-    <dialog id="theme-dialog" aria-labelledby="theme-dialog-title" data-pid="{{ poster.pid }}">
+    <dialog id="theme-dialog" aria-labelledby="theme-dialog-title" data-pid="{{ poster.pid }}"
+            data-colors="{{ themes | join(' ') }}">
         <form id="theme-form">
             <h2 id="theme-dialog-title">Set theme</h2>
             <p>Choose a color, corner shape, and optional colored headers.</p>
@@ -92,9 +93,9 @@
                     <fieldset class="theme-setting">
                         <legend>Theme Color</legend>
                         <div class="theme-color-options">
-                            {% for option in themes %}
+                            {% for option in theme_options %}
                             <label class="theme-color-option {{ option }}">
-                                <input type="radio" name="color" value="{{ option }}" required>
+                                <input type="radio" name="color" value="{{ option }}">
                                 <span>{% if option == "black-and-white" %}Black &amp; White{% else %}{{ option | replace("-", " ") | title }}{% endif %}</span>
                             </label>
                             {% endfor %}

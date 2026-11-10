@@ -28,6 +28,7 @@ THEME_COLORS = (
     "blue", "red", "yellow", "green", "brown", "orange", "purple",
     "dark-grey", "light-grey", "black-and-white",
 )
+THEME_PICKER_COLORS = THEME_COLORS
 THEME_CORNERS = ("square", "slightly-rounded", "rounded", "very-rounded")
 LEGACY_THEME_COLORS = {
     "basic": "blue", "dark": "dark-grey", "light": "light-grey",
