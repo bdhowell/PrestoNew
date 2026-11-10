@@ -286,11 +286,20 @@ overlapping graphics are counted separately. The current content sanitizer
 does not yet preserve graphics, so saved section content currently cannot
 produce graphic measurements until graphics support is added.
 
-Section fit, overflow/underflow flags, and section lists use
-`scrollHeight / offsetHeight`: ratios above the maximum are overflowing, and
-ratios below the minimum are underflowing. Equality is within range. Horizontal
-scrolling does not affect this classification. The `vertical_overflow` output
-retains its existing inverse ratio, `offsetHeight / scrollHeight`.
+Section overflow means `scrollHeight > clientHeight`: content extends below the
+section's visible viewport. Exact fits are not overflowing, regardless of
+`SECTION_MAX_OCCUPIED`. Borders, horizontal scrolling, poster zoom, and the
+current scroll position do not affect this comparison. Profiles report
+`viewport_height` (`clientHeight`), `overflow_height`
+(`max(0, scrollHeight - clientHeight)`), and `overflow_percentage`
+(`100 * overflow_height / clientHeight`). A 150px scroll height in a 100px
+viewport is 50% overflowing. Section fit, flags, and overflowing-section lists
+use this same test. The `vertical_overflow` output retains its existing inverse
+ratio, `offsetHeight / scrollHeight`.
+
+The minimum occupancy check uses `scrollHeight / clientHeight`. Since the DOM
+scroll height is at least the viewport height, this metric does not detect
+unused space in short or empty sections.
 
 Threshold environment variables `SECTION_MIN_OCCUPIED` (30),
 `SECTION_MAX_OCCUPIED` (75), and `SECTION_UNDERFLOW_OCCUPIED` (0.40) are
@@ -373,6 +382,7 @@ def profile_poster(pid:int):
 
 		offsetHeight = await section_element.evaluate("element => element.offsetHeight")
 		scrollHeight = await section_element.evaluate("element => element.scrollHeight")
+		clientHeight = await section_element.evaluate("element => element.clientHeight")
 		
 		details['area'] = await section_element.evaluate("element => element.offsetWidth") * offsetHeight
 		details['occupied'] = await section_element.evaluate("element => element.scrollWidth") * scrollHeight
@@ -381,10 +391,13 @@ def profile_poster(pid:int):
 		details['graph_density'] = details['graph_area'] / details['area']
 		details['vertical_overflow'] = offsetHeight / scrollHeight
 
-		scroll_ratio = scrollHeight / offsetHeight
+		details['viewport_height'] = clientHeight
+		details['overflow_height'] = max(0, scrollHeight - clientHeight)
+		details['overflow_percentage'] = 100 * details['overflow_height'] / clientHeight
+		scroll_ratio = scrollHeight / clientHeight
 		if scroll_ratio < section_min_area:
 			underflowing_sections.append(name)
-		if scroll_ratio > section_max_area:
+		if details['overflow_height'] > 0:
 			overflowing_sections.append(name)
 
 		total_area += details['area']
@@ -392,11 +405,11 @@ def profile_poster(pid:int):
 
 		poster_density = occupied_area / total_area
 
-		details['overflow'] = scroll_ratio > section_max_area
+		details['overflow'] = details['overflow_height'] > 0
 		details['underflow'] = scroll_ratio < section_min_area
 		
 		details['fit'] = TOO_SHORT if scroll_ratio < section_min_area \
-					else TOO_LONG if scroll_ratio > section_max_area \
+					else TOO_LONG if details['overflow'] \
 					else JUST_RIGHT
 
 		details['oversized_graphics'] = oversized_graphics
@@ -542,3 +555,9 @@ both available and disabled actions.
 Loading `/layout/edit` also schedules a profile after the DOM and initial saved
 layout geometry are ready. Subsequent saved edits continue to trigger profiling
 after the configured quiet period.
+Text input, including cuts, also rechecks the edited section's live
+`scrollHeight > clientHeight` after `PROFILE_VALIDATION_INTERVAL` milliseconds
+of inactivity, using the server-provided `data-profile-validation-interval`.
+This updates outlines without waiting for autosave or server rendering.
+Later saved profiles use live overflow measurements for edited sections so an
+older saved measurement cannot restore a resolved overflow warning.

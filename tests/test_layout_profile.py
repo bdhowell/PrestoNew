@@ -28,6 +28,10 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
                 </div>
             </div>
             <output id="content-save-status"></output>
+            <style>
+                #results {height: 100px; padding: 0; overflow: auto}
+                #results .content {height: 200px; margin: 0}
+            </style>
         """)
         await self.page.evaluate("""() => {
             window.requests = [];
@@ -62,7 +66,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
             document.dispatchEvent(new Event("poster-layout-updated"));
             document.dispatchEvent(new Event("poster-layout-updated"));
         }""")
-        await self.page.wait_for_function("feedback.length === 2")
+        await self.page.wait_for_function("requests.length === 3")
         self.assertEqual(await self.page.evaluate("requests"), [
             "/magic/11/profile", "/layout/content", "/magic/11/profile",
         ])
@@ -132,6 +136,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.locator("#layout-context-menu").count(), 0)
 
         await self.page.evaluate("""() => {
+            document.querySelector("#results .content").style.height = "20px";
             profileResponse = {
                 sections: {results: {}, citations: {}, conclusion: {}},
                 overflowing_sections: [],
@@ -147,7 +152,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.page.locator("#graphic").evaluate(
             "element => element.classList.contains('layout-profile-attention')",
         ))
-        self.assertEqual(await self.page.evaluate("feedback.length"), 2)
+        self.assertGreaterEqual(await self.page.evaluate("feedback.length"), 2)
 
     async def test_outlines_follow_current_section_and_graphic_warnings(self) -> None:
         await self.page.set_content("""
@@ -301,6 +306,58 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.locator("#editor").evaluate(
             "element => getComputedStyle(element).outlineStyle",
         ), "none")
+
+    async def test_cut_rechecks_live_overflow_at_configured_interval_before_save(self) -> None:
+        await self.page.set_content("""
+            <div id="poster-content">
+                <div id="layout" data-pid="11" data-profile-validation-interval="40">
+                    <div id="introduction" class="section"
+                         style="height:100px;padding:0;overflow:auto">
+                        <div class="content" contenteditable="true" data-section="introduction"
+                             style="height:200px;margin:0">Text to cut</div>
+                    </div>
+                </div>
+            </div>
+            <output id="content-save-status"></output>
+        """)
+        await self.page.evaluate("""() => {
+            window.feedback = [];
+            window.profileRequests = 0;
+            window.wikkit = {say: message => feedback.push(message)};
+            window.fetch = async url => {
+                if (url === "/layout/content") {
+                    return new Promise(resolve => {
+                        window.finishSave = () => resolve({ok: true, json: async () => ({ok: true})});
+                    });
+                }
+                profileRequests++;
+                return {ok: true, json: async () => ({
+                    sections: {introduction: {}},
+                    overflowing_sections: ["introduction"],
+                    underflowing_sections: [],
+                    oversized_graphics: [],
+                })};
+            };
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-content.js"))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
+        await self.page.wait_for_function("feedback.length === 1")
+        await self.page.locator(".content").evaluate("""element => {
+            element.textContent = "Short";
+            element.style.height = "20px";
+            element.dispatchEvent(new InputEvent("input", {bubbles: true, inputType: "deleteByCut"}));
+        }""")
+        await self.page.wait_for_function(
+            "!document.getElementById('introduction').classList.contains('layout-profile-attention')",
+            timeout=250,
+        )
+        self.assertEqual(await self.page.evaluate("profileRequests"), 1)
+        await self.page.wait_for_function("typeof finishSave === 'function'")
+        await self.page.evaluate("finishSave()")
+        await self.page.wait_for_function("profileRequests === 2")
+        self.assertFalse(await self.page.locator("#introduction").evaluate(
+            "element => element.classList.contains('layout-profile-attention')",
+        ))
 
     async def test_initial_profile_waits_for_dom_and_geometry(self) -> None:
         await self.page.route("https://presto.test/layout-profile.js", lambda route: route.fulfill(

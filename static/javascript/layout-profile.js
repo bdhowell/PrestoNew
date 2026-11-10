@@ -25,6 +25,9 @@
     let revision = 0;
     let activeSection = null;
     let contextMenu = null;
+    let contentTimer = null;
+    let latestProfile = null;
+    const editedSections = new Set();
 
     if (!Number.isSafeInteger(pid) || pid <= 0
         || !Number.isSafeInteger(interval) || interval < 0) {
@@ -135,8 +138,18 @@
             throw new Error("The profiler returned invalid section measurements.");
         }
 
-        const overflowing = new Set(profile.overflowing_sections);
-        const underflowing = new Set(profile.underflowing_sections);
+        latestProfile = profile;
+        const liveOverflow = new Set(profile.overflowing_sections);
+        const liveUnderflow = new Set(profile.underflowing_sections);
+        for (const section of editedSections) {
+            if (!layout.contains(section) || section.clientHeight <= 0) continue;
+            const name = section.id === "conclusions" ? "conclusion" : section.id;
+            liveOverflow.delete(name);
+            liveUnderflow.delete(name);
+            if (section.scrollHeight > section.clientHeight) liveOverflow.add(name);
+        }
+        const overflowing = liveOverflow;
+        const underflowing = liveUnderflow;
         const oversized = new Map();
         for (const graphic of profile.oversized_graphics) {
             if (typeof graphic.section !== "string") {
@@ -264,6 +277,24 @@
     }
 
     document.addEventListener("poster-layout-updated", scheduleProfile);
+    layout.addEventListener("input", event => {
+        const editor = event.target instanceof Element
+            ? event.target.closest("[contenteditable='true'], [contenteditable='plaintext-only']") : null;
+        const section = editor?.closest(".section");
+        if (!section) return;
+        editedSections.add(section);
+        ++revision;
+        clearTimeout(timer);
+        clearTimeout(contentTimer);
+        contentTimer = setTimeout(() => {
+            applyProfile(latestProfile || {
+                sections: {},
+                overflowing_sections: [],
+                underflowing_sections: [],
+                oversized_graphics: [],
+            });
+        }, interval);
+    });
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", profileOnLoad, {once: true});
     } else {

@@ -51,7 +51,10 @@ class ProfileMeasurementsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile["total_area"], 20000)
         self.assertEqual(profile["occupied_area"], 28000)
         self.assertEqual(profile["density"], 1.4)
-        self.assertEqual(profile["overflowing_sections"], ["introduction", "results"])
+        self.assertEqual(introduction["overflow_height"], 50)
+        self.assertEqual(introduction["overflow_percentage"], 50)
+        self.assertEqual(results["overflow_percentage"], 0)
+        self.assertEqual(profile["overflowing_sections"], ["introduction"])
         self.assertEqual(profile["underflowing_sections"], [])
 
     async def test_measures_graphics_and_aggregates_all_sections(self) -> None:
@@ -78,9 +81,9 @@ class ProfileMeasurementsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile["occupied_area"], 31000)
         self.assertAlmostEqual(profile["density"], profile["occupied_area"] / 30000)
         self.assertEqual(profile["underflowing_sections"], [])
-        self.assertEqual(profile["overflowing_sections"], ["introduction", "results", "conclusion"])
+        self.assertEqual(profile["overflowing_sections"], [])
         intro = profile["sections"]["introduction"]
-        self.assertEqual(intro["fit"], ">")
+        self.assertEqual(intro["fit"], "=")
         self.assertEqual(intro["graph_area"], 25 + 1360)
         self.assertAlmostEqual(intro["graph_density"], 1385 / 10000)
         self.assertTrue(intro["graphics"][0]["underflow"])
@@ -88,8 +91,8 @@ class ProfileMeasurementsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(intro["graphics"][1]["too_wide"])
         self.assertTrue(intro["graphics"][1]["too_tall"])
         self.assertFalse(profile["sections"]["results"]["graphics"][0]["too_tall"])
-        self.assertTrue(profile["sections"]["conclusion"]["overflow"])
-        self.assertEqual(profile["sections"]["conclusion"]["fit"], ">")
+        self.assertFalse(profile["sections"]["conclusion"]["overflow"])
+        self.assertEqual(profile["sections"]["conclusion"]["fit"], "=")
         self.assertEqual([item["id"] for item in profile["oversized_graphics"]], ["wide", "big"])
         json.dumps(profile)
 
@@ -111,38 +114,39 @@ class ProfileMeasurementsTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(section["graphics"][0]["oversized"])
         self.assertEqual(profile["overflowing_sections"], [])
 
-    async def test_fit_classifies_scroll_height_ratio_at_thresholds(self) -> None:
+    async def test_overflow_measures_excess_below_client_viewport(self) -> None:
         await self.page.set_content("""
             <style>
-                .section { box-sizing: border-box; width: 100px; height: 100px; overflow: hidden; }
-                #below { border-top: 51px solid; }
-                #equal { border-top: 50px solid; }
-                #above { border-top: 49px solid; }
+                .section { width: 100px; height: 100px; border: 10px solid; overflow: auto; }
+                .content { width: 100px; }
+                #short .content { height: 50px; }
+                #equal .content { height: 100px; }
+                #one .content { height: 101px; }
+                #long .content { height: 150px; }
             </style>
-            <div class="section" id="below"></div>
-            <div class="section" id="equal"></div>
-            <div class="section" id="above"></div>
+            <div style="transform:scale(.5);transform-origin:top left">
+                <div class="section" id="short"><div class="content">Text</div></div>
+                <div class="section" id="equal"><div class="content">Text</div></div>
+                <div class="section" id="one"><div class="content">Text</div></div>
+                <div class="section" id="long"><div class="content">Text</div></div>
+            </div>
         """)
         with patch.dict("os.environ", {
             "SECTION_MIN_OCCUPIED": "50", "SECTION_MAX_OCCUPIED": "50",
         }, clear=True):
             profile = await magic._profile_page(self.page)
-        self.assertEqual(
-            [profile["sections"][name]["density"] for name in ("below", "equal", "above")],
-            [0.49, 0.5, 0.51],
-        )
-        self.assertEqual(
-            [profile["sections"][name]["fit"] for name in ("below", "equal", "above")],
-            ["<", "=", ">"],
-        )
-        self.assertEqual(profile["underflowing_sections"], ["below"])
-        self.assertEqual(profile["overflowing_sections"], ["above"])
-        for name, underflow, overflow in (
-            ("below", True, False), ("equal", False, False), ("above", False, True),
-        ):
+        self.assertEqual(profile["overflowing_sections"], ["one", "long"])
+        for name, excess in (("short", 0), ("equal", 0), ("one", 1), ("long", 50)):
             with self.subTest(name=name):
-                self.assertEqual(profile["sections"][name]["underflow"], underflow)
-                self.assertEqual(profile["sections"][name]["overflow"], overflow)
+                section = profile["sections"][name]
+                self.assertEqual(section["viewport_height"], 100)
+                self.assertEqual(section["overflow_height"], excess)
+                self.assertEqual(section["overflow_percentage"], excess)
+                self.assertEqual(section["overflow"], excess > 0)
+                self.assertEqual(section["fit"], ">" if excess else "=")
+        await self.page.locator("#long").evaluate("element => element.scrollTop = 50")
+        scrolled = await magic._profile_page(self.page)
+        self.assertEqual(scrolled["sections"]["long"]["overflow_percentage"], 50)
 
     async def test_horizontal_overflow_does_not_change_section_fit(self) -> None:
         await self.page.set_content("""
@@ -180,7 +184,9 @@ class ProfileMeasurementsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(section["occupied"], 10000)
             self.assertEqual(section["density"], 1)
             self.assertEqual(section["vertical_overflow"], 1)
-            self.assertEqual(section["fit"], ">")
+            self.assertEqual(section["fit"], "=")
+            self.assertFalse(section["overflow"])
+            self.assertEqual(section["overflow_percentage"], 0)
 
     async def test_invalid_layout_and_settings_fail(self) -> None:
         for markup in ("", '<div class="section" id="x" style="width:0;height:0"></div>',

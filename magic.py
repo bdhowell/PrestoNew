@@ -64,6 +64,7 @@ async def _profile_page(page: Page) -> dict:
         return {
             name: section.id,
             width, height, scrollWidth: section.scrollWidth, scrollHeight: section.scrollHeight,
+            viewportHeight: section.clientHeight,
             graphics: Array.from(section.querySelectorAll(".graphic"), graphic => {
                 const rect = graphic.getBoundingClientRect();
                 return {id: graphic.id, width: rect.width / scaleX, height: rect.height / scaleY};
@@ -87,6 +88,9 @@ async def _profile_page(page: Page) -> dict:
         scroll_width, scroll_height = measurement["scrollWidth"], measurement["scrollHeight"]
         if scroll_height <= 0:
             raise ValueError("Poster sections must have a positive scroll height")
+        viewport_height = measurement["viewportHeight"]
+        if viewport_height <= 0:
+            raise ValueError("Poster sections must have a positive viewport height")
         area = width * height
         graphics = []
         oversized_graphics = []
@@ -116,9 +120,10 @@ async def _profile_page(page: Page) -> dict:
         density = occupied / area
         graph_area = sum(graphic["area"] for graphic in graphics)
         vertical_overflow = height / scroll_height
-        scroll_ratio = scroll_height / height
+        scroll_ratio = scroll_height / viewport_height
+        overflow_height = max(0, scroll_height - viewport_height)
         underflow = scroll_ratio < thresholds["min"]
-        overflow = scroll_ratio > thresholds["max"]
+        overflow = overflow_height > 0
         fit = TOO_SHORT if underflow else (TOO_LONG if overflow else JUST_RIGHT)
         if fit == TOO_SHORT:
             underflowing_sections.append(name)
@@ -131,6 +136,9 @@ async def _profile_page(page: Page) -> dict:
             "graph_area": graph_area,
             "graph_density": graph_area / area,
             "vertical_overflow": vertical_overflow,
+            "viewport_height": viewport_height,
+            "overflow_height": overflow_height,
+            "overflow_percentage": 100 * overflow_height / viewport_height,
             "overflow": overflow,
             "underflow": underflow,
             "oversized_graphics": oversized_graphics, "graphics": graphics,
