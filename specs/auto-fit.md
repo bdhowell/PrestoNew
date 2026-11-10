@@ -129,7 +129,7 @@ Within the context of this application, *graphics* may be PNGs or JPGs; SVG; Lat
 
 Graphics are inserted into section text and may be cut, copied, or pasted.
 
-# Graphic Placement
+## Graphic Placement
 
 Graphics can snap to eight locations within the section:
 
@@ -147,7 +147,7 @@ If a graphic is between two paragraphs and not snapped, then the graphic is impl
 
 Clicking a graphic toggles resize handles at the corners and centered along each edge.
 
-## Dimensions
+## Graphics Dimensions
 
 After resizing a graphic, if the pixel density drops below GRAPHICS_SAFE_DPI:
 - Flash the graphic to indicate it may be too low resolution.
@@ -166,11 +166,10 @@ Wikkit reports per-image progress, then displays uploaded and extracted graphics
 
 ## On Vertical Overflow
 
-If inserting or resizing a graphic causes vertical overflow 
-- Do magic.auto_fit() on the section's layout and content overflow.
-
-If resizing the `#layout` font causes vertical overflow -->
-- Do magic.auto_fit() on the section's layout and content overflow.
+If inserting or resizing a graphic, or resizing the `#layout` font, causes vertical overflow:
+- Profile the poster, or the affected sections when supported, after the change is saved.
+- Update the client with the profile so section and graphic warnings reflect the current layout.
+- Do not automatically rewrite section content to address overflow.
 
 ============================================================
 
@@ -453,7 +452,7 @@ When you give me feedback on a particular section, please be sure to include the
 
 # Asssessing:
 # 
-#   Images that are too large or too small within their sections will be highlighted for resizing.
+#   Graphics that are too large or too small within their sections will be highlighted for resizing.
 #   Sections that are underfilled or overfilled will be flagged for adjustment.
 #    
 #	Returns 

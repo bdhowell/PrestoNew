@@ -186,6 +186,20 @@ class FontSizingBrowserTests(unittest.IsolatedAsyncioTestCase):
             {"pid": 11, "target": "authors", "value": 0.75},
         ])
 
+    async def test_saved_font_size_notifies_layout_profiler(self) -> None:
+        await self.load_controls()
+        await self.page.evaluate("""() => {
+            window.profileUpdates = 0;
+            document.addEventListener("poster-layout-updated", () => profileUpdates++);
+        }""")
+
+        await self.change_size("sections", 80)
+        await self.page.wait_for_function(
+            "document.getElementById('content-save-status').textContent === 'Font sizing saved.'",
+        )
+
+        self.assertEqual(await self.page.evaluate("profileUpdates"), 1)
+
     async def test_save_failure_is_visible_and_retry_saves_latest_value(self) -> None:
         await self.load_controls()
         await self.page.evaluate("""() => {
