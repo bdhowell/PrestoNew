@@ -136,7 +136,7 @@ CREATE INDEX idx_show_approved ON show (approved) WHERE approved IS NULL;
 CREATE TABLE source (
     sid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
-    kind        TEXT NOT NULL CHECK (kind IN ('text', 'svg','mixed','image','math','chart','table','logo','moreinfo', 'qrcode')),
+    kind        TEXT NOT NULL CHECK (kind IN ('text', 'svg','mixed','image','math','chart','table','logo','moreinfo', 'qrcode','thumbnail')),
     parent      INTEGER REFERENCES source(sid) ON DELETE CASCADE,
     text        TEXT,
     description TEXT,
@@ -151,6 +151,7 @@ CREATE TABLE source (
     filename    TEXT, -- original filename of the uploaded file without the path
     mimetype    TEXT NOT NULL,
     added       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     usable      BOOLEAN NOT NULL DEFAULT TRUE,
     evaluation  JSONB,
     evaluation_hash TEXT,
@@ -164,7 +165,7 @@ CREATE INDEX idx_source_parent ON source (parent);
 
 -- Allow at most one source of each special kind per poster.
 CREATE UNIQUE INDEX idx_source_pid_kind_unique ON source (pid, kind)
-WHERE kind IN ('logo', 'moreinfo', 'qrcode');
+WHERE kind IN ('logo', 'moreinfo', 'qrcode', 'thumbnail');
 
 CREATE INDEX idx_source_embedding_ivfflat ON source
 USING ivfflat (embedding vector_cosine_ops)

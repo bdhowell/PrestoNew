@@ -8,7 +8,8 @@ from playwright.async_api import Error as PlaywrightError, async_playwright
 
 import layout
 import posters
-from poster_rendering import balance_header_widths, balance_text_width
+import source_processing
+from poster_rendering import balance_header_widths, balance_text_width, poster_thumbnail
 from tests.test_layout import DRAFT
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -229,6 +230,26 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                     }""")
                     self.assertAlmostEqual(values[0], baseline * poster.font_scale, delta=0.01)
                     self.assertAlmostEqual(values[1], baseline * 1.4 * poster.font_scale, delta=0.01)
+
+    async def test_poster_thumbnail_is_a_fixed_size_png(self) -> None:
+        rendered = """
+            <html><head>
+                <link rel="stylesheet" href="/static/css/themes.css">
+                <link rel="stylesheet" href="/static/css/pages/poster-document.css">
+            </head><body class="blue technical arena">
+                <article class="poster-document" style="width: 1200px; height: 800px">
+                    <header><h1>Research poster</h1></header>
+                    <div class="poster-sections"><section><h2>Results</h2></section></div>
+                </article>
+            </body></html>
+        """
+        image = await poster_thumbnail(rendered)
+        self.assertTrue(image.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(source_processing.image_dimensions(image), (640, 480))
+
+    async def test_placeholder_preview_can_be_saved_as_a_thumbnail(self) -> None:
+        image = await poster_thumbnail("<p>Preview unavailable: dimensions are not set.</p>")
+        self.assertEqual(source_processing.image_dimensions(image), (640, 480))
 
     async def dimensions(self) -> dict:
         return await self.page.evaluate("""() => {

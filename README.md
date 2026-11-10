@@ -64,11 +64,17 @@ The schema objects must be owned by the role in `DATABASE_URL`. The schema is
 for initializing the maintained local database, not for upgrading older schemas.
 
 For an existing database, apply each feature migration explicitly. Graphic
-evaluation requires:
+evaluation and poster thumbnail sources require:
 
 ```sh
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-evaluation.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-thumbnail.sql
 ```
+
+The current draft's stored PNG thumbnail appears in both List and Large
+thumbnails views. Opening the poster list refreshes it when the poster or its
+sources are newer.
+
 - Poppler (`pdftocairo`) for importing vector figures from PDFs
 - Playwright browser binaries installed
 

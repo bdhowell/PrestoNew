@@ -4,11 +4,13 @@ import unittest
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import openai
 import psycopg
 from fastapi import Depends, FastAPI, Request
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from psycopg import sql
@@ -61,7 +63,38 @@ class PosterRouteTests(unittest.TestCase):
             self.assertIn('/posters/12/view', response.text)
             self.assertIn('&lt;Research&gt;', response.text)
             self.assertIn('data-new-poster', response.text)
-            self.assertEqual('data-thumbnail' in response.text, mode == "grid")
+            self.assertIn('src="/posters/11/thumbnail"', response.text)
+            if mode == "grid":
+                self.assertIn('src="/posters/12/preview"', response.text)
+            else:
+                self.assertNotIn('src="/posters/12/preview"', response.text)
+
+    def test_list_refreshes_a_stale_thumbnail_even_in_list_view(self) -> None:
+        self.store.unpurchased.return_value = 11
+        state = SimpleNamespace(stale=True, revision=("poster revision", "source revision"))
+        self.store.thumbnail_state.return_value = state
+        self.store.save_thumbnail.return_value = True
+        with patch.object(
+            routes, "preview", AsyncMock(return_value=Response("<html></html>")),
+        ) as preview, patch.object(
+            routes.poster_rendering, "poster_thumbnail", AsyncMock(return_value=b"png"),
+        ) as render:
+            response = self.client.get("/posters/list")
+
+        self.assertEqual(response.status_code, 200)
+        preview.assert_awaited_once()
+        render.assert_awaited_once_with("<html></html>")
+        self.store.save_thumbnail.assert_awaited_once_with(
+            7, 11, b"png", state.revision,
+        )
+
+    def test_stored_thumbnail_is_owner_scoped_and_served_as_private_png(self) -> None:
+        self.store.poster_thumbnail.return_value = b"\x89PNG\r\n\x1a\nimage"
+        response = self.client.get("/posters/11/thumbnail")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/png")
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+        self.store.poster_thumbnail.assert_awaited_once_with(7, 11)
 
     def test_signed_out_pages_redirect_and_mutations_require_identity(self) -> None:
         self.uid = None

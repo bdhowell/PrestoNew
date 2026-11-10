@@ -1016,6 +1016,85 @@ class ContentDatabaseTests(unittest.TestCase):
         }
         self.assertIn("evaluation", columns)
 
+    def test_source_thumbnail_migration_is_repeatable(self) -> None:
+        self.connection.execute("ALTER TABLE source DROP COLUMN updated")
+        self.connection.execute("ALTER TABLE source DROP CONSTRAINT source_kind_check")
+        self.connection.execute(
+            "ALTER TABLE source ADD CONSTRAINT source_kind_check CHECK "
+            "(kind IN ('text', 'svg', 'mixed', 'image', 'math', 'chart', 'table', "
+            "'logo', 'moreinfo', 'qrcode'))"
+        )
+        self.connection.execute("DROP INDEX idx_source_pid_kind_unique")
+        self.connection.execute(
+            "CREATE UNIQUE INDEX idx_source_pid_kind_unique ON source (pid, kind) "
+            "WHERE kind IN ('logo', 'moreinfo', 'qrcode')"
+        )
+        migration = (ROOT / "schema/source-thumbnail.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        columns = {
+            row[0] for row in self.connection.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'source'",
+            ).fetchall()
+        }
+        self.assertIn("updated", columns)
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        self.connection.execute(
+            "INSERT INTO source (pid, kind, size, mimetype) "
+            "VALUES (%s, 'thumbnail', 0, 'image/png')", (pid,),
+        )
+
+    def test_poster_thumbnail_refreshes_for_poster_and_source_updates(self) -> None:
+        from PIL import Image
+
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        first = io.BytesIO()
+        Image.new("RGB", (32, 24), "red").save(first, format="PNG")
+        second = io.BytesIO()
+        Image.new("RGB", (32, 24), "blue").save(second, format="PNG")
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"SOURCES_DIR": directory, "GCS_BUCKET": ""},
+        ):
+            state = asyncio.run(self.store.thumbnail_state(7, pid))
+            self.assertIsNotNone(state)
+            self.assertTrue(state.stale)
+            self.assertTrue(asyncio.run(self.store.save_thumbnail(
+                7, pid, first.getvalue(), state.revision,
+            )))
+            fresh = asyncio.run(self.store.thumbnail_state(7, pid))
+            self.assertFalse(fresh.stale)
+            self.assertEqual(asyncio.run(self.store.list_sources(7, pid)), [])
+            self.assertEqual(asyncio.run(self.store.completion(7, pid)), (0, 0))
+            self.assertEqual(asyncio.run(self.store.source_text(7, pid)).count, 0)
+            self.assertEqual(asyncio.run(self.store.evaluation_sources(7, pid)), [])
+            sid = self.connection.execute(
+                "SELECT sid FROM source WHERE pid = %s AND kind = 'thumbnail'", (pid,),
+            ).fetchone()[0]
+            self.assertEqual(asyncio.run(self.store.poster_thumbnail(7, pid)), first.getvalue())
+
+            self.connection.execute(
+                "INSERT INTO source (pid, kind, size, mimetype, updated) "
+                "VALUES (%s, 'text', 1, 'text/plain', now() + interval '1 second')", (pid,),
+            )
+            stale = asyncio.run(self.store.thumbnail_state(7, pid))
+            self.assertTrue(stale.stale)
+            self.assertTrue(asyncio.run(self.store.save_thumbnail(
+                7, pid, second.getvalue(), stale.revision,
+            )))
+            self.assertEqual(
+                self.connection.execute(
+                    "SELECT sid FROM source WHERE pid = %s AND kind = 'thumbnail'", (pid,),
+                ).fetchone()[0],
+                sid,
+            )
+            self.assertEqual(asyncio.run(self.store.poster_thumbnail(7, pid)), second.getvalue())
+            self.assertIsNone(asyncio.run(self.store.thumbnail_state(8, pid)))
+
+        self.purchase(pid)
+        self.assertIsNone(asyncio.run(self.store.thumbnail_state(7, pid)))
+
     def test_graphic_evaluations_persist_and_are_owner_scoped(self) -> None:
         pid, _ = asyncio.run(self.store.new_or_existing(7))
         evaluation_result = {"evaluations": {"results": {"rating": "highly"}}}

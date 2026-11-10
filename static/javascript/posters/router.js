@@ -73,7 +73,7 @@
         });
     }
 
-    for (const frame of document.querySelectorAll("[data-thumbnail]")) {
+    for (const frame of document.querySelectorAll("iframe[data-thumbnail]")) {
         const fit = () => {
             const poster = frame.contentDocument?.querySelector(".poster-document");
             if (!poster) {

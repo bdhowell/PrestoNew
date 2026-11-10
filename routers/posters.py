@@ -7,11 +7,13 @@ from typing import Literal
 import psycopg
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from playwright.async_api import Error as PlaywrightError
 
 import content
 import elucidation
 import identity
 import posters
+import poster_rendering
 from markupsafe import Markup
 from common import clean_response
 from routers.wikkit import read_json, render_page, templates
@@ -45,6 +47,19 @@ def installed_themes() -> list[str]:
     return posters.installed_themes()
 
 
+async def _ensure_thumbnail(request: Request, uid: int, pid: int) -> None:
+    sources = content.store()
+    for _ in range(3):
+        state = await sources.thumbnail_state(uid, pid)
+        if state is None or not state.stale:
+            return
+        preview_response = await preview(request, pid)
+        image = await poster_rendering.poster_thumbnail(preview_response.body.decode("utf-8"))
+        if await sources.save_thumbnail(uid, pid, image, state.revision):
+            return
+    raise content.SourceConflictError("The poster changed while its thumbnail was being generated.")
+
+
 @router.get("/list", response_class=HTMLResponse)
 async def poster_list(
     request: Request, q: str = Query("", max_length=500),
@@ -56,12 +71,21 @@ async def poster_list(
     query = " ".join(q.split())
     embedding, notice = await posters.query_embedding(query) if query else (None, None)
     try:
-        items = await posters.store().list(_uid(request), query, embedding, sort, direction)
-    except psycopg.Error:
-        logger.exception("Could not list posters")
+        uid = _uid(request)
+        items = await posters.store().list(uid, query, embedding, sort, direction)
+        draft_pid = await posters.store().unpurchased(uid)
+        if draft_pid is not None:
+            await _ensure_thumbnail(request, uid, draft_pid)
+    except (
+        psycopg.Error, content.SourceDeletionError, content.SourceConflictError,
+        PlaywrightError, OSError, content.GoogleAPIError, content.GoogleAuthError,
+        RuntimeError, ValueError,
+    ):
+        logger.exception("Could not list posters or refresh the current poster thumbnail")
         return render_page(
             request, "posters/list.html", "posters-list",
-            "<p>I couldn&rsquo;t load your posters. Please try again.</p>",
+            "<p>I couldn&rsquo;t load your posters or refresh the current poster thumbnail. "
+            "Please try again.</p>",
             status_code=503, items=[], q=q, sort=sort, direction=direction, view=view,
             notice="Your posters could not be loaded. Please reload to try again.",
         )
@@ -253,6 +277,22 @@ async def view_poster(request: Request, pid: int) -> Response:
     if not poster.purchased:
         return RedirectResponse(f"/posters/{pid}/open", status_code=303)
     return render_page(request, "posters/view.html", "posters-view", poster=poster)
+
+
+@router.get("/{pid}/thumbnail")
+async def poster_thumbnail(request: Request, pid: int) -> Response:
+    uid = _uid(request)
+    try:
+        image = await content.store().poster_thumbnail(uid, pid)
+    except content.STORAGE_ERRORS:
+        logger.exception("Could not load poster thumbnail for poster %s", pid)
+        raise HTTPException(503, "The poster thumbnail could not be loaded.") from None
+    if image is None:
+        raise HTTPException(404, "Poster thumbnail not found")
+    return Response(
+        image, media_type="image/png",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.get("/{pid}/preview", response_class=HTMLResponse)

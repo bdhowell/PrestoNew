@@ -366,6 +366,10 @@ class SystemDatabaseTests(unittest.TestCase):
             "INSERT INTO source (pid, kind, parent, filename, size, mimetype, width, height) "
             "SELECT 1, 'image', sid, 'figure.png', 12, 'image/png', 450, 450 FROM source WHERE pid = 1",
         )
+        self.connection.execute(
+            "INSERT INTO source (pid, kind, size, mimetype, width, height) "
+            "VALUES (1, 'thumbnail', 12, 'image/png', 640, 480)",
+        )
         self.connection.execute("INSERT INTO poster (pid, created) VALUES (2, now())")
         self.connection.execute(
             "INSERT INTO source (pid, kind, size, mimetype) VALUES (2, 'text', 1, 'text/plain')",
@@ -395,6 +399,12 @@ class SystemDatabaseTests(unittest.TestCase):
                 "SELECT sid FROM source WHERE kind = 'text'",
             ).fetchone()[0]
             self.assertIsNone(asyncio.run(self.store.catalog_graphic(1, text_sid)))
+            thumbnail_sid = self.connection.execute(
+                "INSERT INTO source (pid, kind, size, mimetype, storage_uri) "
+                "VALUES (1, 'thumbnail', 5, 'image/png', %s) RETURNING sid",
+                (upload.name,),
+            ).fetchone()[0]
+            self.assertIsNone(asyncio.run(self.store.catalog_graphic(1, thumbnail_sid)))
 
     def test_purge_removes_records_dependents_and_memory_but_preserves_users(self) -> None:
         self.assertEqual(asyncio.run(self.store.purge()), {"posters": 1, "conferences": 1, "users": 0})

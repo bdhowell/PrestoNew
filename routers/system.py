@@ -118,7 +118,8 @@ class SystemStore(posters.PosterStore):
             cursor = await connection.execute(
                 "SELECT " + content.SourceStore._SOURCE_COLUMNS +
                 " FROM source s LEFT JOIN source parent ON parent.sid = s.parent "
-                "WHERE s.pid = %s ORDER BY s.added, s.sid", (pid,),
+                "WHERE s.pid = %s AND s.kind <> 'thumbnail' "
+                "ORDER BY s.added, s.sid", (pid,),
             )
             return [content.Source(*row) for row in await cursor.fetchall()]
 
@@ -127,6 +128,7 @@ class SystemStore(posters.PosterStore):
         async with connection:
             cursor = await connection.execute(
                 "SELECT storage_uri, mimetype FROM source WHERE pid = %s AND sid = %s "
+                "AND kind <> 'thumbnail' "
                 "AND (mimetype LIKE 'image/%%' OR kind IN "
                 "('svg', 'image', 'chart', 'logo', 'moreinfo', 'qrcode'))", (pid, sid),
             )

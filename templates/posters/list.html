@@ -37,9 +37,13 @@
 {% for poster in items %}
     <article class="poster-card{% if not poster.purchased %} current{% endif %}" data-poster-id="{{ poster.pid }}">
         <a class="poster-link" href="/posters/{{ poster.pid }}/{{ 'view' if poster.purchased else 'open' }}"{% if poster.purchased %} target="_top"{% endif %}>
-            {% if view == "grid" %}
+            {% if view == "grid" or not poster.purchased %}
             <div class="poster-thumbnail" aria-hidden="true">
+                {% if poster.purchased %}
                 <iframe src="/posters/{{ poster.pid }}/preview" title="Preview of {{ poster.name }}" loading="lazy" tabindex="-1" data-thumbnail></iframe>
+                {% else %}
+                <img src="/posters/{{ poster.pid }}/thumbnail" alt="Preview of {{ poster.name }}" loading="lazy" data-thumbnail>
+                {% endif %}
             </div>
             {% endif %}
             <h2>{{ poster.name }}</h2>
