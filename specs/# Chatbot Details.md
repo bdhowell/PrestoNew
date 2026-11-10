@@ -406,15 +406,20 @@ The database role needs table/index creation permissions. Expired rows are
 removed on session loads. Static assets under `/static/` bypass sessions.
 No additional PostgreSQL extensions are needed.
 
-The `presto_session` cookie is HttpOnly, SameSite=Lax, host-only, and scoped to
-`/`. It contains only a cryptographically random opaque identifier. Session
-objects are pickled **only on the server**, with an HMAC-SHA256 integrity check
-verified before unpickling. The signature also binds the payload to its session
-identifier. Database access must still be restricted to trusted application
-roles: signing is not encryption, and pickle is not a format for untrusted data.
-Changing `SECRET_KEY` invalidates stored payload signatures; clear existing
-sessions as part of an intentional key rotation rather than silently falling
-back after an integrity error.
+With `SESSION_COOKIE_SECURE=true`, the server sends a `__Host-session` cookie
+with `Secure`, `HttpOnly`, `SameSite=Strict`, and `Path=/` attributes and no
+`Domain` attribute. Local HTTP development with
+`SESSION_COOKIE_SECURE=false` uses the `presto_session` name because browsers
+require `__Host-` cookies to be Secure. The separate `presto_user` cookie only
+remembers the visitor's display name; it does not authenticate the user. The
+session cookie contains only a cryptographically random opaque identifier.
+Session objects are pickled **only on the server**, with an HMAC-SHA256
+integrity check verified before unpickling. The signature also binds the
+payload to its session identifier. Database access must still be restricted to
+trusted application roles: signing is not encryption, and pickle is not a
+format for untrusted data. Changing `SECRET_KEY` invalidates stored payload
+signatures; clear existing sessions as part of an intentional key rotation
+rather than silently falling back after an integrity error.
 
 HTTP sessions are saved before response headers. The app uses function-scoped
 memory dependencies so their cleanup completes before this save. Changes from

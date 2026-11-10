@@ -14,10 +14,12 @@ from starlette.websockets import WebSocketDisconnect
 from memory import current_memory, memory_context
 from routers.wikkit import router
 from sessions import (
+    LOCAL_SESSION_COOKIE_NAME,
     PostgresSessionMiddleware,
     PostgresSessionStore,
     Session,
     SessionConflictError,
+    SESSION_COOKIE_NAME,
     configured_session_store,
 )
 from wikkit import Chatbot
@@ -71,6 +73,47 @@ class SessionConfigurationTests(unittest.TestCase):
 
 
 class SessionRenewalTests(unittest.IsolatedAsyncioTestCase):
+    def test_insecure_local_cookie_uses_non_host_prefix_name(self) -> None:
+        middleware = PostgresSessionMiddleware(FastAPI(), store=None, secure=False)
+        session = Session(
+            "A" * 43, {}, 0, datetime.now(timezone.utc) + timedelta(minutes=10), b"",
+        )
+        cookie = middleware._cookie(session)
+        self.assertTrue(cookie.startswith(f"{LOCAL_SESSION_COOKIE_NAME}="))
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        self.assertNotIn("Secure", cookie)
+
+    async def test_server_cookie_is_appended_alongside_existing_cookie(self) -> None:
+        store = PostgresSessionStore(SECRET)
+        session = Session(
+            "A" * 43, {}, 0, datetime.now(timezone.utc) + timedelta(minutes=10), b"",
+        )
+        store.load = AsyncMock(return_value=session)
+        store.save = AsyncMock()
+
+        async def app(scope, receive, send):
+            await send({
+                "type": "http.response.start", "status": 200,
+                "headers": [(b"set-cookie", b"presto_user=Ada; Path=/")],
+            })
+            await send({"type": "http.response.body", "body": b""})
+
+        messages = []
+        middleware = PostgresSessionMiddleware(app, store=store)
+        await middleware(
+            {"type": "http", "path": "/state", "headers": []}, AsyncMock(),
+            AsyncMock(side_effect=messages.append),
+        )
+        cookies = [
+            value.decode()
+            for name, value in messages[0]["headers"]
+            if name.lower() == b"set-cookie"
+        ]
+        self.assertEqual(len(cookies), 2)
+        self.assertTrue(cookies[0].startswith("presto_user="))
+        self.assertTrue(cookies[1].startswith(f"{SESSION_COOKIE_NAME}="))
+
     async def test_new_and_modified_sessions_persist_renewed_expiry(self) -> None:
         store = PostgresSessionStore(SECRET)
         for version in (0, 3):
@@ -130,6 +173,12 @@ class SessionRenewalTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("version = version + 1", sql)
         self.assertNotIn("SET data", sql)
         cookie = dict(messages[0]["headers"])[b"set-cookie"].decode()
+        self.assertTrue(cookie.startswith(f"{SESSION_COOKIE_NAME}="))
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("Secure", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        self.assertIn("Path=/", cookie)
+        self.assertNotIn("Domain=", cookie)
         self.assertRegex(cookie, r"Max-Age=59[89]")
 
     async def test_expired_read_only_session_is_not_renewed(self) -> None:
@@ -171,7 +220,7 @@ class SessionBackendTests(unittest.TestCase):
         @app.get("/state")
         def state(request: Request):
             memory = current_memory()
-            self.identifiers.add(request.cookies.get("presto_session", ""))
+            self.identifiers.add(request.cookies.get(SESSION_COOKIE_NAME, ""))
             return dict(memory.short_term_memory)
 
         @app.post("/remember")
@@ -191,7 +240,7 @@ class SessionBackendTests(unittest.TestCase):
         return TestClient(app, base_url="https://testserver")
 
     def track_cookie(self, client: TestClient) -> str:
-        identifier = client.cookies["presto_session"]
+        identifier = client.cookies[SESSION_COOKIE_NAME]
         self.identifiers.add(identifier)
         return identifier
 
@@ -200,21 +249,23 @@ class SessionBackendTests(unittest.TestCase):
         response = client.post("/remember")
         self.assertEqual(response.status_code, 200)
         cookie = response.headers["set-cookie"]
-        for attribute in ("HttpOnly", "Secure", "SameSite=lax", "Path=/", "Max-Age="):
+        self.assertTrue(cookie.startswith(f"{SESSION_COOKIE_NAME}="))
+        for attribute in ("HttpOnly", "Secure", "SameSite=Strict", "Path=/", "Max-Age="):
             self.assertIn(attribute, cookie)
+        self.assertNotIn("Domain=", cookie)
         self.assertNotIn("Ada", cookie)
         identifier = self.track_cookie(client)
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertIn("Cookie", response.headers["vary"])
         fresh_store = PostgresSessionStore(SECRET, database_env="TEST_DATABASE_URL")
         reconnected = self.client(fresh_store)
-        reconnected.cookies.set("presto_session", identifier, domain="testserver.local")
+        reconnected.cookies.set(SESSION_COOKIE_NAME, identifier, domain="testserver.local")
         self.assertEqual(reconnected.get("/state").json(), {"name": "Ada"})
 
     def test_missing_unknown_and_expired_cookie_get_new_identifier(self) -> None:
         for previous in ("unknown", "A" * 43):
             client = self.client()
-            client.cookies.set("presto_session", previous, domain="testserver.local")
+            client.cookies.set(SESSION_COOKIE_NAME, previous, domain="testserver.local")
             self.assertEqual(client.get("/state").status_code, 200)
             self.assertNotEqual(self.track_cookie(client), previous)
         session = self.new_session()

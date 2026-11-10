@@ -20,6 +20,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]{43}\Z")
+SESSION_COOKIE_NAME = "__Host-session"
+LOCAL_SESSION_COOKIE_NAME = "presto_session"
 
 
 class SessionConflictError(RuntimeError):
@@ -192,8 +194,8 @@ class PostgresSessionMiddleware:
     ) -> None:
         self.app = app
         self.store = store
-        self.cookie_name = "presto_session"
         self.secure = secure
+        self.cookie_name = SESSION_COOKIE_NAME if secure else LOCAL_SESSION_COOKIE_NAME
 
     def _cookie(self, session: Session) -> str:
         cookie = SimpleCookie()
@@ -201,7 +203,7 @@ class PostgresSessionMiddleware:
         morsel = cookie[self.cookie_name]
         morsel["path"] = "/"
         morsel["httponly"] = True
-        morsel["samesite"] = "lax"
+        morsel["samesite"] = "strict"
         morsel["max-age"] = max(
             0, int((session.expires_at - datetime.now(timezone.utc)).total_seconds())
         )
