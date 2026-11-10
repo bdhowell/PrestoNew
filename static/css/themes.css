@@ -15,6 +15,7 @@
 
 .blue {
     --palette-color: #2363a5;
+    --palette-button-text: #ffffff;
     --background-color: #eaf3ff;
     --header-background-color: #174a80;
     --heading-background-color: #2363a5;
@@ -24,6 +25,7 @@
 
 .red {
     --palette-color: #c43a3a;
+    --palette-button-text: #ffffff;
     --background-color: #fff0ef;
     --header-background-color: #8d2424;
     --heading-background-color: #b52e32;
@@ -33,7 +35,7 @@
 
 .yellow {
     --palette-color: #e1b51c;
-    --palette-button-text: #000000;
+    --palette-button-text: #222222;
     --background-color: #fff9df;
     --header-background-color: #69520c;
     --header-font-color: #ffffff;
@@ -44,6 +46,7 @@
 
 .green {
     --palette-color: #34834b;
+    --palette-button-text: #ffffff;
     --background-color: #edf8ef;
     --header-background-color: #205b32;
     --heading-background-color: #2d7541;
@@ -53,6 +56,7 @@
 
 .brown {
     --palette-color: #8b5a3c;
+    --palette-button-text: #ffffff;
     --background-color: #f7f0e9;
     --header-background-color: #68412d;
     --heading-background-color: #805038;
@@ -62,7 +66,7 @@
 
 .orange {
     --palette-color: #df7629;
-    --palette-button-text: #000000;
+    --palette-button-text: #222222;
     --background-color: #fff2e6;
     --header-background-color: #8b4313;
     --heading-background-color: #b85b1b;
@@ -72,6 +76,7 @@
 
 .purple {
     --palette-color: #7952a0;
+    --palette-button-text: #ffffff;
     --background-color: #f4eff9;
     --header-background-color: #513773;
     --heading-background-color: #68438e;
@@ -81,6 +86,7 @@
 
 .dark-grey {
     --palette-color: #52565a;
+    --palette-button-text: #ffffff;
     --background-color: #ebedef;
     --header-background-color: #383b3e;
     --heading-background-color: #4a4e52;
@@ -90,7 +96,7 @@
 
 .light-grey {
     --palette-color: #d6d8da;
-    --palette-button-text: #000000;
+    --palette-button-text: #222222;
     --background-color: #f2f3f4;
     --header-background-color: #656a6e;
     --heading-background-color: #6c7277;
@@ -100,6 +106,7 @@
 
 .black-and-white {
     --palette-color: #111111;
+    --palette-button-text: #ffffff;
     --background-color: #ffffff;
     --header-background-color: #000000;
     --heading-background-color: #000000;

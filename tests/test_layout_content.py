@@ -285,19 +285,36 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_theme_controls_match_the_current_theme_button_text_color(self) -> None:
+        await self.page.locator("body").evaluate(
+            "body => body.classList.replace('blue', 'yellow')",
+        )
         await self.page.locator("#theme").click()
         for theme in posters.THEME_COLORS:
             with self.subTest(theme=theme):
                 await self.page.locator(
                     f'label:has(input[name="color"][value="{theme}"])',
                 ).click()
-                colors = await self.page.locator(
+                combinations = await self.page.locator(
                     ".theme-color-option:has(input[name='color']:checked), "
                     ".theme-corner-option, .theme-toggle-option",
-                ).evaluate_all(
-                    "elements => elements.map(element => getComputedStyle(element).color)",
+                ).evaluate_all("""elements => elements.map(element => {
+                    const style = getComputedStyle(element);
+                    return [style.backgroundColor, style.color];
+                })""")
+                self.assertEqual(
+                    combinations,
+                    [combinations[0]] * len(combinations),
                 )
-                self.assertEqual(len(set(colors)), 1)
+                self.assertEqual(
+                    await self.page.locator(".theme-color-option").evaluate_all(
+                        "elements => elements.map(element => getComputedStyle(element).color)",
+                    ),
+                    [
+                        "rgb(34, 34, 34)" if color in {"yellow", "orange", "light-grey"}
+                        else "rgb(255, 255, 255)"
+                        for color in posters.THEME_COLORS
+                    ],
+                )
 
     async def test_header_controls_have_ten_pixel_gap(self) -> None:
         await self.page.locator("#theme").click()
@@ -499,7 +516,7 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
                 "getComputedStyle(element).color])",
             ),
             [
-                [theme, "rgb(0, 0, 0)" if theme in {"yellow", "orange", "light-grey"}
+                [theme, "rgb(34, 34, 34)" if theme in {"yellow", "orange", "light-grey"}
                  else "rgb(255, 255, 255)"]
                 for theme in posters.THEME_COLORS
             ],
