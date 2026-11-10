@@ -153,11 +153,11 @@ async def poster_thumbnail(rendered: str) -> bytes:
                 const frame = document.getElementById("thumbnail-frame");
                 const poster = frame.querySelector(".poster-document");
                 if (!poster) return;
+                poster.style.position = "absolute";
                 const scale = Math.min(
                     (frame.clientWidth - 24) / poster.offsetWidth,
                     (frame.clientHeight - 24) / poster.offsetHeight,
                 );
-                poster.style.position = "absolute";
                 poster.style.transformOrigin = "top left";
                 poster.style.transform = `scale(${scale})`;
                 poster.style.left = `${(frame.clientWidth - poster.offsetWidth * scale) / 2}px`;

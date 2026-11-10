@@ -73,7 +73,8 @@ psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-thumbnai
 
 The current draft's stored PNG thumbnail appears in both List and Large
 thumbnails views. Opening the poster list refreshes it when the poster or its
-sources are newer.
+sources are newer. Thumbnails preserve the saved poster aspect ratio inside a
+640 x 480 PNG, with wrapping author lists and themed section borders.
 
 - Poppler (`pdftocairo`) for importing vector figures from PDFs
 - Playwright browser binaries installed

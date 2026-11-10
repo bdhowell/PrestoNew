@@ -9,6 +9,8 @@ body {
 }
 
 .poster-document {
+    display: flex;
+    flex-direction: column;
     padding: 96px;
     overflow: hidden;
     background: var(--background-color, #fff);
@@ -41,13 +43,27 @@ body {
 
 .poster-document .author {
     font-size: calc(1em * var(--authors-font-scale, 1));
+    white-space: nowrap;
+}
+
+.poster-authors {
+    margin: 0 0 48px;
 }
 
 .poster-sections {
+    flex: 1;
+    min-height: 0;
     font-size: calc(1em * var(--sections-font-scale, 1));
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-rows: minmax(min-content, 1fr);
     gap: 48px;
+}
+
+.poster-sections > section {
+    background-color: var(--section-background-color, #fff);
+    border: var(--border-width, 3px) solid var(--border-color, #444);
+    border-radius: var(--border-radius, 0);
 }
 
 .vertical .poster-sections {

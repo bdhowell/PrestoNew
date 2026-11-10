@@ -7,6 +7,7 @@ import unittest
 import uuid
 import zipfile
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import quote
@@ -503,6 +504,28 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("p.uid = %s AND p.pid = %s", statement)
         self.assertIn("ORDER BY s.added, s.sid", statement)
         self.assertEqual(params, (7, 11))
+
+    async def test_thumbnail_replacement_does_not_require_evaluation_columns(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        updated = datetime(2026, 11, 10, tzinfo=timezone.utc)
+        owner, state, existing, saved = (AsyncMock() for _ in range(4))
+        owner.fetchone.return_value = (11,)
+        state.fetchone.return_value = (updated, None, None)
+        existing.fetchone.return_value = (22, "/sources/old-thumbnail")
+        connection.execute.side_effect = [owner, state, existing, saved]
+        files = Mock()
+        files.put.return_value = "/sources/new-thumbnail"
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                patch.object(content, "SourceFiles", return_value=files), \
+                patch.object(content.processing, "image_dimensions", return_value=(640, 480)):
+            self.assertTrue(await store.save_thumbnail(
+                7, 11, b"\x89PNG\r\n\x1a\nimage", (updated, None),
+            ))
+        statement, params = connection.execute.await_args_list[-1].args
+        self.assertNotIn("evaluation", statement)
+        self.assertEqual(params[-1], 22)
+        files.delete.assert_called_once_with("/sources/old-thumbnail")
 
     async def test_delete_removes_source_files_before_deleting_poster_record(self) -> None:
         store = content.SourceStore()

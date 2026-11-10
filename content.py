@@ -361,8 +361,7 @@ class SourceStore(PosterStore):
                         "UPDATE source SET filename = 'thumbnail.png', mimetype = 'image/png', "
                         "size = %s, height = %s, width = %s, fileid = %s, storage_uri = %s, "
                         "hash = %s, parent = NULL, text = NULL, summary = NULL, description = NULL, "
-                        "added = now(), updated = now(), extracted = TRUE, "
-                        "evaluation = NULL, evaluation_hash = NULL WHERE sid = %s",
+                        "added = now(), updated = now(), extracted = TRUE WHERE sid = %s",
                         (len(data), height, width, fileid, uri, source_hash(data), sid),
                     )
         except BaseException:

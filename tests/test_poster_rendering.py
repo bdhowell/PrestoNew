@@ -1,10 +1,12 @@
 import unittest
+from io import BytesIO
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from lxml import html
 from playwright.async_api import Error as PlaywrightError, async_playwright
+from PIL import Image, ImageChops
 
 import layout
 import posters
@@ -246,6 +248,104 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         image = await poster_thumbnail(rendered)
         self.assertTrue(image.startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertEqual(source_processing.image_dimensions(image), (640, 480))
+
+    async def test_thumbnail_preserves_landscape_square_and_portrait_dimensions(self) -> None:
+        for width, height in ((4800, 3600), (7200, 2400), (3600, 3600), (2400, 7200)):
+            with self.subTest(width=width, height=height):
+                rendered = f"""
+                    <html><body>
+                        <article class="poster-document" style="width: {width}px;
+                            height: {height}px; background: #123456"></article>
+                    </body></html>
+                """
+                image = Image.open(BytesIO(await poster_thumbnail(rendered))).convert("RGB")
+                bounds = ImageChops.difference(
+                    image, Image.new("RGB", image.size, "white"),
+                ).getbbox()
+                self.assertIsNotNone(bounds)
+                left, top, right, bottom = bounds
+                scale = min(616 / width, 456 / height)
+                self.assertAlmostEqual(right - left, width * scale, delta=2)
+                self.assertAlmostEqual(bottom - top, height * scale, delta=2)
+                self.assertAlmostEqual((left + right) / 2, 320, delta=1)
+                self.assertAlmostEqual((top + bottom) / 2, 240, delta=1)
+
+    async def test_preview_authors_flow_horizontally_and_wrap_as_a_list(self) -> None:
+        rendered = layout.templates.env.get_template("posters/document.html").render(
+            poster=DRAFT, width=3600, height=2400,
+            sections=[("results", "Findings")],
+            authors=[("Ada Lovelace", "Institute"), ("Grace Hopper", "University"),
+                     ("Alan Turing", None)],
+            theme="yellow", fonts="technical", layout="arena",
+        )
+        await self.page.set_content(rendered)
+        await self.page.add_style_tag(path=str(ROOT / "static/css/pages/poster-document.css"))
+        authors = self.page.locator(".author")
+        first, second = [await authors.nth(index).bounding_box() for index in (0, 1)]
+        self.assertAlmostEqual(first["y"], second["y"], delta=1)
+        self.assertGreater(second["x"], first["x"])
+        self.assertIn("Ada Lovelace (Institute),", await self.page.locator("header").inner_text())
+        await self.page.locator(".poster-document").evaluate(
+            "element => element.style.width = '700px'",
+        )
+        last = await authors.last.bounding_box()
+        self.assertGreater(last["y"], first["y"])
+
+    async def test_preview_sections_fill_the_poster_below_the_header(self) -> None:
+        rendered = layout.templates.env.get_template("posters/document.html").render(
+            poster=DRAFT, width=4608, height=3456,
+            sections=[(f"section {index}", "Findings") for index in range(9)],
+            authors=[("Ada Lovelace", "Institute")],
+            theme="yellow", fonts="technical", layout="arena",
+        )
+        await self.page.set_content(rendered)
+        await self.page.add_style_tag(path=str(ROOT / "static/css/pages/poster-document.css"))
+        poster = await self.page.locator(".poster-document").bounding_box()
+        header = await self.page.locator("header").bounding_box()
+        sections = await self.page.locator(".poster-sections").bounding_box()
+        last = await self.page.locator(".poster-sections > section").last.bounding_box()
+        self.assertAlmostEqual(sections["y"], header["y"] + header["height"], delta=1)
+        self.assertAlmostEqual(
+            last["y"] + last["height"], poster["y"] + poster["height"] - 96, delta=1,
+        )
+
+    async def test_preview_sections_have_white_backgrounds_across_themes(self) -> None:
+        for theme in posters.THEME_COLORS:
+            with self.subTest(theme=theme):
+                rendered = layout.templates.env.get_template("posters/document.html").render(
+                    poster=DRAFT, width=1200, height=800,
+                    sections=[("results", "<p>Findings</p>")], authors=[],
+                    theme=f"{theme} corners-rounded colored-section-headers",
+                    fonts="technical", layout="arena",
+                )
+                await self.page.set_content(rendered)
+                for stylesheet in ("themes.css", "pages/poster-document.css"):
+                    await self.page.add_style_tag(path=str(ROOT / "static/css" / stylesheet))
+                section = self.page.locator(".poster-sections > section")
+                self.assertEqual(await section.evaluate(
+                    "element => getComputedStyle(element).backgroundColor",
+                ), "rgb(255, 255, 255)")
+                self.assertEqual(await section.evaluate(
+                    "element => getComputedStyle(element).borderTopStyle",
+                ), "solid")
+                self.assertEqual(await section.evaluate(
+                    "element => getComputedStyle(element).borderTopWidth",
+                ), "3px")
+                self.assertEqual(await section.evaluate(
+                    "element => getComputedStyle(element).borderTopColor",
+                ), await section.evaluate("""element => {
+                    const probe = document.createElement('span');
+                    probe.style.color = 'var(--border-color)';
+                    element.append(probe);
+                    const color = getComputedStyle(probe).color;
+                    probe.remove();
+                    return color;
+                }"""))
+                self.assertEqual(await section.evaluate(
+                    "element => getComputedStyle(element).borderRadius",
+                ), await self.page.locator(".poster-document").evaluate(
+                    "element => getComputedStyle(element).getPropertyValue('--border-radius').trim()",
+                ))
 
     async def test_placeholder_preview_can_be_saved_as_a_thumbnail(self) -> None:
         image = await poster_thumbnail("<p>Preview unavailable: dimensions are not set.</p>")
