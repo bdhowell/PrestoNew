@@ -120,30 +120,45 @@ class PostgresSessionStore:
             pickle.dumps({}, protocol=pickle.HIGHEST_PROTOCOL),
         )
 
-    async def save(self, session: Session) -> None:
+    async def save(self, session: Session, *, renew: bool = False) -> None:
         payload = pickle.dumps(session.data, protocol=pickle.HIGHEST_PROTOCOL)
-        if session.version and payload == session.original:
+        unchanged = session.version != 0 and payload == session.original
+        if unchanged and not renew:
             return
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=self.max_age)
+            if renew else session.expires_at
+        )
         encoded = self._encode(session.identifier, payload)
         connection = await self._connect()
         async with connection:
             if session.version == 0:
                 cursor = await connection.execute(
                     "INSERT INTO public.chatbot_session (session_id, data, version, expires_at) "
-                    "VALUES (%s, %s, 1, %s) RETURNING version",
-                    (session.identifier, encoded, session.expires_at),
+                    "VALUES (%s, %s, 1, %s) RETURNING version, expires_at",
+                    (session.identifier, encoded, expires_at),
+                )
+            elif unchanged:
+                cursor = await connection.execute(
+                    "UPDATE public.chatbot_session SET expires_at = GREATEST(expires_at, %s) "
+                    "WHERE session_id = %s AND expires_at > now() RETURNING expires_at",
+                    (expires_at, session.identifier),
                 )
             else:
                 cursor = await connection.execute(
-                    "UPDATE public.chatbot_session SET data = %s, version = version + 1 "
+                    "UPDATE public.chatbot_session SET data = %s, version = version + 1, "
+                    "expires_at = GREATEST(expires_at, %s) "
                     "WHERE session_id = %s AND version = %s AND expires_at > now() "
-                    "RETURNING version",
-                    (encoded, session.identifier, session.version),
+                    "RETURNING version, expires_at",
+                    (encoded, expires_at, session.identifier, session.version),
                 )
             row = await cursor.fetchone()
             if row is None:
                 raise SessionConflictError("session changed or expired; retry with a fresh request")
-        session.version = row[0]
+        if unchanged:
+            session.expires_at = row[0]
+            return
+        session.version, session.expires_at = row
         session.original = payload
 
 
@@ -226,7 +241,7 @@ class PostgresSessionMiddleware:
 
         async def send_with_session(message: Message) -> None:
             if message["type"] == "http.response.start":
-                await store.save(session)
+                await store.save(session, renew=True)
                 headers = MutableHeaders(scope=message)
                 headers.append("set-cookie", self._cookie(session))
                 headers["cache-control"] = "no-store"

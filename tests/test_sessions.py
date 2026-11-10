@@ -4,7 +4,7 @@ import pickle
 import unittest
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import psycopg
 from fastapi import Depends, FastAPI, Request
@@ -68,6 +68,80 @@ class SessionConfigurationTests(unittest.TestCase):
                     store._decode(identifier, value)
                 loads.assert_not_called()
         self.assertEqual(store._decode("first", encoded)[0], {"name": "Ada"})
+
+
+class SessionRenewalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_new_and_modified_sessions_persist_renewed_expiry(self) -> None:
+        store = PostgresSessionStore(SECRET)
+        for version in (0, 3):
+            with self.subTest(version=version):
+                original_expiry = datetime.now(timezone.utc) + timedelta(seconds=30)
+                session = Session("A" * 43, {"name": "Ada"}, version, original_expiry,
+                                  pickle.dumps({}, protocol=pickle.HIGHEST_PROTOCOL))
+                connection = AsyncMock()
+                cursor = AsyncMock()
+                connection.execute.return_value = cursor
+
+                async def saved_row():
+                    parameters = connection.execute.call_args.args[1]
+                    return (version + 1, parameters[2] if version == 0 else parameters[1])
+
+                cursor.fetchone.side_effect = saved_row
+                with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+                    await store.save(session, renew=True)
+                self.assertEqual(session.version, version + 1)
+                self.assertGreater(session.expires_at, original_expiry + timedelta(seconds=560))
+                self.assertEqual(pickle.loads(session.original), {"name": "Ada"})
+                if version:
+                    self.assertIn("AND version = %s AND expires_at > now()",
+                                  connection.execute.call_args.args[0])
+
+    async def test_cookie_response_renews_read_only_session(self) -> None:
+        store = PostgresSessionStore(SECRET)
+        original_expiry = datetime.now(timezone.utc) + timedelta(seconds=30)
+        session = Session("A" * 43, {}, 2, original_expiry, pickle.dumps(
+            {}, protocol=pickle.HIGHEST_PROTOCOL,
+        ))
+        connection = AsyncMock()
+        cursor = AsyncMock()
+        connection.execute.return_value = cursor
+
+        async def renewed_row():
+            return (connection.execute.call_args.args[1][0],)
+
+        cursor.fetchone.side_effect = renewed_row
+        store.load = AsyncMock(return_value=session)
+        store._connect = AsyncMock(return_value=connection)
+        messages = []
+
+        async def app(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        middleware = PostgresSessionMiddleware(app, store=store)
+        await middleware(
+            {"type": "http", "path": "/state", "headers": []}, AsyncMock(),
+            AsyncMock(side_effect=messages.append),
+        )
+        self.assertGreater(session.expires_at, original_expiry + timedelta(seconds=560))
+        self.assertEqual(session.version, 2)
+        sql = connection.execute.call_args.args[0]
+        self.assertIn("expires_at > now()", sql)
+        self.assertNotIn("version = version + 1", sql)
+        self.assertNotIn("SET data", sql)
+        cookie = dict(messages[0]["headers"])[b"set-cookie"].decode()
+        self.assertRegex(cookie, r"Max-Age=59[89]")
+
+    async def test_expired_read_only_session_is_not_renewed(self) -> None:
+        store = PostgresSessionStore(SECRET)
+        session = Session("A" * 43, {}, 1, datetime.now(timezone.utc), pickle.dumps(
+            {}, protocol=pickle.HIGHEST_PROTOCOL,
+        ))
+        connection = AsyncMock()
+        connection.execute.return_value.fetchone.return_value = None
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            with self.assertRaises(SessionConflictError):
+                await store.save(session, renew=True)
 
 
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_URL"), "set TEST_DATABASE_URL for PostgreSQL tests")
@@ -157,6 +231,24 @@ class SessionBackendTests(unittest.TestCase):
         identifier = self.track_cookie(client)
         self.assertTrue(run_async(self.store.load(identifier)).data["cleanup"])
 
+    def test_http_activity_renews_database_expiry_without_changing_version(self) -> None:
+        client = self.client()
+        client.get("/state")
+        identifier = self.track_cookie(client)
+        with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as connection:
+            connection.execute(
+                "UPDATE public.chatbot_session SET expires_at = now() + interval '30 seconds' "
+                "WHERE session_id = %s", (identifier,),
+            )
+        before = run_async(self.store.load(identifier))
+        response = client.get("/state")
+        after = run_async(self.store.load(identifier))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(after.identifier, before.identifier)
+        self.assertEqual(after.version, before.version)
+        self.assertGreater(after.expires_at, before.expires_at + timedelta(seconds=560))
+        self.assertRegex(response.headers["set-cookie"], r"Max-Age=59[89]")
+
     def test_concurrent_writes_are_rejected_and_read_only_requests_do_not_conflict(self) -> None:
         session = self.new_session()
         run_async(self.store.save(session))
@@ -164,7 +256,7 @@ class SessionBackendTests(unittest.TestCase):
         second = run_async(self.store.load(session.identifier))
         first.data["name"] = "Ada"
         run_async(self.store.save(first))
-        run_async(self.store.save(second))  # An unchanged snapshot must not overwrite a writer.
+        run_async(self.store.save(second, renew=True))  # Renewal must not overwrite a writer.
         second.data["name"] = "Grace"
         with self.assertRaises(SessionConflictError):
             run_async(self.store.save(second))
