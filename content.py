@@ -9,6 +9,7 @@ import re
 import json
 from html import unescape
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -161,6 +162,28 @@ class GraphicEvaluationSource:
         return "uploaded" if self.parent is None else "extracted"
 
 
+@dataclass(frozen=True)
+class PosterThumbnailState:
+    poster_updated: datetime
+    sources_updated: datetime | None
+    thumbnail_updated: datetime | None
+
+    @property
+    def stale(self) -> bool:
+        return (
+            self.thumbnail_updated is None
+            or self.poster_updated > self.thumbnail_updated
+            or (
+                self.sources_updated is not None
+                and self.sources_updated > self.thumbnail_updated
+            )
+        )
+
+    @property
+    def revision(self) -> tuple[datetime, datetime | None]:
+        return self.poster_updated, self.sources_updated
+
+
 class SourceFiles:
     def __init__(self) -> None:
         self.bucket = os.environ.get("GCS_BUCKET")
@@ -255,12 +278,119 @@ class SourceStore(PosterStore):
         async with connection:
             cursor = await connection.execute(
                 "SELECT s.storage_uri, s.mimetype FROM source s JOIN poster p USING (pid) "
-                "WHERE p.uid = %s AND s.sid = %s", (uid, sid),
+                "WHERE p.uid = %s AND s.sid = %s AND s.kind <> 'thumbnail'", (uid, sid),
             )
             row = await cursor.fetchone()
         if row is None or not row[0]:
             return None
         return await run_in_threadpool(SourceFiles().read, row[0]), row[1]
+
+    async def thumbnail_state(self, uid: int, pid: int) -> PosterThumbnailState | None:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT coalesce(p.updated, p.created), "
+                "(SELECT max(s.updated) FROM source s "
+                " WHERE s.pid = p.pid AND s.kind <> 'thumbnail'), "
+                "(SELECT t.updated FROM source t "
+                " WHERE t.pid = p.pid AND t.kind = 'thumbnail' "
+                "AND t.storage_uri IS NOT NULL) "
+                "FROM poster p WHERE p.uid = %s AND p.pid = %s "
+                "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid)",
+                (uid, pid),
+            )
+            row = await cursor.fetchone()
+        return PosterThumbnailState(*row) if row is not None else None
+
+    async def save_thumbnail(
+        self, uid: int, pid: int, data: bytes,
+        expected_revision: tuple[datetime, datetime | None],
+    ) -> bool:
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("Poster thumbnails must be PNG images.")
+        width, height = await run_in_threadpool(processing.image_dimensions, data)
+        files = SourceFiles()
+        written: list[str] = []
+        old_uri: str | None = None
+        connection = await self._connect()
+        try:
+            async with connection:
+                cursor = await connection.execute(
+                    "SELECT p.pid FROM poster p WHERE p.uid = %s AND p.pid = %s "
+                    "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
+                    "FOR UPDATE", (uid, pid),
+                )
+                if await cursor.fetchone() is None:
+                    return False
+                cursor = await connection.execute(
+                    "SELECT coalesce(p.updated, p.created), "
+                    "(SELECT max(s.updated) FROM source s "
+                    " WHERE s.pid = p.pid AND s.kind <> 'thumbnail'), "
+                    "(SELECT t.updated FROM source t "
+                    " WHERE t.pid = p.pid AND t.kind = 'thumbnail' "
+                    "AND t.storage_uri IS NOT NULL) "
+                    "FROM poster p WHERE p.uid = %s AND p.pid = %s",
+                    (uid, pid),
+                )
+                row = await cursor.fetchone()
+                state = PosterThumbnailState(*row)
+                if state.revision != expected_revision:
+                    return False
+                if not state.stale:
+                    return True
+
+                cursor = await connection.execute(
+                    "SELECT sid, storage_uri FROM source "
+                    "WHERE pid = %s AND kind = 'thumbnail' FOR UPDATE", (pid,),
+                )
+                existing = await cursor.fetchone()
+                if existing is None:
+                    asset = processing.Asset(
+                        "thumbnail.png", data, "image/png", "thumbnail",
+                        width=width, height=height,
+                    )
+                    await self._insert_source(
+                        connection, files, written, pid, asset, None, extracted=True,
+                    )
+                else:
+                    sid, old_uri = existing
+                    fileid = uuid4()
+                    uri = await run_in_threadpool(files.put, fileid, data, "image/png")
+                    written.append(uri)
+                    await connection.execute(
+                        "UPDATE source SET filename = 'thumbnail.png', mimetype = 'image/png', "
+                        "size = %s, height = %s, width = %s, fileid = %s, storage_uri = %s, "
+                        "hash = %s, parent = NULL, text = NULL, summary = NULL, description = NULL, "
+                        "added = now(), updated = now(), extracted = TRUE, "
+                        "evaluation = NULL, evaluation_hash = NULL WHERE sid = %s",
+                        (len(data), height, width, fileid, uri, source_hash(data), sid),
+                    )
+        except BaseException:
+            for uri in written:
+                try:
+                    await run_in_threadpool(files.delete, uri)
+                except (OSError, GoogleAPIError, GoogleAuthError):
+                    logger.exception("Could not remove failed poster thumbnail %s", uri)
+            raise
+        if old_uri:
+            try:
+                await run_in_threadpool(files.delete, old_uri)
+            except (OSError, GoogleAPIError, GoogleAuthError, ValueError):
+                logger.exception("Could not remove replaced poster thumbnail %s", old_uri)
+        return True
+
+    async def poster_thumbnail(self, uid: int, pid: int) -> bytes | None:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT s.storage_uri FROM source s JOIN poster p USING (pid) "
+                "WHERE p.uid = %s AND p.pid = %s AND s.kind = 'thumbnail'",
+                (uid, pid),
+            )
+            row = await cursor.fetchone()
+        if row is None or not row[0]:
+            return None
+        return await run_in_threadpool(SourceFiles().read, row[0])
 
     _SOURCE_COLUMNS = (
         "s.sid, coalesce(s.filename, parent.filename, 'Untitled source'), s.mimetype, "
@@ -273,7 +403,8 @@ class SourceStore(PosterStore):
             cursor = await connection.execute(
                 "SELECT " + self._SOURCE_COLUMNS +
                 " FROM source s JOIN poster p USING (pid) LEFT JOIN source parent ON parent.sid = s.parent "
-                "WHERE p.uid = %s AND p.pid = %s ORDER BY s.added, s.sid", (uid, pid),
+                "WHERE p.uid = %s AND p.pid = %s AND s.kind <> 'thumbnail' "
+                "ORDER BY s.added, s.sid", (uid, pid),
             )
             items = [Source(*row) for row in await cursor.fetchall()]
         children: dict[int | None, list[Source]] = {}
@@ -372,7 +503,8 @@ class SourceStore(PosterStore):
                 kind = await self._asset_kind(connection, pid, original)
                 await connection.execute(
                     "UPDATE source SET text = %s, summary = %s, description = %s, "
-                    "width = %s, height = %s, kind = %s, extracted = TRUE WHERE sid = %s",
+                    "width = %s, height = %s, kind = %s, extracted = TRUE, updated = now() "
+                    "WHERE sid = %s",
                     (result.text or None, result.summary or None, result.description or None,
                      result.width, result.height, kind, sid),
                 )
@@ -391,11 +523,12 @@ class SourceStore(PosterStore):
         asset: processing.Asset, parent: int | None, summary: str = "", extracted: bool = True,
     ) -> Source:
         digest = source_hash(asset.data)
-        if asset.width is not None or parent is not None:
+        if asset.kind != "thumbnail" and (asset.width is not None or parent is not None):
             cursor = await connection.execute(
                 "SELECT " + self._SOURCE_COLUMNS +
                 " FROM source s LEFT JOIN source parent ON parent.sid = s.parent "
-                "WHERE s.pid = %s AND s.hash = %s ORDER BY s.sid LIMIT 1", (pid, digest),
+                "WHERE s.pid = %s AND s.hash = %s AND s.kind <> 'thumbnail' "
+                "ORDER BY s.sid LIMIT 1", (pid, digest),
             )
             row = await cursor.fetchone()
             if row is not None:
@@ -428,7 +561,10 @@ class SourceStore(PosterStore):
             logo = await cursor.fetchone()
             if logo is None or asset.width * (asset.height or 0) > logo[1]:
                 if logo is not None:
-                    await connection.execute("UPDATE source SET kind = 'image' WHERE sid = %s", (logo[0],))
+                    await connection.execute(
+                        "UPDATE source SET kind = 'image', updated = now() WHERE sid = %s",
+                        (logo[0],),
+                    )
                 return "logo"
         return asset.kind
 
@@ -438,7 +574,8 @@ class SourceStore(PosterStore):
             cursor = await connection.execute(
                 "SELECT CASE WHEN s.parent IS NULL THEN s.text END, s.mimetype "
                 "FROM source s JOIN poster p USING (pid) "
-                "WHERE p.uid = %s AND p.pid = %s ORDER BY s.added, s.sid", (uid, pid),
+                "WHERE p.uid = %s AND p.pid = %s AND s.kind <> 'thumbnail' "
+                "ORDER BY s.added, s.sid", (uid, pid),
             )
             rows = await cursor.fetchall()
         texts = []
@@ -456,7 +593,8 @@ class SourceStore(PosterStore):
                 return await self.source_text(uid, pid, connection)
         cursor = await connection.execute(
             "SELECT s.sid, s.filename, s.text, s.mimetype, s.extracted FROM source s JOIN poster p USING (pid) "
-            "WHERE p.uid = %s AND p.pid = %s AND s.parent IS NULL ORDER BY s.added, s.sid",
+            "WHERE p.uid = %s AND p.pid = %s AND s.parent IS NULL AND s.kind <> 'thumbnail' "
+            "ORDER BY s.added, s.sid",
             (uid, pid),
         )
         rows = await cursor.fetchall()
@@ -508,7 +646,8 @@ class SourceStore(PosterStore):
             cursor = await connection.execute(
                 "SELECT s.storage_uri FROM source s JOIN poster p USING (pid) "
                 "WHERE p.uid = %s AND p.pid = %s AND s.sid = %s "
-                "AND s.width IS NOT NULL AND s.height IS NOT NULL", (uid, pid, sid),
+                "AND s.width IS NOT NULL AND s.height IS NOT NULL "
+                "AND s.kind <> 'thumbnail'", (uid, pid, sid),
             )
             row = await cursor.fetchone()
         return await run_in_threadpool(SourceFiles().read, row[0]) if row and row[0] else None
@@ -520,7 +659,8 @@ class SourceStore(PosterStore):
                 "SELECT s.storage_uri, s.mimetype FROM source s JOIN poster p USING (pid) "
                 "WHERE p.uid = %s AND p.pid = %s AND s.sid = %s "
                 "AND s.width IS NOT NULL AND s.height IS NOT NULL "
-                "AND s.mimetype IN ('image/png', 'image/jpeg')", (uid, pid, sid),
+                "AND s.mimetype IN ('image/png', 'image/jpeg') "
+                "AND s.kind <> 'thumbnail'", (uid, pid, sid),
             )
             row = await cursor.fetchone()
         if row is None or not row[0]:
@@ -538,6 +678,7 @@ class SourceStore(PosterStore):
                 "WHERE p.uid = %s AND p.pid = %s AND s.width IS NOT NULL "
                 "AND s.height IS NOT NULL AND s.storage_uri IS NOT NULL "
                 "AND s.mimetype IN ('image/png', 'image/jpeg') "
+                "AND s.kind <> 'thumbnail' "
                 "ORDER BY (s.parent IS NOT NULL), s.sid", (uid, pid),
             )
             return [GraphicEvaluationSource(*row) for row in await cursor.fetchall()]
@@ -553,6 +694,7 @@ class SourceStore(PosterStore):
                 "WHERE p.uid = %s AND p.pid = %s AND s.sid = %s "
                 "AND s.width IS NOT NULL AND s.height IS NOT NULL "
                 "AND s.mimetype IN ('image/png', 'image/jpeg') "
+                "AND s.kind <> 'thumbnail' "
                 "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
                 "FOR UPDATE OF p, s", (uid, pid, sid),
             )
