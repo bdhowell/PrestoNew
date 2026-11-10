@@ -50,9 +50,15 @@ async def loggedout(request: Request) -> Response:
     identity.sign_out(request)
     response = render_page(
         request, "system/loggedout.html", "system-loggedout",
-        f"<p>{identity.display_name(request)}, you've been logged out because your session expired.</p>",
+        f"""
+<p>{identity.display_name(request)}, you&rsquo;ve been logged out because your session expired.</p>
+<p class="centered">
+    <button data-sends="login">Sign in again</button>
+</p>
+""",
         clear_chat=True, wikkit_offline=True,
     )
+
     for cookie in (SESSION_COOKIE_NAME, LOCAL_SESSION_COOKIE_NAME):
         response.delete_cookie(
             cookie, path="/", httponly=True, samesite="strict",

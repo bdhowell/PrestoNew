@@ -381,7 +381,6 @@
         const socket = document.body.dataset.wikkitOffline === "true"
             ? null : new WebSocket(`${scheme}//${location.host}${chatbot.dataset.socket}`);
         if (!socket) {
-            closed = true;
             chatinput.contentEditable = "false";
         }
 
@@ -792,7 +791,12 @@
                             enqueue(() => {
                                 if (pageResponse !== response) return;
                                 requestResponse();
-                                chatinput.focus();
+                                if (socket) {
+                                    chatinput.focus();
+                                } else {
+                                    closeInput();
+                                    chatlog.querySelector("button[data-sends]:not(:disabled)")?.focus();
+                                }
                             });
                         });
                     },

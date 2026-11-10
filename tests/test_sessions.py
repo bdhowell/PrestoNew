@@ -143,6 +143,8 @@ class SessionMiddlewareTests(unittest.TestCase):
             self.assertIn("Ada \\u0026lt;script\\u0026gt;", response.text)
             self.assertIn("logged out because your session expired", response.text)
             self.assertIn('data-wikkit-offline="true"', response.text)
+            self.assertIn('src="/static/javascript/pages/system-loggedout.js"', response.text)
+            self.assertIn('data-sends=\\"login\\"', response.text)
             self.assertNotIn('src="/static/javascript/sessions.js"', response.text)
             self.assertIn("Max-Age=0", response.headers["set-cookie"])
             self.assertIn("/account/signin", response.text)

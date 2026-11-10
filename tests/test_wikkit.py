@@ -311,6 +311,48 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.route("**/*", serve)
         await self.page.route_web_socket("**/wikkit/ws", connect)
 
+    async def test_loggedout_waits_for_login_button_without_a_socket(self) -> None:
+        client = TestClient(app)
+        self.addCleanup(client.close)
+        client.cookies.set("presto_user", "Ada")
+        response = client.get("/system/loggedout/")
+        await self.page.route(
+            "**/system/loggedout/",
+            lambda route: route.fulfill(body=response.content, content_type="text/html"),
+        )
+        await self.page.route(
+            "**/account/signin",
+            lambda route: route.fulfill(body="<h1>Sign in</h1>", content_type="text/html"),
+        )
+        await self.page.add_init_script("""() => {
+            sessionStorage.setItem('wikkit.chatbot', JSON.stringify({
+                content: '<header class="chatbot-handle">Wikkit</header>'
+                    + '<div id="chatlog"><div class="chat">'
+                    + '<button data-sends="login" disabled>Sign in again</button>'
+                    + '</div></div><div id="chatinput"></div>',
+                geometry: {left: 0, top: 0, width: 400, height: 300},
+            }));
+        }""")
+        await self.page.clock.install()
+        await self.page.goto("http://testserver/system/loggedout/")
+        await self.page.clock.run_for(15000)
+        button = self.page.locator('#chatlog button[data-sends="login"]')
+        await expect(button).to_be_enabled()
+        await expect(button).to_be_focused()
+        await expect(self.page.locator("#chatlog")).to_contain_text(
+            "Ada, you’ve been logged out because your session expired.",
+        )
+        self.assertFalse(hasattr(self, "socket"))
+        self.assertEqual(
+            await self.page.locator("main a").get_attribute("href"), "/account/signin",
+        )
+        await self.page.clock.run_for(180000)
+        await expect(button).to_be_enabled()
+        await expect(self.page.locator("#chatlog")).to_contain_text("Are you still there?")
+        await button.click()
+        await self.page.wait_for_url("**/account/signin")
+        self.assertEqual(self.errors, [])
+
     async def start_timed_output(self) -> None:
         self.word_interval = 400
         self.word_deviation = 100

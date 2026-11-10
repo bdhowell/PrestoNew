@@ -130,6 +130,8 @@ returns `remaining_seconds`, `expires_at` (Unix seconds), and the display `name`
 without renewing or creating a session. Missing/expired sessions redirect to
 `/system/loggedout/`. Both `/system/loggedout` forms show Wikkit's personalized
 expiry notice, clear session cookies, and do not start a new session.
+Wikkit waits locally for the `login` button, which opens `/account/signin` just
+like the page's sign-in link, without reconnecting the expired session.
 
 Pages poll every minute and schedule five- and two-minute Wikkit warnings only
 in the respective (5, 7) and (2, 4) minute windows. Repeated polls never reset
