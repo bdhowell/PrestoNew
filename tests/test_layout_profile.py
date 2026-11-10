@@ -110,6 +110,13 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("wand-cursor.png", await self.page.locator("#results").evaluate(
             "element => getComputedStyle(element).cursor",
         ))
+        for target in ("#layout-context-menu", "#layout-context-menu button:enabled",
+                       "#layout-context-menu button:disabled"):
+            for element in await self.page.locator(target).all():
+                await element.hover()
+                self.assertIn("wand-cursor.png", await element.evaluate(
+                    "element => getComputedStyle(element).cursor",
+                ))
         await self.page.get_by_role("menuitem", name="Adjust text content").click()
         self.assertTrue(await self.page.locator(".content").evaluate(
             "element => document.activeElement === element",

@@ -536,6 +536,9 @@ outline returns on blur if the element still qualifies.
 Editing outlines disappear on blur; clicking does not dismiss warning or active
 editing outlines.
 
+The wand cursor remains visible over the application's context menu, including
+both available and disabled actions.
+
 Loading `/layout/edit` also schedules a profile after the DOM and initial saved
 layout geometry are ready. Subsequent saved edits continue to trigger profiling
 after the configured quiet period.
