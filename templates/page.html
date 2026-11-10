@@ -11,6 +11,9 @@
     <link rel="stylesheet" href="/static/css/router.css">
     {% block styles %}{% endblock %}
     <script src="/static/javascript/wikkit.js"></script>
+    {% if request.scope.get("session_monitor") %}
+    <script src="/static/javascript/sessions.js" defer></script>
+    {% endif %}
     {% block scripts %}{% endblock %}
     {% include "page_assets.html" %}
 </head>
@@ -18,6 +21,7 @@
 <body class="wikkit-page" data-page="{{ page_name }}" data-signed-in="{{ 'true' if signed_in else 'false' }}"
       data-socket="{{ socket_path }}" data-chat-window-transition="{{ chat_window_transition_ms }}"
       data-chat-input-transition="{{ chat_input_transition_ms }}"
+      data-wikkit-offline="{{ 'true' if wikkit_offline|default(false) else 'false' }}"
       data-clear-chat="{{ 'true' if clear_chat|default(false) else 'false' }}">
     {% include "menu.html" %}
     <main>

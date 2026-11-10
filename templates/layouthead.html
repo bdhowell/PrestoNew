@@ -19,6 +19,9 @@
 <script src="https://kit.fontawesome.com/938fc9d55b.js" crossorigin="anonymous"></script>
     {% include "page_assets.html" %}
     <script src="/static/javascript/wikkit.js"></script>
+    {% if request.scope.get("session_monitor") %}
+    <script src="/static/javascript/sessions.js" defer></script>
+    {% endif %}
     <script>
         document.addEventListener("DOMContentLoaded", () => {
             window.wikkit = connect(() => {});

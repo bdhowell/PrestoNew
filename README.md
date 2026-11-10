@@ -80,10 +80,11 @@ Create a .env file in the project root:
 APPLICATION_NAME=AutoPoster
 DATABASE_URL=postgresql://localhost/poster
 SECRET_KEY=replace-with-a-random-secret
+SESSION_BACKEND=redis
+REDIS_URL=redis://localhost:6379/0
 SERVER_HOST=0.0.0.0
 SERVER_PORT=8000
 SESSION_MAX_AGE=600
-CLIENT_NOTIFICATION_INTERVAL=480
 POSTER_UPLOAD_MAX_MB=32
 
 # Optional AI features
@@ -98,4 +99,40 @@ AUTOCOMPLETE_MERGE_METHOD=rrf
 AUTOCOMPLETE_MERGE_RRF_K=60
 AUTOCOMPLETE_MERGE_FTS_WEIGHT=1
 AUTOCOMPLETE_MERGE_VECTOR_WEIGHT=1
+```
+
+## Server-side sessions
+
+Sessions use Redis 7 or newer, not PostgreSQL. Start Redis before the application and set
+`SECRET_KEY` to a random secret of at least 32 bytes. `REDIS_URL` defaults to
+`redis://localhost:6379/0`; use a private, access-controlled Redis service in
+production. Redis keys use the `presto:session:` prefix and expire automatically.
+Signed payloads retain the existing server-side chatbot memory and optimistic
+concurrency checks. Redis failures fail requests rather than falling back to
+PostgreSQL or accepting an unverified session.
+
+`SESSION_MAX_AGE` (seconds, default 600) is an inactivity timeout: normal HTTP
+requests renew it. `/system/timecheck` validates the HttpOnly session cookie and
+returns `remaining_seconds`, `expires_at` (Unix seconds), and the display `name`
+without renewing or creating a session. Missing/expired sessions redirect to
+`/system/loggedout/`. Both `/system/loggedout` forms show Wikkit's personalized
+expiry notice, clear session cookies, and do not start a new session.
+
+Pages poll every minute and schedule five- and two-minute Wikkit warnings only
+in the respective (5, 7) and (2, 4) minute windows. Repeated polls never reset
+warnings for the same expiration; real activity starts a new expiration cycle.
+The deadline is rechecked before redirecting, to honor renewal in another tab.
+
+`SESSION_COOKIE_SECURE=true` is the default and requires HTTPS. Only local HTTP
+development should set it to `false`. `SESSION_BACKEND=none` explicitly disables
+sessions; `auto` enables Redis when `SECRET_KEY` or `REDIS_URL` is configured.
+The old `postgres` backend is no longer supported. Deployment invalidates old
+PostgreSQL sessions; users must sign in again. The unused `chatbot_session` table
+can be dropped after deployment; no user or poster data is migrated.
+
+Run session integration tests against an isolated Redis database:
+
+```sh
+TEST_REDIS_URL=redis://localhost:6379/15 bin/python -m unittest tests.test_sessions
+node --test tests/sessions.test.js
 ```

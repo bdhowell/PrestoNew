@@ -3,15 +3,6 @@
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
-CREATE TABLE chatbot_session (
-    session_id TEXT PRIMARY KEY,
-    data       BYTEA NOT NULL,
-    version    BIGINT NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX chatbot_session_expires_at ON chatbot_session (expires_at);
-
 CREATE TABLE administration (
     username    TEXT,
     password    TEXT,

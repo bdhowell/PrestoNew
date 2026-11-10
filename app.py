@@ -21,7 +21,7 @@ from routers import account, conferences, content, posters, system, wikkit  # no
 from identity import identity_context  # noqa: E402
 from posters import poster_context  # noqa: E402
 from memory import memory_context  # noqa: E402
-from sessions import PostgresSessionMiddleware, configured_session_store  # noqa: E402
+from sessions import RedisSessionMiddleware, configured_session_store  # noqa: E402
 
 
 @asynccontextmanager
@@ -44,7 +44,7 @@ secure_cookie = os.environ.get("SESSION_COOKIE_SECURE", "true")
 if secure_cookie not in ("true", "false"):
     raise ValueError("SESSION_COOKIE_SECURE must be true or false")
 app.add_middleware(
-    PostgresSessionMiddleware, store=configured_session_store(),
+    RedisSessionMiddleware, store=configured_session_store(),
     secure=secure_cookie == "true",
 )
 mimetypes.add_type("text/javascript", ".does")

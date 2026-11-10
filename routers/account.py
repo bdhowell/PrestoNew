@@ -247,7 +247,9 @@ Please <a href="/account/signin">sign in</a> and I&rsquo;ll send you a fresh one
     if not _sessions_available(request):
         return await _confirmed_page(request, confirmed)
     identity.sign_in(request, confirmed)
-    return RedirectResponse("/account/confirmation", status_code=303)
+    response = RedirectResponse("/account/confirmation", status_code=303)
+    identity.set_name_cookie(response, confirmed.name)
+    return response
 
 
 async def _confirmed_page(request: Request, user: users.User) -> HTMLResponse:
@@ -329,10 +331,12 @@ Let&rsquo;s get back to work on your poster!
 </p>
 """
 
-        return _reply(
+        response = _reply(
             True, says, redirect=await resumption_page(request), command={"does": "clear-chat"},
             signed_in=True,
         )
+        identity.set_name_cookie(response, user.name)
+        return response
     name = identity.cookie_name(request)
     if name is not None:
         says = f"""
@@ -522,7 +526,9 @@ Please <a href="/account/recover">request a new one</a>.
 All done, {identity.display_name(request)}! Your new password is in place.
 </p>
 """
-    return _reply(True, says, redirect=await resumption_page(request), signed_in=True)
+    response = _reply(True, says, redirect=await resumption_page(request), signed_in=True)
+    identity.set_name_cookie(response, request.state.user["user-name"])
+    return response
 
 
 @router.get("/delete", response_class=HTMLResponse)

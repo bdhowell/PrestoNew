@@ -1,26 +1,23 @@
 import asyncio
 import os
 import pickle
+import time
 import unittest
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
-import psycopg
 from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
+from redis import Redis
 from starlette.websockets import WebSocketDisconnect
 
+from identity import identity_context
 from memory import current_memory, memory_context
-from routers.wikkit import router
+from routers import system, wikkit
 from sessions import (
-    LOCAL_SESSION_COOKIE_NAME,
-    PostgresSessionMiddleware,
-    PostgresSessionStore,
-    Session,
-    SessionConflictError,
-    SESSION_COOKIE_NAME,
-    configured_session_store,
+    LOCAL_SESSION_COOKIE_NAME, SESSION_COOKIE_NAME, RedisSessionMiddleware,
+    RedisSessionStore, Session, SessionConflictError, configured_session_store,
 )
 from wikkit import Chatbot
 
@@ -32,37 +29,38 @@ def run_async(awaitable):
 
 
 class SessionConfigurationTests(unittest.TestCase):
-    def test_auto_and_explicit_database_free_modes(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertIsNone(configured_session_store())
-        with patch.dict(os.environ, {"SESSION_BACKEND": "none"}, clear=True):
-            self.assertIsNone(configured_session_store())
+    def test_auto_and_explicit_disabled_modes(self) -> None:
+        for settings in ({}, {"DATABASE_URL": "unused"}, {"SESSION_BACKEND": "none"}):
+            with patch.dict(os.environ, settings, clear=True):
+                self.assertIsNone(configured_session_store())
 
-    def test_partial_configuration_and_invalid_settings_fail(self) -> None:
+    def test_invalid_configuration_fails(self) -> None:
         for settings in (
-            {"DATABASE_URL": "unused"},
-            {"SECRET_KEY": SECRET},
+            {"REDIS_URL": "redis://localhost"},
+            {"SESSION_BACKEND": "redis"},
             {"SESSION_BACKEND": "postgres"},
             {"SESSION_BACKEND": "unknown"},
-            {"DATABASE_URL": "unused", "SECRET_KEY": "short"},
-            {"DATABASE_URL": "unused", "SECRET_KEY": SECRET, "SESSION_MAX_AGE": "0"},
+            {"SECRET_KEY": "short"},
+            {"SECRET_KEY": SECRET, "SESSION_MAX_AGE": "0"},
         ):
             with self.subTest(settings=list(settings)), patch.dict(os.environ, settings, clear=True):
                 with self.assertRaises((ValueError, RuntimeError)):
                     configured_session_store()
 
-    def test_valid_configuration(self) -> None:
+    def test_valid_configuration_and_local_default(self) -> None:
         with patch.dict(os.environ, {
-            "DATABASE_URL": "unused", "SECRET_KEY": SECRET,
-            "SESSION_MAX_AGE": "1200",
+            "REDIS_URL": "redis://localhost:6380/2", "SECRET_KEY": SECRET,
+            "SESSION_MAX_AGE": "1200", "SESSION_BACKEND": "redis",
         }, clear=True):
             store = configured_session_store()
-        self.assertIsInstance(store, PostgresSessionStore)
-        assert store is not None
+        self.assertIsInstance(store, RedisSessionStore)
         self.assertEqual(store.max_age, 1200)
+        self.assertEqual(store.redis_url, "redis://localhost:6380/2")
+        with patch.dict(os.environ, {"SECRET_KEY": SECRET}, clear=True):
+            self.assertEqual(configured_session_store().redis_url, "redis://localhost:6379/0")
 
-    def test_signature_checked_before_unpickling_and_bound_to_session_id(self) -> None:
-        store = PostgresSessionStore(SECRET)
+    def test_signature_is_checked_before_unpickling_and_bound_to_identifier(self) -> None:
+        store = RedisSessionStore(SECRET)
         encoded = store._encode("first", pickle.dumps({"name": "Ada"}))
         for identifier, value in (("second", encoded), ("first", encoded[:-1] + b"x")):
             with patch("sessions.pickle.loads") as loads:
@@ -72,161 +70,144 @@ class SessionConfigurationTests(unittest.TestCase):
         self.assertEqual(store._decode("first", encoded)[0], {"name": "Ada"})
 
 
-class SessionRenewalTests(unittest.IsolatedAsyncioTestCase):
-    def test_insecure_local_cookie_uses_non_host_prefix_name(self) -> None:
-        middleware = PostgresSessionMiddleware(FastAPI(), store=None, secure=False)
-        session = Session(
-            "A" * 43, {}, 0, datetime.now(timezone.utc) + timedelta(minutes=10), b"",
+class SessionMiddlewareTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.store = RedisSessionStore(SECRET)
+        self.session = Session(
+            "A" * 43, {}, 1, datetime.now(timezone.utc) + timedelta(minutes=10), b"",
         )
-        cookie = middleware._cookie(session)
-        self.assertTrue(cookie.startswith(f"{LOCAL_SESSION_COOKIE_NAME}="))
-        self.assertIn("HttpOnly", cookie)
-        self.assertIn("SameSite=Strict", cookie)
-        self.assertNotIn("Secure", cookie)
+        self.store.load = AsyncMock(return_value=self.session)
+        self.store.save = AsyncMock()
+        self.store.delete = AsyncMock()
+        app = FastAPI(dependencies=[Depends(identity_context)])
+        app.add_middleware(RedisSessionMiddleware, store=self.store)
+        app.include_router(system.router)
+        app.include_router(wikkit.router)
 
-    async def test_server_cookie_is_appended_alongside_existing_cookie(self) -> None:
-        store = PostgresSessionStore(SECRET)
-        session = Session(
-            "A" * 43, {}, 0, datetime.now(timezone.utc) + timedelta(minutes=10), b"",
-        )
-        store.load = AsyncMock(return_value=session)
-        store.save = AsyncMock()
+        @app.get("/state")
+        def state():
+            return {"ok": True}
 
-        async def app(scope, receive, send):
-            await send({
-                "type": "http.response.start", "status": 200,
-                "headers": [(b"set-cookie", b"presto_user=Ada; Path=/")],
-            })
-            await send({"type": "http.response.body", "body": b""})
+        self.client = TestClient(app, base_url="https://testserver")
 
-        messages = []
-        middleware = PostgresSessionMiddleware(app, store=store)
-        await middleware(
-            {"type": "http", "path": "/state", "headers": []}, AsyncMock(),
-            AsyncMock(side_effect=messages.append),
-        )
-        cookies = [
-            value.decode()
-            for name, value in messages[0]["headers"]
-            if name.lower() == b"set-cookie"
-        ]
-        self.assertEqual(len(cookies), 2)
-        self.assertTrue(cookies[0].startswith("presto_user="))
-        self.assertTrue(cookies[1].startswith(f"{SESSION_COOKIE_NAME}="))
-
-    async def test_new_and_modified_sessions_persist_renewed_expiry(self) -> None:
-        store = PostgresSessionStore(SECRET)
-        for version in (0, 3):
-            with self.subTest(version=version):
-                original_expiry = datetime.now(timezone.utc) + timedelta(seconds=30)
-                session = Session("A" * 43, {"name": "Ada"}, version, original_expiry,
-                                  pickle.dumps({}, protocol=pickle.HIGHEST_PROTOCOL))
-                connection = AsyncMock()
-                cursor = AsyncMock()
-                connection.execute.return_value = cursor
-
-                async def saved_row():
-                    parameters = connection.execute.call_args.args[1]
-                    return (version + 1, parameters[2] if version == 0 else parameters[1])
-
-                cursor.fetchone.side_effect = saved_row
-                with patch.object(store, "_connect", AsyncMock(return_value=connection)):
-                    await store.save(session, renew=True)
-                self.assertEqual(session.version, version + 1)
-                self.assertGreater(session.expires_at, original_expiry + timedelta(seconds=560))
-                self.assertEqual(pickle.loads(session.original), {"name": "Ada"})
-                if version:
-                    self.assertIn("AND version = %s AND expires_at > now()",
-                                  connection.execute.call_args.args[0])
-
-    async def test_cookie_response_renews_read_only_session(self) -> None:
-        store = PostgresSessionStore(SECRET)
-        original_expiry = datetime.now(timezone.utc) + timedelta(seconds=30)
-        session = Session("A" * 43, {}, 2, original_expiry, pickle.dumps(
-            {}, protocol=pickle.HIGHEST_PROTOCOL,
-        ))
-        connection = AsyncMock()
-        cursor = AsyncMock()
-        connection.execute.return_value = cursor
-
-        async def renewed_row():
-            return (connection.execute.call_args.args[1][0],)
-
-        cursor.fetchone.side_effect = renewed_row
-        store.load = AsyncMock(return_value=session)
-        store._connect = AsyncMock(return_value=connection)
-        messages = []
-
-        async def app(scope, receive, send):
-            await send({"type": "http.response.start", "status": 200, "headers": []})
-            await send({"type": "http.response.body", "body": b""})
-
-        middleware = PostgresSessionMiddleware(app, store=store)
-        await middleware(
-            {"type": "http", "path": "/state", "headers": []}, AsyncMock(),
-            AsyncMock(side_effect=messages.append),
-        )
-        self.assertGreater(session.expires_at, original_expiry + timedelta(seconds=560))
-        self.assertEqual(session.version, 2)
-        sql = connection.execute.call_args.args[0]
-        self.assertIn("expires_at > now()", sql)
-        self.assertNotIn("version = version + 1", sql)
-        self.assertNotIn("SET data", sql)
-        cookie = dict(messages[0]["headers"])[b"set-cookie"].decode()
+    def test_cookies_and_renewal_on_normal_requests(self) -> None:
+        response = self.client.get("/state")
+        self.store.save.assert_awaited_once_with(self.session, renew=True)
+        cookie = response.headers["set-cookie"]
         self.assertTrue(cookie.startswith(f"{SESSION_COOKIE_NAME}="))
-        self.assertIn("HttpOnly", cookie)
-        self.assertIn("Secure", cookie)
-        self.assertIn("SameSite=Strict", cookie)
-        self.assertIn("Path=/", cookie)
+        for attribute in ("HttpOnly", "Secure", "SameSite=strict", "Path=/", "Max-Age="):
+            self.assertIn(attribute, cookie)
         self.assertNotIn("Domain=", cookie)
-        self.assertRegex(cookie, r"Max-Age=59[89]")
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertIn("Cookie", response.headers["vary"])
 
-    async def test_expired_read_only_session_is_not_renewed(self) -> None:
-        store = PostgresSessionStore(SECRET)
-        session = Session("A" * 43, {}, 1, datetime.now(timezone.utc), pickle.dumps(
-            {}, protocol=pickle.HIGHEST_PROTOCOL,
-        ))
-        connection = AsyncMock()
-        connection.execute.return_value.fetchone.return_value = None
-        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
-            with self.assertRaises(SessionConflictError):
-                await store.save(session, renew=True)
+    def test_local_cookie_has_no_host_prefix(self) -> None:
+        middleware = RedisSessionMiddleware(FastAPI(), store=None, secure=False)
+        cookie = middleware._cookie(self.session)
+        self.assertTrue(cookie.startswith(f"{LOCAL_SESSION_COOKIE_NAME}="))
+        self.assertNotIn("Secure", cookie)
+        self.assertIn("HttpOnly", cookie)
+
+    def test_timecheck_is_read_only_and_returns_seconds_name_and_timestamp(self) -> None:
+        self.client.cookies.set("presto_user", "Ada")
+        for _ in range(3):
+            response = self.client.get("/system/timecheck")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(set(response.json()), {"remaining_seconds", "expires_at", "name"})
+            self.assertGreater(response.json()["remaining_seconds"], 590)
+            self.assertLessEqual(response.json()["remaining_seconds"], 600)
+            self.assertEqual(response.json()["expires_at"], self.session.expires_at.timestamp())
+            self.assertEqual(response.json()["name"], "Ada")
+            self.assertNotIn("set-cookie", response.headers)
+            self.assertEqual(response.headers["cache-control"], "no-store")
+        self.store.save.assert_not_awaited()
+
+    def test_expired_unknown_or_missing_session_redirects_without_saving(self) -> None:
+        for version, expiry in (
+            (0, datetime.now(timezone.utc) + timedelta(minutes=10)),
+            (1, datetime.now(timezone.utc) - timedelta(seconds=1)),
+        ):
+            self.session.version, self.session.expires_at = version, expiry
+            response = self.client.get("/system/timecheck", follow_redirects=False)
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/system/loggedout/")
+            self.assertNotIn("set-cookie", response.headers)
+        self.store.save.assert_not_awaited()
+
+    def test_loggedout_page_personalizes_and_clears_cookies_without_loading_or_renewing(self) -> None:
+        for path in ("/system/loggedout", "/system/loggedout/"):
+            self.client.cookies.set("presto_user", "Ada%20%3Cscript%3E")
+            self.client.cookies.set(SESSION_COOKIE_NAME, self.session.identifier)
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("Ada \\u0026lt;script\\u0026gt;", response.text)
+            self.assertIn("logged out because your session expired", response.text)
+            self.assertIn('data-wikkit-offline="true"', response.text)
+            self.assertNotIn('src="/static/javascript/sessions.js"', response.text)
+            self.assertIn("Max-Age=0", response.headers["set-cookie"])
+            self.assertIn("/account/signin", response.text)
+            self.assertEqual(response.headers["cache-control"], "no-store")
+        self.store.load.assert_not_awaited()
+        self.store.save.assert_not_awaited()
+        self.store.delete.assert_awaited_with(self.session.identifier)
+
+    def test_disabled_backend_is_explicit(self) -> None:
+        app = FastAPI()
+        app.include_router(system.router)
+        self.assertEqual(TestClient(app).get("/system/timecheck").status_code, 503)
+
+    def test_regular_page_installs_session_monitor(self) -> None:
+        response = self.client.get("/wikkit/pricing")
+        self.assertIn('src="/static/javascript/sessions.js" defer', response.text)
+
+    def test_failure_does_not_send_success_and_concurrent_write_returns_conflict(self) -> None:
+        self.store.save.side_effect = RuntimeError("Redis unavailable")
+        with self.assertRaisesRegex(RuntimeError, "Redis unavailable"):
+            self.client.get("/state")
+        self.store.save.side_effect = SessionConflictError("conflict")
+        with self.assertLogs("sessions", "WARNING"):
+            self.assertEqual(self.client.get("/state").status_code, 409)
+
+    def test_other_response_cookies_are_preserved(self) -> None:
+        response = self.client.get("/system/loggedout")
+        self.assertEqual(len(response.headers.get_list("set-cookie")), 2)
 
 
-@unittest.skipUnless(os.environ.get("TEST_DATABASE_URL"), "set TEST_DATABASE_URL for PostgreSQL tests")
+@unittest.skipUnless(os.environ.get("TEST_REDIS_URL"), "set TEST_REDIS_URL for Redis tests")
 class SessionBackendTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.store = PostgresSessionStore(SECRET, database_env="TEST_DATABASE_URL")
+        self.url = os.environ["TEST_REDIS_URL"]
+        self.store = RedisSessionStore(SECRET, redis_url=self.url)
+        self.redis = Redis.from_url(self.url)
         self.identifiers: set[str] = set()
 
     def tearDown(self) -> None:
-        with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as connection:
-            for identifier in self.identifiers:
-                connection.execute(
-                    "DELETE FROM public.chatbot_session WHERE session_id = %s",
-                    (identifier,),
-                )
+        for identifier in self.identifiers:
+            self.redis.delete(self.store._key(identifier))
+        self.redis.close()
 
     def new_session(self) -> Session:
         session = run_async(self.store.load(None))
         self.identifiers.add(session.identifier)
         return session
 
-    def client(self, store: PostgresSessionStore | None = None) -> TestClient:
-        app = FastAPI(dependencies=[Depends(memory_context, scope="function")])
-        app.add_middleware(PostgresSessionMiddleware, store=store or self.store)
-        app.include_router(router)
+    def client(self, store: RedisSessionStore | None = None) -> TestClient:
+        app = FastAPI(dependencies=[
+            Depends(identity_context), Depends(memory_context, scope="function"),
+        ])
+        app.add_middleware(RedisSessionMiddleware, store=store or self.store)
+        app.include_router(wikkit.router)
+        app.include_router(system.router)
 
         @app.get("/state")
         def state(request: Request):
-            memory = current_memory()
-            self.identifiers.add(request.cookies.get(SESSION_COOKIE_NAME, ""))
-            return dict(memory.short_term_memory)
+            self.identifiers.add(request.scope["server_session"].identifier)
+            return dict(current_memory().short_term_memory)
 
         @app.post("/remember")
-        def remember():
-            memory = current_memory()
-            memory.short_term_memory["name"] = "Ada"
+        def remember(request: Request):
+            self.identifiers.add(request.scope["server_session"].identifier)
+            current_memory().short_term_memory["name"] = "Ada"
             return {"saved": True}
 
         async def cleanup(request: Request) -> AsyncIterator[None]:
@@ -234,188 +215,175 @@ class SessionBackendTests(unittest.TestCase):
             request.scope["session"]["cleanup"] = True
 
         @app.get("/cleanup", dependencies=[Depends(cleanup, scope="function")])
-        def cleanup_endpoint():
+        def cleanup_endpoint(request: Request):
+            self.identifiers.add(request.scope["server_session"].identifier)
             return {"ok": True}
 
         return TestClient(app, base_url="https://testserver")
 
-    def track_cookie(self, client: TestClient) -> str:
+    def test_roundtrip_ttl_and_fresh_store_instance(self) -> None:
+        client = self.client()
+        self.assertEqual(client.post("/remember").status_code, 200)
         identifier = client.cookies[SESSION_COOKIE_NAME]
-        self.identifiers.add(identifier)
-        return identifier
+        self.assertGreater(self.redis.pttl(self.store._key(identifier)), 590000)
+        self.assertLessEqual(self.redis.pttl(self.store._key(identifier)), 600000)
+        fresh = self.client(RedisSessionStore(SECRET, redis_url=self.url))
+        fresh.cookies.set(SESSION_COOKIE_NAME, identifier)
+        self.assertEqual(fresh.get("/state").json(), {"name": "Ada"})
 
-    def test_http_cookie_roundtrip_and_fresh_backend_instance(self) -> None:
-        client = self.client()
-        response = client.post("/remember")
-        self.assertEqual(response.status_code, 200)
-        cookie = response.headers["set-cookie"]
-        self.assertTrue(cookie.startswith(f"{SESSION_COOKIE_NAME}="))
-        for attribute in ("HttpOnly", "Secure", "SameSite=Strict", "Path=/", "Max-Age="):
-            self.assertIn(attribute, cookie)
-        self.assertNotIn("Domain=", cookie)
-        self.assertNotIn("Ada", cookie)
-        identifier = self.track_cookie(client)
-        self.assertEqual(response.headers["cache-control"], "no-store")
-        self.assertIn("Cookie", response.headers["vary"])
-        fresh_store = PostgresSessionStore(SECRET, database_env="TEST_DATABASE_URL")
-        reconnected = self.client(fresh_store)
-        reconnected.cookies.set(SESSION_COOKIE_NAME, identifier, domain="testserver.local")
-        self.assertEqual(reconnected.get("/state").json(), {"name": "Ada"})
-
-    def test_missing_unknown_and_expired_cookie_get_new_identifier(self) -> None:
-        for previous in ("unknown", "A" * 43):
-            client = self.client()
-            client.cookies.set(SESSION_COOKIE_NAME, previous, domain="testserver.local")
-            self.assertEqual(client.get("/state").status_code, 200)
-            self.assertNotEqual(self.track_cookie(client), previous)
+    def test_missing_unknown_malformed_and_expired_sessions(self) -> None:
+        for identifier in (None, "invalid", "A" * 43):
+            session = run_async(self.store.load(identifier))
+            self.assertNotEqual(session.identifier, identifier)
+            self.assertEqual((session.data, session.version), ({}, 0))
         session = self.new_session()
-        session.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         run_async(self.store.save(session))
-        renewed = run_async(self.store.load(session.identifier))
-        self.assertNotEqual(renewed.identifier, session.identifier)
-        self.assertEqual(renewed.data, {})
-        self.assertEqual(renewed.version, 0)
+        self.redis.pexpire(self.store._key(session.identifier), 1)
+        time.sleep(0.01)
+        self.assertNotEqual(run_async(self.store.load(session.identifier)).identifier, session.identifier)
+        session.data["new"] = True
+        with self.assertRaises(SessionConflictError):
+            run_async(self.store.save(session, renew=True))
 
-    def test_function_dependency_cleanup_is_persisted(self) -> None:
-        client = self.client()
-        self.assertEqual(client.get("/cleanup").status_code, 200)
-        identifier = self.track_cookie(client)
-        self.assertTrue(run_async(self.store.load(identifier)).data["cleanup"])
-
-    def test_http_activity_renews_database_expiry_without_changing_version(self) -> None:
+    def test_readonly_poll_does_not_extend_ttl_but_normal_activity_does(self) -> None:
         client = self.client()
         client.get("/state")
-        identifier = self.track_cookie(client)
-        with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as connection:
-            connection.execute(
-                "UPDATE public.chatbot_session SET expires_at = now() + interval '30 seconds' "
-                "WHERE session_id = %s", (identifier,),
-            )
+        identifier = client.cookies[SESSION_COOKIE_NAME]
         before = run_async(self.store.load(identifier))
-        response = client.get("/state")
+        key = self.store._key(identifier)
+        self.redis.pexpire(key, 30000)
+        for _ in range(3):
+            response = client.get("/system/timecheck")
+            self.assertEqual(response.status_code, 200)
+            self.assertGreater(response.json()["remaining_seconds"], 29)
+            self.assertLessEqual(response.json()["remaining_seconds"], 30)
+        self.assertLessEqual(self.redis.pttl(key), 30000)
+        self.assertEqual(client.get("/state").status_code, 200)
         after = run_async(self.store.load(identifier))
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(after.identifier, before.identifier)
         self.assertEqual(after.version, before.version)
-        self.assertGreater(after.expires_at, before.expires_at + timedelta(seconds=560))
-        self.assertRegex(response.headers["set-cookie"], r"Max-Age=59[89]")
+        self.assertGreater(self.redis.pttl(key), 590000)
 
-    def test_concurrent_writes_are_rejected_and_read_only_requests_do_not_conflict(self) -> None:
+    def test_concurrent_writes_rejected_and_readonly_renewal_preserves_newer_data(self) -> None:
         session = self.new_session()
         run_async(self.store.save(session))
         first = run_async(self.store.load(session.identifier))
         second = run_async(self.store.load(session.identifier))
         first.data["name"] = "Ada"
         run_async(self.store.save(first))
-        run_async(self.store.save(second, renew=True))  # Renewal must not overwrite a writer.
+        run_async(self.store.save(second, renew=True))
+        self.assertEqual(second.version, 1)
         second.data["name"] = "Grace"
         with self.assertRaises(SessionConflictError):
             run_async(self.store.save(second))
         self.assertEqual(run_async(self.store.load(session.identifier)).data, {"name": "Ada"})
 
-    def test_expired_session_cannot_be_resurrected(self) -> None:
+    def test_expiry_never_shortens_and_stale_socket_can_save_after_http_renewal(self) -> None:
         session = self.new_session()
+        session.expires_at = datetime.now(timezone.utc) + timedelta(seconds=1)
         run_async(self.store.save(session))
-        with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as connection:
-            connection.execute(
-                "UPDATE public.chatbot_session SET expires_at = now() - interval '1 second' "
-                "WHERE session_id = %s", (session.identifier,),
-            )
-        session.data["change"] = True
-        with self.assertRaises(SessionConflictError):
-            run_async(self.store.save(session))
+        newer = run_async(self.store.load(session.identifier))
+        run_async(self.store.save(newer, renew=True))
+        session.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        session.data["socket"] = True
+        run_async(self.store.save(session))
+        self.assertGreater(self.redis.pttl(self.store._key(session.identifier)), 590000)
 
-    def test_corrupt_database_payload_is_not_silently_replaced(self) -> None:
+    def test_corrupt_payload_is_not_silently_replaced(self) -> None:
         session = self.new_session()
         run_async(self.store.save(session))
-        with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as connection:
-            connection.execute(
-                "UPDATE public.chatbot_session SET data = %s WHERE session_id = %s",
-                (b"corrupt", session.identifier),
-            )
+        self.redis.hset(self.store._key(session.identifier), "data", b"corrupt")
         with self.assertRaisesRegex(ValueError, "integrity"):
             run_async(self.store.load(session.identifier))
 
-    def test_websocket_disconnect_persists_memory_and_reconnect_restores_it(self) -> None:
+    def test_function_dependency_cleanup_is_persisted(self) -> None:
+        client = self.client()
+        self.assertEqual(client.get("/cleanup").status_code, 200)
+        self.assertTrue(run_async(self.store.load(client.cookies[SESSION_COOKIE_NAME])).data["cleanup"])
+
+    def test_expired_timecheck_redirect_and_loggedout_revocation(self) -> None:
         client = self.client()
         client.get("/state")
-        self.track_cookie(client)
+        identifier = client.cookies[SESSION_COOKIE_NAME]
+        response = client.get("/system/loggedout")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.redis.exists(self.store._key(identifier)))
+        self.assertEqual(client.get("/system/timecheck", follow_redirects=False).status_code, 303)
+        self.assertNotIn(SESSION_COOKIE_NAME, client.cookies)
 
-        async def workflow(chatbot: Chatbot, message: str) -> None:
-            if message == "remember":
-                chatbot.short_term_memory["name"] = "Ada"
-            await chatbot.send({"say": chatbot.short_term_memory["name"]})
-
-        with patch.object(Chatbot, "handle_message", workflow):
-            with client.websocket_connect("wss://testserver/wikkit/ws") as socket:
-                self.assertEqual(socket.receive_json()["command"]["does"], "configure")
-                socket.send_text("remember")
-                self.assertEqual(socket.receive_json(), {"say": "Ada"})
-            with client.websocket_connect("wss://testserver/wikkit/ws") as socket:
-                self.assertEqual(socket.receive_json()["command"]["does"], "configure")
-                socket.send_text("recall")
-                self.assertEqual(socket.receive_json(), {"say": "Ada"})
-        self.assertEqual(
-            client.get("/state").json(), {"last_user_input": "recall", "name": "Ada"}
-        )
-
-    def test_websocket_requires_existing_session_and_rejects_cross_origin(self) -> None:
+    def test_expired_timecheck_does_not_create_a_replacement_session(self) -> None:
         client = self.client()
-        with self.assertRaises(WebSocketDisconnect) as closed:
-            with client.websocket_connect("wss://testserver/wikkit/ws"):
+        client.get("/state")
+        identifier = client.cookies[SESSION_COOKIE_NAME]
+        self.redis.delete(self.store._key(identifier))
+        response = client.get("/system/timecheck", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertNotIn("set-cookie", response.headers)
+        self.assertNotEqual(run_async(self.store.load(identifier)).identifier, identifier)
+
+    def test_websocket_requires_session_and_rejects_cross_origin(self) -> None:
+        client = self.client()
+        for headers in ({}, {"origin": "https://evil.example"}):
+            with self.assertRaises(WebSocketDisconnect) as closed:
+                with client.websocket_connect("wss://testserver/wikkit/ws", headers=headers):
+                    pass
+            self.assertEqual(closed.exception.code, 1008)
+        client.get("/state")
+        with self.assertRaises(WebSocketDisconnect):
+            with client.websocket_connect("wss://testserver/wikkit/ws", headers={"origin": "https://evil.example"}):
                 pass
-        self.assertEqual(closed.exception.code, 1008)
+        with client.websocket_connect("wss://testserver/wikkit/ws", headers={"origin": "https://testserver"}):
+            pass
+
+    def test_loggedout_socket_cannot_bypass_origin_validation_or_revoke_session(self) -> None:
+        client = self.client()
         client.get("/state")
-        self.track_cookie(client)
+        identifier = client.cookies[SESSION_COOKIE_NAME]
         with self.assertRaises(WebSocketDisconnect) as closed:
             with client.websocket_connect(
-                "wss://testserver/wikkit/ws", headers={"origin": "https://evil.example"},
+                "wss://testserver/system/loggedout", headers={"origin": "https://evil.example"},
             ):
                 pass
         self.assertEqual(closed.exception.code, 1008)
-        with client.websocket_connect(
-            "wss://testserver/wikkit/ws", headers={"origin": "https://testserver"},
-        ):
-            pass
+        self.assertTrue(self.redis.exists(self.store._key(identifier)))
 
-    def test_failure_to_save_http_session_does_not_send_success(self) -> None:
-        client = self.client()
-        with patch.object(self.store, "save", side_effect=RuntimeError("database unavailable")):
-            with self.assertRaisesRegex(RuntimeError, "database unavailable"):
-                client.post("/remember")
-
-    def test_concurrent_http_write_returns_conflict_not_success(self) -> None:
+    def test_socket_memory_survives_disconnect_and_reconnect(self) -> None:
         client = self.client()
         client.get("/state")
-        self.track_cookie(client)
-        with patch.object(self.store, "save", side_effect=SessionConflictError("conflict")):
-            response = client.post("/remember")
-        self.assertEqual(response.status_code, 409)
-        self.assertIn("Reload", response.json()["detail"])
 
-    def test_disconnect_cancellation_saves_memory_after_workflow_teardown(self) -> None:
+        async def workflow(bot: Chatbot, message: str) -> None:
+            if message == "remember":
+                bot.short_term_memory["name"] = "Ada"
+            await bot.send({"say": bot.short_term_memory["name"]})
+
+        with patch.object(Chatbot, "handle_message", workflow):
+            for message in ("remember", "recall"):
+                with client.websocket_connect("wss://testserver/wikkit/ws") as socket:
+                    self.assertEqual(socket.receive_json()["command"]["does"], "configure")
+                    socket.send_text(message)
+                    self.assertEqual(socket.receive_json(), {"say": "Ada"})
+        self.assertEqual(client.get("/state").json(), {"last_user_input": "recall", "name": "Ada"})
+
+    def test_disconnect_cancellation_saves_after_workflow_teardown(self) -> None:
         client = self.client()
         client.get("/state")
-        identifier = self.track_cookie(client)
 
-        async def workflow(chatbot: Chatbot, message: str) -> None:
+        async def workflow(bot: Chatbot, message: str) -> None:
             try:
-                await chatbot.request_response("Waiting")
+                await bot.request_response("Waiting")
             finally:
-                chatbot.short_term_memory["cancelled"] = True
+                bot.short_term_memory["cancelled"] = True
 
         with patch.object(Chatbot, "handle_message", workflow):
             with client.websocket_connect("wss://testserver/wikkit/ws") as socket:
-                self.assertEqual(socket.receive_json()["command"]["does"], "configure")
+                socket.receive_json()
                 socket.send_text("start")
                 self.assertEqual(socket.receive_json()["say"], "Waiting")
-        memory = run_async(self.store.load(identifier)).data["chatbot_memory"]
+        memory = run_async(self.store.load(client.cookies[SESSION_COOKIE_NAME])).data["chatbot_memory"]
         self.assertTrue(memory.short_term_memory["cancelled"])
 
     def test_websocket_save_failure_is_explicit(self) -> None:
         client = self.client()
         client.get("/state")
-        self.track_cookie(client)
         with patch.object(self.store, "save", side_effect=SessionConflictError("conflict")):
             with self.assertRaisesRegex(SessionConflictError, "conflict"):
                 with client.websocket_connect("wss://testserver/wikkit/ws"):

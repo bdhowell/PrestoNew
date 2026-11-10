@@ -378,15 +378,20 @@
         ]);
 
         const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-        const socket = new WebSocket(`${scheme}//${location.host}${chatbot.dataset.socket}`);
+        const socket = document.body.dataset.wikkitOffline === "true"
+            ? null : new WebSocket(`${scheme}//${location.host}${chatbot.dataset.socket}`);
+        if (!socket) {
+            closed = true;
+            chatinput.contentEditable = "false";
+        }
 
         function send(text, response = true) {
-            if (socket.readyState === WebSocket.OPEN) {
+            if (socket?.readyState === WebSocket.OPEN) {
                 if (response && text.trim()) {
                     finishResponse();
                 }
                 socket.send(text);
-            } else if (socket.readyState === WebSocket.CONNECTING) {
+            } else if (socket?.readyState === WebSocket.CONNECTING) {
                 if (response && text.trim()) {
                     finishResponse();
                 }
@@ -594,9 +599,9 @@
             }
             stopRequest();
             const message = JSON.stringify({ page });
-            if (socket.readyState === WebSocket.OPEN) {
+            if (socket?.readyState === WebSocket.OPEN) {
                 socket.send(message);
-            } else if (socket.readyState === WebSocket.CONNECTING) {
+            } else if (socket?.readyState === WebSocket.CONNECTING) {
                 pending.push(message);
             }
         }
@@ -661,12 +666,12 @@
             });
         }
 
-        socket.addEventListener("open", () => {
+        socket?.addEventListener("open", () => {
             while (pending.length) {
                 socket.send(pending.shift());
             }
         });
-        socket.addEventListener("message", (event) => {
+        socket?.addEventListener("message", (event) => {
             let message;
             try {
                 message = JSON.parse(event.data);
@@ -678,7 +683,7 @@
                 deliver(message);
             }
         });
-        socket.addEventListener("close", (event) => {
+        socket?.addEventListener("close", (event) => {
             if (leaving) {
                 return;
             }
@@ -710,7 +715,7 @@
             stopRequest();
             if (finishAnimation) finishAnimation();
             save();
-            socket.close();
+            socket?.close();
         }, { once: true });
         window.addEventListener("pageshow", (event) => {
             if (event.persisted) {

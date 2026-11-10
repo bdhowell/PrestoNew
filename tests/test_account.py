@@ -22,7 +22,7 @@ import users
 from identity import NAME_COOKIE, identity_context
 from memory import memory_context
 from routers import account, wikkit
-from sessions import PostgresSessionMiddleware, PostgresSessionStore, Session
+from sessions import RedisSessionMiddleware, RedisSessionStore, Session
 
 SECRET = "s" * 48
 
@@ -215,7 +215,7 @@ class AccountMenuTests(unittest.TestCase):
         self.addCleanup(store.stop)
         self.store.get.return_value = self.user
         self.store.get_by_email.return_value = self.user
-        session_store = PostgresSessionStore(SECRET)
+        session_store = RedisSessionStore(SECRET)
         session = Session("menu-test", {}, 1, datetime.now(timezone.utc), b"")
         for method, result in (("load", session), ("save", None)):
             mocked = patch.object(session_store, method, return_value=result)
@@ -223,7 +223,7 @@ class AccountMenuTests(unittest.TestCase):
             self.addCleanup(mocked.stop)
         application = FastAPI(dependencies=[Depends(identity_context)])
         application.add_middleware(
-            PostgresSessionMiddleware, store=session_store, secure=False,
+            RedisSessionMiddleware, store=session_store, secure=False,
         )
         application.include_router(wikkit.router)
         application.include_router(account.router)
@@ -239,6 +239,7 @@ class AccountMenuTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIs(response.json()["signed_in"], True)
         self.assertEqual(response.json()["redirect"], "/conferences/find")
+        self.assertEqual(self.client.cookies[NAME_COOKIE], self.user.name)
         self.assertIn('href="/account/signout">Sign out</a>', self.client.get("/wikkit").text)
 
         response = self.client.get("/account/signout")
@@ -275,6 +276,7 @@ class AccountMenuTests(unittest.TestCase):
         response = self.client.post("/account/password", json={"password": "difference"})
         self.assertEqual(response.status_code, 200)
         self.assertIs(response.json()["signed_in"], True)
+        self.assertEqual(self.client.cookies[NAME_COOKIE], self.user.name)
 
     def test_account_deletion_reports_signed_out_state(self) -> None:
         self.sign_in()
@@ -286,7 +288,10 @@ class AccountMenuTests(unittest.TestCase):
         self.assertIn('href="/account/signin">Sign in</a>', self.client.get("/wikkit").text)
 
 
-@unittest.skipUnless(os.environ.get("TEST_DATABASE_URL"), "set TEST_DATABASE_URL for PostgreSQL tests")
+@unittest.skipUnless(
+    os.environ.get("TEST_DATABASE_URL") and os.environ.get("TEST_REDIS_URL"),
+    "set TEST_DATABASE_URL and TEST_REDIS_URL for account integration tests",
+)
 class AccountFlowTests(unittest.TestCase):
     """End-to-end account flows against a dedicated test database (public schema)."""
 
@@ -309,7 +314,9 @@ class AccountFlowTests(unittest.TestCase):
             Depends(identity_context), Depends(memory_context, scope="function"),
         ])
         application.add_middleware(
-            PostgresSessionMiddleware, store=PostgresSessionStore(SECRET), secure=False
+            RedisSessionMiddleware,
+            store=RedisSessionStore(SECRET, redis_url=os.environ["TEST_REDIS_URL"]),
+            secure=False,
         )
         application.include_router(wikkit.router)
         application.include_router(account.router)

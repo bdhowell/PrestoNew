@@ -1,6 +1,5 @@
-"""PostgreSQL server-side sessions; cookies contain only a random identifier."""
+"""Redis server-side sessions; cookies contain only a random identifier."""
 
-import asyncio
 import hmac
 import logging
 import os
@@ -8,11 +7,11 @@ import pickle
 import re
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from http.cookies import SimpleCookie
 
-import psycopg
 from anyio import CancelScope
+from redis.asyncio import Redis
 from starlette.datastructures import MutableHeaders
 from starlette.requests import HTTPConnection
 from starlette.responses import JSONResponse
@@ -37,10 +36,40 @@ class Session:
     original: bytes = field(repr=False)
 
 
-class PostgresSessionStore:
+class RedisSessionStore:
+    _LOAD = """
+local expires = redis.call('PEXPIRETIME', KEYS[1])
+if expires < 0 then return {} end
+local data = redis.call('HMGET', KEYS[1], 'data', 'version')
+return {data[1], data[2], expires}
+"""
+    _SAVE = """
+local version = redis.call('HGET', KEYS[1], 'version')
+local now = redis.call('TIME')
+local now_ms = now[1] * 1000 + math.floor(now[2] / 1000)
+local expires = tonumber(ARGV[4])
+if ARGV[1] == '0' then
+    if version then return {} end
+    version = 1
+else
+    if not version then return {} end
+    if ARGV[3] == '0' then
+        if version ~= ARGV[1] then return {} end
+        version = tonumber(version) + 1
+    end
+    expires = math.max(expires, redis.call('PEXPIRETIME', KEYS[1]))
+end
+if expires <= now_ms then return {} end
+if ARGV[3] == '0' or ARGV[1] == '0' then
+    redis.call('HSET', KEYS[1], 'data', ARGV[2], 'version', version)
+end
+redis.call('PEXPIREAT', KEYS[1], expires)
+return {tonumber(version), expires}
+"""
+
     def __init__(
         self, secret_key: str, *, max_age: int = 600,
-        database_env: str = "DATABASE_URL",
+        redis_url: str = "redis://localhost:6379/0",
     ) -> None:
         if len(secret_key.encode()) < 32:
             raise ValueError("SECRET_KEY must contain at least 32 bytes")
@@ -48,45 +77,20 @@ class PostgresSessionStore:
             raise ValueError("SESSION_MAX_AGE must be positive")
         self._secret = secret_key.encode()
         self.max_age = max_age
-        self.database_env = database_env
-        self._initialized = False
-        self._initialize_lock = asyncio.Lock()
+        self.redis_url = redis_url
 
-    async def _connect(self) -> psycopg.AsyncConnection:
-        dsn = os.environ.get(self.database_env)
-        if not dsn:
-            raise RuntimeError(f"{self.database_env} is required for PostgreSQL sessions")
-        connection = await psycopg.AsyncConnection.connect(dsn)
-        try:
-            await self._ensure_table(connection)
-        except Exception:
-            await connection.close()
-            raise
-        return connection
+    def _connect(self) -> Redis:
+        return Redis.from_url(
+            self.redis_url, socket_connect_timeout=5, socket_timeout=5,
+        )
 
-    async def _ensure_table(self, connection: psycopg.AsyncConnection) -> None:
-        async with self._initialize_lock:
-            if self._initialized:
-                return
-            async with connection.transaction():
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext('presto:public.chatbot_session'))"
-                )
-                await connection.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS public.chatbot_session (
-                        session_id TEXT PRIMARY KEY,
-                        data BYTEA NOT NULL,
-                        version BIGINT NOT NULL,
-                        expires_at TIMESTAMPTZ NOT NULL
-                    )
-                    """
-                )
-                await connection.execute(
-                    "CREATE INDEX IF NOT EXISTS chatbot_session_expires_at "
-                    "ON public.chatbot_session (expires_at)"
-                )
-            self._initialized = True
+    def _key(self, identifier: str) -> str:
+        return f"presto:session:{identifier}"
+
+    async def delete(self, identifier: str | None) -> None:
+        if identifier is not None and _SESSION_ID.fullmatch(identifier):
+            async with self._connect() as connection:
+                await connection.delete(self._key(identifier))
 
     def _encode(self, identifier: str, payload: bytes) -> bytes:
         signature = hmac.digest(self._secret, identifier.encode() + payload, "sha256")
@@ -103,22 +107,21 @@ class PostgresSessionStore:
         return data, payload
 
     async def load(self, identifier: str | None) -> Session:
-        connection = await self._connect()
-        async with connection:
-            await connection.execute("DELETE FROM public.chatbot_session WHERE expires_at <= now()")
-            if identifier is not None and _SESSION_ID.fullmatch(identifier):
-                cursor = await connection.execute(
-                    "SELECT data, version, expires_at FROM public.chatbot_session "
-                    "WHERE session_id = %s AND expires_at > now()",
-                    (identifier,),
+        if identifier is not None and _SESSION_ID.fullmatch(identifier):
+            async with self._connect() as connection:
+                row = await connection.execute_command(
+                    "EVAL", self._LOAD, 1, self._key(identifier),
                 )
-                row = await cursor.fetchone()
-                if row is not None:
-                    data, original = self._decode(identifier, bytes(row[0]))
-                    return Session(identifier, data, row[1], row[2], original)
+            if not isinstance(row, list):
+                raise TypeError("Redis session load returned an invalid result")
+            if row:
+                expires_at = datetime.fromtimestamp(int(row[2]) / 1000, UTC)
+                if expires_at > datetime.now(UTC):
+                    data, original = self._decode(identifier, row[0])
+                    return Session(identifier, data, int(row[1]), expires_at, original)
         return Session(
             secrets.token_urlsafe(32), {}, 0,
-            datetime.now(timezone.utc) + timedelta(seconds=self.max_age),
+            datetime.now(UTC) + timedelta(seconds=self.max_age),
             pickle.dumps({}, protocol=pickle.HIGHEST_PROTOCOL),
         )
 
@@ -128,60 +131,47 @@ class PostgresSessionStore:
         if unchanged and not renew:
             return
         expires_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=self.max_age)
+            datetime.now(UTC) + timedelta(seconds=self.max_age)
             if renew else session.expires_at
         )
         encoded = self._encode(session.identifier, payload)
-        connection = await self._connect()
-        async with connection:
-            if session.version == 0:
-                cursor = await connection.execute(
-                    "INSERT INTO public.chatbot_session (session_id, data, version, expires_at) "
-                    "VALUES (%s, %s, 1, %s) RETURNING version, expires_at",
-                    (session.identifier, encoded, expires_at),
-                )
-            elif unchanged:
-                cursor = await connection.execute(
-                    "UPDATE public.chatbot_session SET expires_at = GREATEST(expires_at, %s) "
-                    "WHERE session_id = %s AND expires_at > now() RETURNING expires_at",
-                    (expires_at, session.identifier),
-                )
-            else:
-                cursor = await connection.execute(
-                    "UPDATE public.chatbot_session SET data = %s, version = version + 1, "
-                    "expires_at = GREATEST(expires_at, %s) "
-                    "WHERE session_id = %s AND version = %s AND expires_at > now() "
-                    "RETURNING version, expires_at",
-                    (encoded, expires_at, session.identifier, session.version),
-                )
-            row = await cursor.fetchone()
-            if row is None:
-                raise SessionConflictError("session changed or expired; retry with a fresh request")
-        if unchanged:
-            session.expires_at = row[0]
-            return
-        session.version, session.expires_at = row
+        async with self._connect() as connection:
+            row = await connection.execute_command(
+                "EVAL", self._SAVE, 1, self._key(session.identifier), str(session.version),
+                encoded, "1" if unchanged else "0", int(expires_at.timestamp() * 1000),
+            )
+        if not isinstance(row, list):
+            raise TypeError("Redis session save returned an invalid result")
+        if not row:
+            raise SessionConflictError("session changed or expired; retry with a fresh request")
+        # A read-only renewal can encounter a newer payload; do not adopt its version.
+        if not unchanged:
+            session.version = int(row[0])
+        session.expires_at = datetime.fromtimestamp(int(row[1]) / 1000, UTC)
         session.original = payload
 
 
-def configured_session_store() -> PostgresSessionStore | None:
+def configured_session_store() -> RedisSessionStore | None:
     backend = os.environ.get("SESSION_BACKEND", "auto")
-    if backend not in ("auto", "none", "postgres"):
-        raise ValueError("SESSION_BACKEND must be auto, postgres, or none")
+    if backend not in ("auto", "none", "redis"):
+        raise ValueError("SESSION_BACKEND must be auto, redis, or none")
     if backend == "none":
         logger.warning("Server-side sessions explicitly disabled")
         return None
-    database = os.environ.get("DATABASE_URL")
+    redis_url = os.environ.get("REDIS_URL")
     secret = os.environ.get("SECRET_KEY")
-    if backend == "auto" and not database and not secret:
-        logger.warning("Server-side sessions disabled: DATABASE_URL and SECRET_KEY are not configured")
+    if backend == "auto" and not redis_url and not secret:
+        logger.warning("Server-side sessions disabled: REDIS_URL and SECRET_KEY are not configured")
         return None
-    if not database or not secret:
-        raise RuntimeError("PostgreSQL sessions require both DATABASE_URL and SECRET_KEY")
-    return PostgresSessionStore(secret, max_age=int(os.environ.get("SESSION_MAX_AGE", "600")))
+    if not secret:
+        raise RuntimeError("Redis sessions require SECRET_KEY")
+    return RedisSessionStore(
+        secret, max_age=int(os.environ.get("SESSION_MAX_AGE", "600")),
+        redis_url=redis_url or "redis://localhost:6379/0",
+    )
 
 
-class PostgresSessionMiddleware:
+class RedisSessionMiddleware:
     """Save HTTP sessions before headers, websocket sessions after teardown.
 
     HTTP state must be finalized before response headers (not in a streaming
@@ -189,7 +179,7 @@ class PostgresSessionMiddleware:
     """
 
     def __init__(
-        self, app: ASGIApp, *, store: PostgresSessionStore | None,
+        self, app: ASGIApp, *, store: RedisSessionStore | None,
         secure: bool = True,
     ) -> None:
         self.app = app
@@ -205,7 +195,7 @@ class PostgresSessionMiddleware:
         morsel["httponly"] = True
         morsel["samesite"] = "strict"
         morsel["max-age"] = max(
-            0, int((session.expires_at - datetime.now(timezone.utc)).total_seconds())
+            0, int((session.expires_at - datetime.now(UTC)).total_seconds())
         )
         if self.secure:
             morsel["secure"] = True
@@ -222,6 +212,12 @@ class PostgresSessionMiddleware:
         if "session" in scope:
             raise RuntimeError("another session middleware has already installed scope['session']")
         connection = HTTPConnection(scope)
+        path = scope.get("path", "").rstrip("/")
+        if scope["type"] == "http" and path == "/system/loggedout":
+            await store.delete(connection.cookies.get(self.cookie_name))
+            scope["session"] = {}
+            await self.app(scope, receive, send)
+            return
         # WebSocket handshakes are not protected by cookie SameSite semantics.
         if scope["type"] == "websocket":
             origins = connection.headers.getlist("origin")
@@ -240,12 +236,16 @@ class PostgresSessionMiddleware:
             })
             return
         scope["session"] = session.data
+        scope["server_session"] = session
+        scope["session_monitor"] = True
 
         async def send_with_session(message: Message) -> None:
             if message["type"] == "http.response.start":
-                await store.save(session, renew=True)
+                if path != "/system/timecheck":
+                    await store.save(session, renew=True)
                 headers = MutableHeaders(scope=message)
-                headers.append("set-cookie", self._cookie(session))
+                if path != "/system/timecheck":
+                    headers.append("set-cookie", self._cookie(session))
                 headers["cache-control"] = "no-store"
                 headers.add_vary_header("Cookie")
             await send(message)
