@@ -103,7 +103,7 @@ AUTOCOMPLETE_MERGE_VECTOR_WEIGHT=1
 
 ## Server-side sessions
 
-Sessions use Redis 7 or newer, not PostgreSQL. Start Redis before the application and set
+Sessions use Redis 7 or newer. Start Redis before the application and set
 `SECRET_KEY` to a random secret of at least 32 bytes. `REDIS_URL` defaults to
 `redis://localhost:6379/0`; use a private, access-controlled Redis service in
 production. Redis keys use the `presto:session:` prefix and expire automatically.
