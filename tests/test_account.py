@@ -79,6 +79,7 @@ class ResumptionPageTests(unittest.IsolatedAsyncioTestCase):
         self.poster = posters.Poster(11, "Research", None, None, None, None, None, False, None)
         self.store = AsyncMock()
         self.store.get.return_value = self.poster
+        self.store.unpurchased.return_value = None
         self.store.set_resumption.return_value = True
         mocked = patch.object(posters, "store", return_value=self.store)
         mocked.start()
@@ -89,13 +90,23 @@ class ResumptionPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await account.resumption_page(self.request), "/conferences/find")
         self.store.set_resumption.assert_not_awaited()
 
-    async def test_missing_identity_or_selection_does_not_access_storage(self) -> None:
+    async def test_missing_identity_does_not_access_storage(self) -> None:
         self.request.state.user_id = None
         self.assertEqual(await account.resumption_page(self.request), "/conferences/find")
-        self.request.state.user_id = 7
+        self.store.get.assert_not_awaited()
+        self.store.unpurchased.assert_not_awaited()
+
+    async def test_missing_or_invalid_selection_finds_existing_draft(self) -> None:
         for pid in (None, "11", True, 0, -1):
             self.request.scope["session"]["poster_id"] = pid
-            self.assertEqual(await account.resumption_page(self.request), "/conferences/find")
+            self.store.unpurchased.return_value = 11
+            self.assertEqual(await account.resumption_page(self.request), "/layout/edit")
+            self.assertEqual(self.request.scope["session"]["poster_id"], 11)
+        self.store.unpurchased.assert_awaited_with(7)
+
+    async def test_no_selection_and_no_draft_starts_conference_search(self) -> None:
+        self.request.scope["session"].clear()
+        self.assertEqual(await account.resumption_page(self.request), "/conferences/find")
         self.store.get.assert_not_awaited()
         self.store.set_resumption.assert_not_awaited()
 
@@ -127,7 +138,23 @@ class ResumptionPageTests(unittest.IsolatedAsyncioTestCase):
         for page in (None, "", "//evil.com", "https://evil.com", "/\\evil.com", "/\t/evil"):
             with self.subTest(page=page):
                 self.store.get.return_value = replace(self.poster, resumption=page)
-                self.assertEqual(await account.resumption_page(self.request), "/posters/list")
+                self.assertEqual(await account.resumption_page(self.request), "/layout/edit")
+
+    async def test_purchased_poster_still_defaults_to_list(self) -> None:
+        self.store.get.return_value = replace(self.poster, purchased=True)
+        self.assertEqual(await account.resumption_page(self.request), "/posters/list")
+
+    async def test_saved_list_url_for_draft_opens_editor(self) -> None:
+        for page in ("/posters/list", "/posters/list?xyzzy=arpa"):
+            self.store.get.return_value = replace(self.poster, resumption=page)
+            self.assertEqual(await account.resumption_page(self.request), "/layout/edit")
+
+    async def test_draft_lookup_errors_are_logged_and_reported(self) -> None:
+        self.request.scope["session"].clear()
+        self.store.unpurchased.side_effect = psycopg.OperationalError("unavailable")
+        with self.assertLogs("routers.account", "ERROR"), self.assertRaises(account.HTTPException) as error:
+            await account.resumption_page(self.request)
+        self.assertEqual(error.exception.status_code, 503)
 
     async def test_storage_errors_are_logged_and_reported(self) -> None:
         self.store.get.return_value = replace(self.poster, resumption="/edit?xyzzy=arpa")
@@ -215,6 +242,11 @@ class AccountMenuTests(unittest.TestCase):
         self.addCleanup(store.stop)
         self.store.get.return_value = self.user
         self.store.get_by_email.return_value = self.user
+        self.poster_store = AsyncMock()
+        self.poster_store.unpurchased.return_value = None
+        poster_store = patch.object(posters, "store", return_value=self.poster_store)
+        poster_store.start()
+        self.addCleanup(poster_store.stop)
         session_store = RedisSessionStore(SECRET)
         session = Session("menu-test", {}, 1, datetime.now(timezone.utc), b"")
         for method, result in (("load", session), ("save", None)):
@@ -258,6 +290,17 @@ class AccountMenuTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 401)
         self.assertNotIn("signed_in", response.json())
+
+    def test_sign_in_with_existing_draft_selects_it_and_opens_editor(self) -> None:
+        self.poster_store.unpurchased.return_value = 11
+        self.poster_store.get.return_value = posters.Poster(
+            11, "Research", None, None, None, None, None, False, None,
+        )
+        response = self.sign_in()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["redirect"], "/layout/edit")
+        self.poster_store.unpurchased.assert_awaited_once_with(self.user.uid)
+        self.poster_store.get.assert_awaited_once_with(self.user.uid, 11)
 
     def test_password_recovery_reports_signed_in_state(self) -> None:
         recovery = datetime.now(timezone.utc)

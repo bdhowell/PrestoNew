@@ -100,12 +100,17 @@ async def resumption_page(request: Request) -> str:
     uid = getattr(request.state, "user_id", None)
     session = identity.session(request)
     pid = session.get("poster_id") if session is not None else None
-    if uid is None or type(pid) is not int or pid <= 0:
+    if uid is None or session is None:
         return "/conferences/find"
     try:
+        if type(pid) is not int or pid <= 0:
+            pid = await posters.store().unpurchased(uid)
+            if pid is None:
+                return "/conferences/find"
         poster = await posters.store().get(uid, pid)
         if poster is None:
             return "/conferences/find"
+        session["poster_id"] = poster.pid
         page = poster.resumption
         clear = page is not None and ("xyzzy", "arpa") in parse_qsl(urlsplit(page).query)
         if clear and not await posters.store().set_resumption(uid, pid, None):
@@ -117,9 +122,11 @@ async def resumption_page(request: Request) -> str:
         base = str(request.base_url)
         if page.startswith(base):
             page = "/" + page[len(base):]
-        if navigation_url(page) == page:
+        if navigation_url(page) == page and not (
+            not poster.purchased and urlsplit(page).path == POSTERS_PAGE
+        ):
             return page
-    return POSTERS_PAGE
+    return POSTERS_PAGE if poster.purchased else "/layout/edit"
 
 
 def _link(request: Request, path: str, **query: object) -> str:

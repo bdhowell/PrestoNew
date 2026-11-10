@@ -112,6 +112,10 @@ AUTOCOMPLETE_MERGE_VECTOR_WEIGHT=1
 
 ## Server-side sessions
 
+After sign-in, an existing unpurchased poster is selected even in a fresh session.
+Without a saved workflow resume URL (or when it points to the poster list), the
+user goes directly to `/layout/edit`. Purchased posters retain the list fallback.
+
 Sessions use Redis 7 or newer. Start Redis before the application and set
 `SECRET_KEY` to a random secret of at least 32 bytes. `REDIS_URL` defaults to
 `redis://localhost:6379/0`; use a private, access-controlled Redis service in
