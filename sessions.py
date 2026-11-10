@@ -213,7 +213,7 @@ class RedisSessionMiddleware:
             raise RuntimeError("another session middleware has already installed scope['session']")
         connection = HTTPConnection(scope)
         path = scope.get("path", "").rstrip("/")
-        if scope["type"] == "http" and path == "/system/loggedout":
+        if scope["type"] == "http" and path == "/account/signout":
             await store.delete(connection.cookies.get(self.cookie_name))
             scope["session"] = {}
             await self.app(scope, receive, send)

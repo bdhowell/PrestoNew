@@ -17,6 +17,7 @@ import mailer
 import posters
 import users
 from routers.wikkit import navigation_url, read_json, render_page
+from sessions import LOCAL_SESSION_COOKIE_NAME, SESSION_COOKIE_NAME
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/account", tags=["account"])
@@ -363,22 +364,26 @@ Please try again.
 
 
 @router.get("/signout", response_class=HTMLResponse)
+@router.get("/signout/", response_class=HTMLResponse, include_in_schema=False)
 async def signout(request: Request) -> HTMLResponse:
-    name = identity.display_name(request)
     identity.sign_out(request)
-    says = f"""
-<p>
-Okay, {name}, I&rsquo;ve signed you out of {html.escape(identity.application_name())}.
-</p>
-<p>
-I hope to see you again soon.
-</p>
-
+    response = render_page(
+        request, "account/signout.html", "account-signout",
+        f"""
+<p>{identity.display_name(request)}, you&rsquo;ve been logged out because your session expired.</p>
 <p class="centered">
     <button data-sends="login">Sign in again</button>
 </p>
-"""
-    return render_page(request, "account/signout.html", "account-signout", says)
+""",
+        clear_chat=True, wikkit_offline=True,
+    )
+    for cookie in (SESSION_COOKIE_NAME, LOCAL_SESSION_COOKIE_NAME):
+        response.delete_cookie(
+            cookie, path="/", httponly=True, samesite="strict",
+            secure=cookie == SESSION_COOKIE_NAME,
+        )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.get("/update", response_class=HTMLResponse)

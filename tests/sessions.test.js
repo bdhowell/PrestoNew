@@ -57,7 +57,7 @@ async function harness(seconds, name = "Ada") {
             assert.equal(options.cache, "no-store");
             if (fail) throw new Error("offline");
             if (now >= expiry) return {
-                redirected: true, url: "https://presto.test/system/loggedout/",
+                redirected: true, url: "https://presto.test/account/signout",
             };
             return {
                 ok: true,
@@ -105,7 +105,7 @@ test("polls every minute, warns at exactly five and two minutes, then redirects"
     assert.match(h.messages[1].message, /Ada, your session will expire in 2 minutes/);
     assert.equal(h.messages[1].at, 1480000);
     await h.advance(120);
-    assert.deepEqual(h.redirects, ["/system/loggedout"]);
+    assert.deepEqual(h.redirects, ["/account/signout"]);
     assert.equal(h.requests, 11);
 });
 
@@ -175,5 +175,5 @@ test("poll failures are visible and do not manufacture a renewed deadline", asyn
     assert.equal(h.redirects.length, 0);
     await h.advance(5);
     assert.equal(h.errors.length, 2);
-    assert.deepEqual(h.redirects, ["/system/loggedout"]);
+    assert.deepEqual(h.redirects, ["/account/signout"]);
 });

@@ -14,7 +14,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from identity import identity_context
 from memory import current_memory, memory_context
-from routers import system, wikkit
+from routers import account, system, wikkit
 from sessions import (
     LOCAL_SESSION_COOKIE_NAME, SESSION_COOKIE_NAME, RedisSessionMiddleware,
     RedisSessionStore, Session, SessionConflictError, configured_session_store,
@@ -82,6 +82,7 @@ class SessionMiddlewareTests(unittest.TestCase):
         app = FastAPI(dependencies=[Depends(identity_context)])
         app.add_middleware(RedisSessionMiddleware, store=self.store)
         app.include_router(system.router)
+        app.include_router(account.router)
         app.include_router(wikkit.router)
 
         @app.get("/state")
@@ -130,12 +131,12 @@ class SessionMiddlewareTests(unittest.TestCase):
             self.session.version, self.session.expires_at = version, expiry
             response = self.client.get("/system/timecheck", follow_redirects=False)
             self.assertEqual(response.status_code, 303)
-            self.assertEqual(response.headers["location"], "/system/loggedout/")
+            self.assertEqual(response.headers["location"], "/account/signout")
             self.assertNotIn("set-cookie", response.headers)
         self.store.save.assert_not_awaited()
 
     def test_loggedout_page_personalizes_and_clears_cookies_without_loading_or_renewing(self) -> None:
-        for path in ("/system/loggedout", "/system/loggedout/"):
+        for path in ("/account/signout", "/account/signout/"):
             self.client.cookies.set("presto_user", "Ada%20%3Cscript%3E")
             self.client.cookies.set(SESSION_COOKIE_NAME, self.session.identifier)
             response = self.client.get(path)
@@ -143,7 +144,7 @@ class SessionMiddlewareTests(unittest.TestCase):
             self.assertIn("Ada \\u0026lt;script\\u0026gt;", response.text)
             self.assertIn("logged out because your session expired", response.text)
             self.assertIn('data-wikkit-offline="true"', response.text)
-            self.assertIn('src="/static/javascript/pages/system-loggedout.js"', response.text)
+            self.assertIn('src="/static/javascript/pages/account-signout.js"', response.text)
             self.assertIn('data-sends=\\"login\\"', response.text)
             self.assertNotIn('src="/static/javascript/sessions.js"', response.text)
             self.assertIn("Max-Age=0", response.headers["set-cookie"])
@@ -158,6 +159,10 @@ class SessionMiddlewareTests(unittest.TestCase):
         app.include_router(system.router)
         self.assertEqual(TestClient(app).get("/system/timecheck").status_code, 503)
 
+    def test_old_system_logout_endpoints_are_removed(self) -> None:
+        for path in ("/system/logout", "/system/loggedout", "/system/loggedout/"):
+            self.assertEqual(self.client.get(path).status_code, 404)
+
     def test_regular_page_installs_session_monitor(self) -> None:
         response = self.client.get("/wikkit/pricing")
         self.assertIn('src="/static/javascript/sessions.js" defer', response.text)
@@ -171,7 +176,7 @@ class SessionMiddlewareTests(unittest.TestCase):
             self.assertEqual(self.client.get("/state").status_code, 409)
 
     def test_other_response_cookies_are_preserved(self) -> None:
-        response = self.client.get("/system/loggedout")
+        response = self.client.get("/account/signout")
         self.assertEqual(len(response.headers.get_list("set-cookie")), 2)
 
 
@@ -200,6 +205,7 @@ class SessionBackendTests(unittest.TestCase):
         app.add_middleware(RedisSessionMiddleware, store=store or self.store)
         app.include_router(wikkit.router)
         app.include_router(system.router)
+        app.include_router(account.router)
 
         @app.get("/state")
         def state(request: Request):
@@ -306,7 +312,7 @@ class SessionBackendTests(unittest.TestCase):
         client = self.client()
         client.get("/state")
         identifier = client.cookies[SESSION_COOKIE_NAME]
-        response = client.get("/system/loggedout")
+        response = client.get("/account/signout")
         self.assertEqual(response.status_code, 200)
         self.assertFalse(self.redis.exists(self.store._key(identifier)))
         self.assertEqual(client.get("/system/timecheck", follow_redirects=False).status_code, 303)
@@ -342,7 +348,7 @@ class SessionBackendTests(unittest.TestCase):
         identifier = client.cookies[SESSION_COOKIE_NAME]
         with self.assertRaises(WebSocketDisconnect) as closed:
             with client.websocket_connect(
-                "wss://testserver/system/loggedout", headers={"origin": "https://evil.example"},
+                "wss://testserver/account/signout", headers={"origin": "https://evil.example"},
             ):
                 pass
         self.assertEqual(closed.exception.code, 1008)

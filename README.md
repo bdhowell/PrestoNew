@@ -128,7 +128,7 @@ PostgreSQL or accepting an unverified session.
 requests renew it. `/system/timecheck` validates the HttpOnly session cookie and
 returns `remaining_seconds`, `expires_at` (Unix seconds), and the display `name`
 without renewing or creating a session. Missing/expired sessions redirect to
-`/system/loggedout/`. Both `/system/loggedout` forms show Wikkit's personalized
+`/account/signout`. Both `/account/signout` forms show Wikkit's personalized
 expiry notice, clear session cookies, and do not start a new session.
 Wikkit waits locally for the `login` button, which opens `/account/signin` just
 like the page's sign-in link, without reconnecting the expired session.

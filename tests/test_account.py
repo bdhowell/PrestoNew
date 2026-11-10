@@ -215,10 +215,14 @@ class AccountWithoutDatabaseTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertIn(f'data-page="{page}"', response.text)
                 self.assertIn(
-                    f'data-clear-chat="{"true" if page == "account-signin" else "false"}"',
+                    f'data-clear-chat="{"true" if page in ("account-signin", "account-signout") else "false"}"',
                     response.text,
                 )
-                self.assertIn('src="/static/javascript/account/router.js"', response.text)
+                if page == "account-signout":
+                    self.assertNotIn('src="/static/javascript/account/router.js"', response.text)
+                    self.assertIn('src="/static/javascript/pages/account-signout.js"', response.text)
+                else:
+                    self.assertIn('src="/static/javascript/account/router.js"', response.text)
                 self.assertIn("window.wikkit.say(", response.text)
         self.assertIn('value="a@b.co"', self.client.get("/account/recover?email=a%40b.co").text)
 
@@ -253,6 +257,9 @@ class AccountMenuTests(unittest.TestCase):
             mocked = patch.object(session_store, method, return_value=result)
             mocked.start()
             self.addCleanup(mocked.stop)
+        deleted = patch.object(session_store, "delete", side_effect=lambda _: session.data.clear())
+        deleted.start()
+        self.addCleanup(deleted.stop)
         application = FastAPI(dependencies=[Depends(identity_context)])
         application.add_middleware(
             RedisSessionMiddleware, store=session_store, secure=False,

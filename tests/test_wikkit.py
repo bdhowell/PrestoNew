@@ -311,13 +311,13 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.route("**/*", serve)
         await self.page.route_web_socket("**/wikkit/ws", connect)
 
-    async def test_loggedout_waits_for_login_button_without_a_socket(self) -> None:
+    async def test_signout_waits_for_login_button_without_a_socket(self) -> None:
         client = TestClient(app)
         self.addCleanup(client.close)
         client.cookies.set("presto_user", "Ada")
-        response = client.get("/system/loggedout/")
+        response = client.get("/account/signout")
         await self.page.route(
-            "**/system/loggedout/",
+            "**/account/signout",
             lambda route: route.fulfill(body=response.content, content_type="text/html"),
         )
         await self.page.route(
@@ -334,7 +334,7 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
             }));
         }""")
         await self.page.clock.install()
-        await self.page.goto("http://testserver/system/loggedout/")
+        await self.page.goto("http://testserver/account/signout")
         await self.page.clock.run_for(15000)
         button = self.page.locator('#chatlog button[data-sends="login"]')
         await expect(button).to_be_enabled()

@@ -13,7 +13,7 @@
         stopped = true;
         clearInterval(poll);
         clearTimers();
-        window.location.assign("/system/loggedout");
+        window.location.assign("/account/signout");
     }
 
     function clearTimers() {
@@ -40,7 +40,7 @@
                 signal: AbortSignal.timeout(10000),
             });
             if (stopped) return;
-            if (response.redirected && new URL(response.url).pathname.replace(/\/$/, "") === "/system/loggedout") {
+            if (response.redirected && new URL(response.url).pathname.replace(/\/$/, "") === "/account/signout") {
                 logout();
                 return;
             }

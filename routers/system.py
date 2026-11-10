@@ -3,9 +3,9 @@
 import ipaddress
 import logging
 import os
-from datetime import datetime, timezone
-from pathlib import Path
 import shutil
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
 
@@ -23,7 +23,7 @@ import identity
 import posters
 import source_processing
 from routers.wikkit import read_json, render_page
-from sessions import Session, SESSION_COOKIE_NAME, LOCAL_SESSION_COOKIE_NAME
+from sessions import Session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/system", tags=["system"])
@@ -34,38 +34,14 @@ async def timecheck(request: Request) -> Response:
     session = request.scope.get("server_session")
     if not isinstance(session, Session):
         raise HTTPException(503, "Server-side sessions are not enabled.")
-    remaining = (session.expires_at - datetime.now(timezone.utc)).total_seconds()
+    remaining = (session.expires_at - datetime.now(UTC)).total_seconds()
     if session.version == 0 or remaining <= 0:
-        return RedirectResponse("/system/loggedout/", status_code=303)
+        return RedirectResponse("/account/signout", status_code=303)
     return JSONResponse({
         "remaining_seconds": remaining,
         "expires_at": session.expires_at.timestamp(),
         "name": request.state.user["user-name"],
     })
-
-
-@router.get("/loggedout", include_in_schema=False)
-@router.get("/loggedout/")
-async def loggedout(request: Request) -> Response:
-    identity.sign_out(request)
-    response = render_page(
-        request, "system/loggedout.html", "system-loggedout",
-        f"""
-<p>{identity.display_name(request)}, you&rsquo;ve been logged out because your session expired.</p>
-<p class="centered">
-    <button data-sends="login">Sign in again</button>
-</p>
-""",
-        clear_chat=True, wikkit_offline=True,
-    )
-
-    for cookie in (SESSION_COOKIE_NAME, LOCAL_SESSION_COOKIE_NAME):
-        response.delete_cookie(
-            cookie, path="/", httponly=True, samesite="strict",
-            secure=cookie == SESSION_COOKIE_NAME,
-        )
-    response.headers["Cache-Control"] = "no-store"
-    return response
 
 
 def require_local(request: Request) -> None:
