@@ -177,10 +177,12 @@
 }
 
 .colored-section-headers .layout .section > .header {
-    padding: 0.1em 0.35em;
+    padding: 0.4em 0.5em 0.5em 0.5em;
     margin-bottom: 1rem;
     color: var(--heading-text-color);
     background: var(--heading-background-color);
+    line-height: 1em;
+    font-size: 1.75em;
 }
 
 .colored-poster-header.colored-section-headers .layout .section > .header {

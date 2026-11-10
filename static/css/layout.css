@@ -345,16 +345,21 @@ input[name="height"] {
 
 #poster-content[data-fixed-geometry="true"] #poster-header,
 #poster-content[data-fixed-geometry="true"] .layout .pane,
-#poster-content[data-fixed-geometry="true"] .layout .section,
 #poster-content[data-fixed-geometry="true"] .layout .section-parent {
     overflow: hidden;
     min-height: 0;
     min-width: 0;
 }
 
+#poster-content[data-fixed-geometry="true"] .layout .section {
+    min-height: 0;
+    min-width: 0;
+    overflow-y: scroll;
+}
+
 @media screen {
     #poster-content[data-fixed-geometry="true"] .layout .section {
-        overflow: auto;
+        overflow-y: scroll;
     }
 }
 

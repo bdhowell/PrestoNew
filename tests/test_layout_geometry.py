@@ -222,7 +222,7 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
                 await self.page.wait_for_timeout(150)
                 self.assertEqual(await self.all_areas(), before)
                 self.assertTrue(await self.page.locator("#results").evaluate(
-                    "element => element.scrollHeight > element.clientHeight && getComputedStyle(element).overflow === 'auto'",
+                    "element => element.scrollHeight > element.clientHeight && getComputedStyle(element).overflowY === 'scroll'",
                 ))
                 self.assertEqual(await self.page.evaluate("geometryRequests.length"), 1)
                 self.store.get.return_value = replace(DRAFT, template=template)
@@ -264,7 +264,7 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
                                     scrollTop: section.scrollTop,
                                 };
                             }""")
-                            self.assertEqual(result["overflow"], "auto")
+                            self.assertEqual(result["overflow"], "scroll")
                             self.assertGreater(result["scrollHeight"], result["clientHeight"])
                             self.assertGreater(result["scrollTop"], 0)
                             self.assertAlmostEqual(

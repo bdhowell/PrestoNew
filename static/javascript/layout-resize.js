@@ -115,7 +115,6 @@
             introductionHandle.second.style.flex = `0 0 ${total * (1 - sizing.introduction)}px`;
             for (const section of [introductionHandle.first, introductionHandle.second]) {
                 section.style.minHeight = "0";
-                section.style.overflow = "hidden";
             }
         }
         for (const row of rows) {
