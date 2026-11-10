@@ -91,7 +91,7 @@ input[name="height"] {
 #poster-content [contenteditable="true"]:focus,
 #poster-content [contenteditable="plaintext-only"]:focus {
     outline: var(--poster-outline-width, 3px) solid #0066ff !important;
-    outline-offset: calc(-1 * var(--poster-outline-width, 3px));
+    outline-offset: calc(1 * var(--poster-outline-width, 3px));
 }
 
 .layout-profile-context-target,
