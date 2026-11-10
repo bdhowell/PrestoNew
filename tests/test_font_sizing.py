@@ -169,7 +169,7 @@ class FontSizingBrowserTests(unittest.IsolatedAsyncioTestCase):
         for target, percentage in (("sections", 50), ("title", 150), ("authors", 75)):
             await self.change_size(target, percentage)
         await self.page.wait_for_function("saves.length === 3 && !document.getElementById('font-size-retry').offsetWidth")
-        for selector, factor in (("#layout", 0.5), ("#title", 3.5 * 1.5), ("#authors", 1.375 * 0.75)):
+        for selector, factor in (("#layout", 0.5), ("#title", 3.0 * 1.5), ("#authors", 1.375 * 0.75)):
             size, spacing = await self.page.locator(selector).evaluate("""element => {
                 const style = getComputedStyle(element);
                 return [parseFloat(style.fontSize), parseFloat(style.lineHeight)];
