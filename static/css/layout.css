@@ -59,7 +59,7 @@ input[name="height"] {
 #poster-canvas {
     --gutter: 6rem;
     font-size: calc(2rem * var(--poster-font-scale, 1));
-    line-height: 1.4;
+    line-height: 1.6;
     position: absolute;
     top: 0;
     left: 0;
@@ -77,6 +77,62 @@ input[name="height"] {
     transform-origin: top left;
     background-color: var(--background-color);
  }
+
+#poster-content .layout-profile-attention {
+    outline: var(--poster-outline-width, 3px) solid #ffbf00 !important;
+    outline-offset: calc(-1 * var(--poster-outline-width, 3px));
+}
+
+#poster-content [contenteditable="true"],
+#poster-content [contenteditable="plaintext-only"] {
+    outline: none;
+}
+
+#poster-content [contenteditable="true"]:focus,
+#poster-content [contenteditable="plaintext-only"]:focus {
+    outline: var(--poster-outline-width, 3px) solid #0066ff !important;
+    outline-offset: calc(-1 * var(--poster-outline-width, 3px));
+}
+
+.layout-profile-context-target {
+    cursor: url("/static/graphics/wand-cursor.png") 7 9, context-menu;
+}
+
+#layout-context-menu {
+    position: fixed;
+    z-index: 20;
+    display: grid;
+    min-width: 13rem;
+    padding: 0.3rem;
+    border: 1px solid #8e85c2;
+    border-radius: 0.5rem;
+    background: #2f2766;
+    box-shadow: 0 0.25rem 1rem #0008;
+    color: #fff;
+    font: 1rem/1.4 system-ui, sans-serif;
+}
+
+#layout-context-menu button {
+    padding: 0.55rem 0.7rem;
+    border: 0;
+    border-radius: 0.25rem;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+#layout-context-menu button:not(:disabled):hover,
+#layout-context-menu button:focus-visible {
+    outline: 2px solid #c4bdeb;
+    background: #443a80;
+}
+
+#layout-context-menu button:disabled {
+    color: #c4bdeb;
+    cursor: not-allowed;
+}
 
 #controls {
     position: relative;
@@ -466,7 +522,7 @@ input[name="height"] {
 .title {
     grid-column: 2;
     font-family: var(--heading-font-face);
-    font-size: calc(3.5em * var(--title-font-scale, 1));
+    font-size: calc(3.0em * var(--title-font-scale, 1));
     flex: 1;
     min-width: 0;
     text-align: center;

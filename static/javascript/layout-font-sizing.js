@@ -49,6 +49,7 @@
                 }
                 if (dirty.get(name) === value) dirty.delete(name);
             }
+            document.dispatchEvent(new Event("poster-layout-updated"));
             status.textContent = "Font sizing saved.";
         } catch (error) {
             failed = true;

@@ -111,13 +111,13 @@ class ProfileMeasurementsTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(section["graphics"][0]["oversized"])
         self.assertEqual(profile["overflowing_sections"], [])
 
-    async def test_fit_classifies_scroll_density_at_thresholds(self) -> None:
+    async def test_fit_classifies_scroll_height_ratio_at_thresholds(self) -> None:
         await self.page.set_content("""
             <style>
                 .section { box-sizing: border-box; width: 100px; height: 100px; overflow: hidden; }
-                #below { border-left: 51px solid; }
-                #equal { border-left: 50px solid; }
-                #above { border-left: 49px solid; }
+                #below { border-top: 51px solid; }
+                #equal { border-top: 50px solid; }
+                #above { border-top: 49px solid; }
             </style>
             <div class="section" id="below"></div>
             <div class="section" id="equal"></div>
@@ -137,6 +137,31 @@ class ProfileMeasurementsTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(profile["underflowing_sections"], ["below"])
         self.assertEqual(profile["overflowing_sections"], ["above"])
+        for name, underflow, overflow in (
+            ("below", True, False), ("equal", False, False), ("above", False, True),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(profile["sections"][name]["underflow"], underflow)
+                self.assertEqual(profile["sections"][name]["overflow"], overflow)
+
+    async def test_horizontal_overflow_does_not_change_section_fit(self) -> None:
+        await self.page.set_content("""
+            <style>
+                .section { box-sizing: border-box; width: 100px; height: 100px;
+                           border-top: 50px solid; overflow: hidden; }
+                .wide { width: 200px; height: 50px; }
+            </style>
+            <div class="section" id="results"><div class="wide"></div></div>
+        """)
+        with patch.dict("os.environ", {}, clear=True):
+            profile = await magic._profile_page(self.page)
+        section = profile["sections"]["results"]
+        self.assertEqual(section["density"], 1)
+        self.assertEqual(section["fit"], "=")
+        self.assertFalse(section["overflow"])
+        self.assertFalse(section["underflow"])
+        self.assertEqual(profile["underflowing_sections"], [])
+        self.assertEqual(profile["overflowing_sections"], [])
 
     async def test_empty_section_and_nested_clipping_use_section_scroll_box(self) -> None:
         await self.page.set_content("""

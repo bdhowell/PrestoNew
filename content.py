@@ -17,6 +17,7 @@ from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.auth.exceptions import GoogleAuthError
 import psycopg
 from psycopg import sql
+from psycopg.types.json import Jsonb
 from starlette.concurrency import run_in_threadpool
 
 from posters import PosterStore
@@ -70,6 +71,14 @@ FORMATS = {
 
 def source_hash(value: str | bytes) -> str:
     return hashlib.sha256(value.encode("utf-8") if isinstance(value, str) else value).hexdigest()
+
+
+def graphic_evaluation_hash(
+    source_fingerprint: str, methods: str, results: str, graphic_hash: str | None,
+) -> str:
+    return source_hash(json.dumps(
+        [source_fingerprint, methods, results, graphic_hash], ensure_ascii=True,
+    ))
 
 
 def validate_file(filename: str, data: bytes) -> tuple[str, str]:
@@ -135,6 +144,21 @@ class Source:
     @property
     def thumbnail(self) -> bool:
         return self.width is not None and self.height is not None
+
+
+@dataclass(frozen=True)
+class GraphicEvaluationSource:
+    sid: int
+    filename: str
+    mimetype: str
+    parent: int | None
+    evaluation: dict[str, object] | None
+    digest: str | None
+    evaluation_hash: str | None
+
+    @property
+    def category(self) -> str:
+        return "uploaded" if self.parent is None else "extracted"
 
 
 class SourceFiles:
@@ -472,6 +496,10 @@ class SourceStore(PosterStore):
                     "updated = excluded.updated, embedding = NULL",
                     (pid, which, text),
                 )
+            await connection.execute(
+                "UPDATE source SET evaluation = NULL, evaluation_hash = NULL WHERE pid = %s",
+                (pid,),
+            )
             await connection.execute("UPDATE poster SET updated = now(), embedding = NULL WHERE pid = %s", (pid,))
 
     async def graphic(self, uid: int, pid: int, sid: int) -> bytes | None:
@@ -484,6 +512,72 @@ class SourceStore(PosterStore):
             )
             row = await cursor.fetchone()
         return await run_in_threadpool(SourceFiles().read, row[0]) if row and row[0] else None
+
+    async def graphic_source(self, uid: int, pid: int, sid: int) -> tuple[bytes, str] | None:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT s.storage_uri, s.mimetype FROM source s JOIN poster p USING (pid) "
+                "WHERE p.uid = %s AND p.pid = %s AND s.sid = %s "
+                "AND s.width IS NOT NULL AND s.height IS NOT NULL "
+                "AND s.mimetype IN ('image/png', 'image/jpeg')", (uid, pid, sid),
+            )
+            row = await cursor.fetchone()
+        if row is None or not row[0]:
+            return None
+        return await run_in_threadpool(SourceFiles().read, row[0]), row[1]
+
+    async def evaluation_sources(self, uid: int, pid: int) -> list[GraphicEvaluationSource]:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT s.sid, coalesce(s.filename, parent.filename, 'Untitled source'), "
+                "s.mimetype, s.parent, s.evaluation, s.hash, s.evaluation_hash "
+                "FROM source s JOIN poster p USING (pid) "
+                "LEFT JOIN source parent ON parent.sid = s.parent "
+                "WHERE p.uid = %s AND p.pid = %s AND s.width IS NOT NULL "
+                "AND s.height IS NOT NULL AND s.storage_uri IS NOT NULL "
+                "AND s.mimetype IN ('image/png', 'image/jpeg') "
+                "ORDER BY (s.parent IS NOT NULL), s.sid", (uid, pid),
+            )
+            return [GraphicEvaluationSource(*row) for row in await cursor.fetchall()]
+
+    async def save_graphic_evaluation(
+        self, uid: int, pid: int, sid: int, result: dict[str, object],
+        expected_hash: str,
+    ) -> bool:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT s.sid, s.hash FROM source s JOIN poster p USING (pid) "
+                "WHERE p.uid = %s AND p.pid = %s AND s.sid = %s "
+                "AND s.width IS NOT NULL AND s.height IS NOT NULL "
+                "AND s.mimetype IN ('image/png', 'image/jpeg') "
+                "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
+                "FOR UPDATE OF p, s", (uid, pid, sid),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return False
+            snapshot = await self.source_text(uid, pid, connection)
+            cursor = await connection.execute(
+                "SELECT which::text, content FROM section WHERE pid = %s "
+                "AND which IN ('materials and methods', 'results')", (pid,),
+            )
+            sections = dict(await cursor.fetchall())
+            methods = elucidation.plain_text(sections.get("materials and methods", "")) \
+                or "No Materials and Methods text was provided."
+            results = elucidation.plain_text(sections.get("results", "")) \
+                or "No Results text was provided."
+            current_hash = graphic_evaluation_hash(snapshot.fingerprint, methods, results, row[1])
+            if current_hash != expected_hash:
+                return False
+            await connection.execute(
+                "UPDATE source SET evaluation = %s, evaluation_hash = %s "
+                "WHERE pid = %s AND sid = %s",
+                (Jsonb(result), expected_hash, pid, sid),
+            )
+        return True
 
 
 _store = SourceStore()

@@ -161,6 +161,8 @@ CREATE TABLE source (
     mimetype    TEXT NOT NULL,
     added       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     usable      BOOLEAN NOT NULL DEFAULT TRUE,
+    evaluation  JSONB,
+    evaluation_hash TEXT,
     search_vector tsvector,
     embedding   vector(1536)
 );

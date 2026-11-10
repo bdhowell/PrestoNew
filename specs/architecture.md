@@ -976,15 +976,23 @@ As each item is uploaded and added to the database, display it in the #items-lis
   stale writes and return HTTP 409. Author/section failures roll back together.
   Section/poster embeddings are invalidated after content changes.
 - After successful elucidation is saved, the browser redirects to
-  `/conferences/query` to collect optional conference or fair information.
+  `/content/evaluate`. The owner-checked evaluation stream processes eligible
+  uploaded and extracted PNG/JPEG sources one at a time, persists each
+  structured result in `source.evaluation`, and reports progress to Wikkit.
+  Section edits clear persisted evaluations. A graphic is suitable when either
+  its Materials and Methods or Results rating is at least `significantly`.
+  The results page groups uploaded before extracted graphics and continues to
+  `/content/review`; when no eligible graphics exist, Wikkit redirects to
+  `/conferences/query`.
 - While the POST is pending, the browser chooses a new random delay in the
   inclusive 15–30-second range and a random Wikkit message from the list below.
   Completion, failure and leaving the page stop the timers. Failure stays on
   the page with an explicit error and a Try again button; no success redirect
   is returned before persistence completes.
-- Success navigates to `/layout/edit`; the layout editor itself remains
-  deferred. Apply `schema/schema.sql` for `authors.errata` and the
-  `acknowledgements` section enum, and install `requirements-content.txt`.
+- Success navigates to `/content/evaluate` before graphic assessment and review.
+  The evaluation image route is owner-scoped. Apply
+  `schema/source-evaluation.sql` to existing databases and install
+  `requirements-content.txt`.
   Run `bin/python -m unittest tests.test_elucidation tests.test_content tests.test_posters tests.test_wikkit`.
 
 ### Internal Logic

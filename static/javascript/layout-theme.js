@@ -85,6 +85,7 @@
                 ...(posterHeader.checked ? ["colored-poster-header"] : []),
                 ...(sectionHeaders.checked ? ["colored-section-headers"] : []),
             );
+            document.dispatchEvent(new Event("poster-layout-updated"));
             themeDialog.close();
         } catch (error) {
             console.error("Could not save poster theme", error);
@@ -144,6 +145,7 @@
                 }
                 document.body.classList.remove(...radios.map(radio => radio.value));
                 document.body.classList.add(value);
+                document.dispatchEvent(new Event("poster-layout-updated"));
                 dialog.close();
             } catch (error) {
                 console.error(`Could not save poster ${label}`, error);

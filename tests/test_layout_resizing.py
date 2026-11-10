@@ -198,6 +198,17 @@ class SizingBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.wait_for_timeout(100)
         self.assertEqual(self.errors, [])
 
+    async def test_saved_resize_dispatches_layout_profile_update(self) -> None:
+        await self.load()
+        await self.page.evaluate("""() => {
+            window.profileUpdates = 0;
+            document.addEventListener("poster-layout-updated", () => profileUpdates++);
+        }""")
+        before = await self.geometry()
+        await self.drag("left", x=before["layout"]["width"] * 0.1)
+        await self.page.wait_for_function("sizingRequests.length === 1")
+        await self.page.wait_for_function("profileUpdates === 1")
+
     async def test_column_handles_toggle_preserve_total_and_enforce_inward_limits(self) -> None:
         for template in posters.TEMPLATES:
             with self.subTest(template=template):

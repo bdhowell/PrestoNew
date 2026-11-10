@@ -768,6 +768,20 @@ class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.locator("#outlined").evaluate(
             "element => getComputedStyle(element).outlineStyle",
         ), "none")
+        await self.page.add_style_tag(content=(
+            ".layout-profile-attention { outline: 4px solid red !important; }"
+        ))
+        await self.page.evaluate("""() => {
+            const element = document.createElement('button');
+            element.id = 'profile-attention';
+            element.className = 'layout-profile-attention';
+            element.innerHTML = '<span>Needs attention</span>';
+            document.body.prepend(element);
+        }""")
+        await self.page.locator("#profile-attention span").click()
+        self.assertEqual(await self.page.locator("#profile-attention").evaluate(
+            "element => getComputedStyle(element).outlineStyle",
+        ), "solid")
 
     async def test_handle_appearance_matches_on_public_and_layout_pages(self) -> None:
         await self.page.add_style_tag(path=str(ROOT / "static/css/main.css"))
@@ -1018,13 +1032,13 @@ class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
                 await self.page.set_viewport_size({"width": width, "height": 700})
                 bounds = await self.page.evaluate("""() => {
                     const rect = id => document.getElementById(id).getBoundingClientRect();
-                    const bold = rect('bold');
+                    const appearance = rect('appearance');
                     const wikkit = rect('wikkit');
                     const status = rect('content-save-status');
                     const slider = rect('poster-zoom');
                     const value = rect('poster-zoom-value');
                     return {
-                        leftInset: bold.left, rightInset: innerWidth - value.right,
+                        leftInset: appearance.left, rightInset: innerWidth - value.right,
                         statusAfterWikkit: Boolean(document.querySelector(
                             '#editor-controls #wikkit + #content-save-status')),
                         statusLeft: status.left, wikkitRight: wikkit.right,

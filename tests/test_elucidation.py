@@ -157,7 +157,7 @@ class ElucidationRouteTests(unittest.TestCase):
     def test_post_analyzes_merged_sources_and_saves_before_review_redirect(self) -> None:
         response = self.client.post("/content/elucidate", json={})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True, "redirect": "/content/review"})
+        self.assertEqual(response.json(), {"ok": True, "redirect": "/content/evaluate"})
         self.sources.source_text.assert_awaited_once_with(7, 11)
         self.analyze.assert_awaited_once_with(self.snapshot.text)
         self.sources.save_elucidation.assert_awaited_once_with(7, 11, self.snapshot, self.result)

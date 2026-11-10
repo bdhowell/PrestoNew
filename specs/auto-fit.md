@@ -156,6 +156,14 @@ f"""
 {identity.user_name}, your graphic is likely to be blurry to most viewers.
 """
 
+## Evaluating Poster Graphics
+
+After elucidation succeeds, route the user to `/content/evaluate`. Evaluate owner-scoped PNG and JPEG source graphics with `evaluation.evaluate_image`, including uploaded root graphics and extracted child graphics. Serve a selected source through `/content/{sid}/image` only after checking ownership.
+
+Persist each structured evaluation in `source.evaluation` (JSONB), keyed by its source record, with `source.evaluation_hash` guarding against stale source text, section content, or image data during a long-running evaluation. Clear saved evaluations when poster section content changes. Apply `schema/source-evaluation.sql` to existing databases.
+
+Wikkit reports per-image progress, then displays uploaded and extracted graphics in separate groups. A graphic is suitable when either its Materials and Methods or Results rating is `significantly`, `highly`, or `definitively`; otherwise it is not suitable. If no eligible graphics exist, Wikkit explains that and redirects to `/conferences/query`.
+
 ## On Vertical Overflow
 
 If inserting or resizing a graphic causes vertical overflow 
@@ -271,12 +279,18 @@ def friendly_list(items: list[str]) -> str:
 # Create a Python module and router named `magic`
 
 The owner-scoped `GET /magic/{pid}/profile` endpoint profiles the saved editor
-layout. Unsaved editor changes are not included. Section density is the sum of
-the rendered areas of `.graphic` elements divided by the section area; text is
-not counted and overlapping graphics are counted separately. Consequently, a
-text-only section is underfilled by this metric. The current content sanitizer
+layout. Unsaved editor changes are not included. Section density is
+`scrollWidth * scrollHeight` divided by the section area. Graphic density is the
+sum of the rendered areas of `.graphic` elements divided by the section area;
+overlapping graphics are counted separately. The current content sanitizer
 does not yet preserve graphics, so saved section content currently cannot
 produce graphic measurements until graphics support is added.
+
+Section fit, overflow/underflow flags, and section lists use
+`scrollHeight / offsetHeight`: ratios above the maximum are overflowing, and
+ratios below the minimum are underflowing. Equality is within range. Horizontal
+scrolling does not affect this classification. The `vertical_overflow` output
+retains its existing inverse ratio, `offsetHeight / scrollHeight`.
 
 Threshold environment variables `SECTION_MIN_OCCUPIED` (30),
 `SECTION_MAX_OCCUPIED` (75), and `SECTION_UNDERFLOW_OCCUPIED` (0.40) are
@@ -367,9 +381,10 @@ def profile_poster(pid:int):
 		details['graph_density'] = details['graph_area'] / details['area']
 		details['vertical_overflow'] = offsetHeight / scrollHeight
 
-		if details['density'] < section_min_area:
+		scroll_ratio = scrollHeight / offsetHeight
+		if scroll_ratio < section_min_area:
 			underflowing_sections.append(name)
-		if details['density'] > section_max_area:
+		if scroll_ratio > section_max_area:
 			overflowing_sections.append(name)
 
 		total_area += details['area']
@@ -377,11 +392,11 @@ def profile_poster(pid:int):
 
 		poster_density = occupied_area / total_area
 
-		details['overflow'] = details['density'] > 1.00
-		details['underflow'] = details['density'] < section_min_area
+		details['overflow'] = scroll_ratio > section_max_area
+		details['underflow'] = scroll_ratio < section_min_area
 		
-		details['fit'] = TOO_SHORT if details['density'] < section_min_area \
-					else TOO_LONG if details['density'] > section_max_area \
+		details['fit'] = TOO_SHORT if scroll_ratio < section_min_area \
+					else TOO_LONG if scroll_ratio > section_max_area \
 					else JUST_RIGHT
 
 		details['oversized_graphics'] = oversized_graphics
@@ -494,3 +509,33 @@ If less than 20% of the original word count:
 	- Wikkit says "You might consider resizing the large graphic within the text".
 	- Flash the outlines of the graphics that could be resized using the server-client command: {command: 'flash', 'payload': [ '#graphic_id', ]}
 - break
+
+============================================================
+
+When editing:
+
+After a section has or sections have been resized or updated, such as by the user editing text or adding or removing graphics (currently under consideration) and not changing for os.environ.get('PROFILE_VALIDATION_INTERVAL', 300):
+- profile the section(s) or the whole document, such as after layout out the page for editing.
+- identify the sections that are overflowing, underflowing, or have oversized graphics by placing an outline around them for the user to see.
+- Wikkit gently provides feedback to the user in character with his other messaging, telling the user which sections need attention and suggesting possible actions, such as resizing graphics or adjusting text content.
+
+============================================================
+
+When over a section that is overflowing or underflowing or has other problems, have Wikkit suggest that the user try right (cmnd-) clicking on the section to access context-specific actions, such as resizing graphics or adjusting text content. When the user makes a right mouse-down over a problem area, change the cursor to 'wand-cursor.png' to indicate that context-specific actions are available and show a context menu with the relevant options: auto-fit, resize graphics, adjust text content, etc.
+
+The layout editor currently exposes this menu only on profiled problem sections. Adjust text content focuses the section editor; auto-fit and graphic resizing are shown as unavailable until those actions are implemented. The menu also opens on a Command-click or Control-click and closes on Escape or an outside click.
+
+Each applied profile outlines the sections mentioned in Wikkit's current
+suggestions or warnings and their oversized graphics. Outlines are reconciled
+on every profile: resolved sections and graphics lose their highlights while
+items that still qualify remain outlined.
+Warning outlines stay amber and three screen pixels wide at every poster zoom
+level, including the saved content scale. Any poster element being edited always
+gets a blue outline, even if it or its section has a Wikkit warning. Its warning
+outline returns on blur if the element still qualifies.
+Editing outlines disappear on blur; clicking does not dismiss warning or active
+editing outlines.
+
+Loading `/layout/edit` also schedules a profile after the DOM and initial saved
+layout geometry are ready. Subsequent saved edits continue to trigger profiling
+after the configured quiet period.

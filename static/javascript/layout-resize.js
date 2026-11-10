@@ -58,6 +58,7 @@
             if (!response.ok || result.ok !== true) {
                 throw new Error(result.detail || "Your layout sizing could not be saved.");
             }
+            document.dispatchEvent(new Event("poster-layout-updated"));
             if (!dirty) status.textContent = "Layout sizing saved.";
         } catch (error) {
             notify(error);

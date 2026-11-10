@@ -1,0 +1,11 @@
+{% extends "page.html" %}
+{% block title %}Evaluating graphics - {{ app_name() }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="/static/css/pages/content-evaluate.css">{% endblock %}
+{% block content %}
+<h1>Evaluating your graphics</h1>
+<p id="evaluation-status" role="status" aria-live="polite">Preparing to evaluate your graphics.</p>
+<div id="graphic-evaluations" aria-live="polite"></div>
+<button id="retry-evaluation" type="button" hidden>Try again</button>
+<p><a id="continue-review" href="/content/review" hidden>Continue to review your poster</a></p>
+<script id="evaluation-poster" type="application/json">{{ {"pid": pid} | tojson }}</script>
+{% endblock %}

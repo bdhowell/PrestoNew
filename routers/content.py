@@ -1,5 +1,8 @@
 """Upload, extract and analyze source files for an owner-checked draft."""
 
+import base64
+import html
+import json
 import logging
 import os
 import re
@@ -11,13 +14,14 @@ import psycopg
 import openai
 import num2words
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from google.api_core.exceptions import GoogleAPIError
 from google.auth.exceptions import GoogleAuthError
 from starlette.concurrency import run_in_threadpool
 
 import common
 import content
+import evaluation as graphic_evaluation
 import identity
 import posters
 import source_processing
@@ -283,7 +287,173 @@ async def elucidate_poster(request: Request) -> JSONResponse:
     except STORAGE_ERRORS:
         logger.exception("Could not analyze or save poster content")
         raise HTTPException(503, "Your content could not be analyzed or saved. Please try again.") from None
-    return JSONResponse({"ok": True, "redirect": "/content/review"})
+    return JSONResponse({"ok": True, "redirect": "/content/evaluate"})
+
+
+@router.get("/evaluate")
+async def evaluate_page(request: Request) -> Response:
+    if getattr(request.state, "user_id", None) is None:
+        return RedirectResponse("/account/signin", status_code=303)
+    try:
+        uid, pid = await selected_draft(request)
+        graphics = await content.store().evaluation_sources(uid, pid)
+        await common.resume(request)
+    except STORAGE_ERRORS:
+        logger.exception("Could not load poster graphics for evaluation")
+        raise HTTPException(503, "Your graphics could not be loaded. Please try again.") from None
+
+    uploaded = sum(graphic.category == "uploaded" for graphic in graphics)
+    extracted = len(graphics) - uploaded
+    name = html.escape(identity.display_name(request))
+    parts = []
+    if uploaded:
+        parts.append(
+            f"{num2words.num2words(uploaded)} graphic{common.pluralize(uploaded)} you uploaded"
+        )
+    if extracted:
+        parts.append(
+            f"{num2words.num2words(extracted)} graphic{common.pluralize(extracted)} "
+            "I was able to extract from your source text"
+            f"{common.pluralize(extracted)}"
+        )
+    message = (
+        f"<p>Okay, {name}, I&rsquo;m reviewing the {' and '.join(parts)}.</p>"
+        "<p>Give me a few more moments to evaluate them.</p>"
+        if parts else None
+    )
+    return render_page(
+        request, "content/evaluate.html", "content-evaluate", message,
+        pid=pid,
+    )
+
+
+@router.post("/evaluate/{pid}")
+async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
+    await read_json(request)
+    uid, selected_pid = await selected_draft(request)
+    if pid != selected_pid:
+        raise HTTPException(409, "The selected poster changed. Reload before evaluating graphics.")
+
+    try:
+        graphics = await content.store().evaluation_sources(uid, pid)
+        if graphics:
+            snapshot = await content.store().source_text(uid, pid)
+            sections, _ = await posters.store().content(uid, pid)
+        else:
+            snapshot = None
+            sections = []
+    except (STORAGE_ERRORS + (RuntimeError, ValueError)):
+        logger.exception("Could not prepare poster graphics for evaluation")
+        raise HTTPException(503, "Your graphics could not be prepared for evaluation.") from None
+
+    values = dict(sections)
+    general_text = snapshot.text if snapshot is not None else ""
+    methods = elucidation.plain_text(values.get("materials and methods", "")) \
+        or "No Materials and Methods text was provided."
+    results = elucidation.plain_text(values.get("results", "")) \
+        or "No Results text was provided."
+    expected_hashes = {
+        graphic.sid: content.graphic_evaluation_hash(
+            snapshot.fingerprint, methods, results, graphic.digest,
+        )
+        for graphic in graphics
+    } if snapshot is not None else {}
+    pending = [
+        graphic for graphic in graphics
+        if graphic.evaluation is None
+        or graphic.evaluation_hash != expected_hashes[graphic.sid]
+    ]
+    try:
+        client = openai.OpenAI() if pending else None
+    except openai.OpenAIError:
+        logger.exception("Could not initialize graphic evaluation for poster %s", pid)
+        raise HTTPException(503, "Your graphics could not be evaluated. Please try again.") from None
+
+    async def events():
+        try:
+            uploaded = sum(graphic.category == "uploaded" for graphic in graphics)
+            yield json.dumps({
+                "type": "start",
+                "total": len(graphics),
+                "uploaded": uploaded,
+                "extracted": len(graphics) - uploaded,
+            }, ensure_ascii=False) + "\n"
+            if not graphics:
+                yield json.dumps({"type": "empty"}) + "\n"
+                return
+
+            for graphic in graphics:
+                if (
+                    graphic.evaluation is not None
+                    and graphic.evaluation_hash == expected_hashes[graphic.sid]
+                ):
+                    yield json.dumps({
+                        "type": "result",
+                        "source": {
+                            "sid": graphic.sid,
+                            "filename": graphic.filename,
+                            "category": graphic.category,
+                        },
+                        "evaluation": graphic.evaluation,
+                    }, ensure_ascii=False) + "\n"
+
+            for index, graphic in enumerate(graphics, start=1):
+                if graphic.evaluation is not None:
+                    continue
+                yield json.dumps({
+                    "type": "progress",
+                    "current": index,
+                    "total": len(graphics),
+                    "current_word": num2words.num2words(index),
+                    "total_word": num2words.num2words(len(graphics)),
+                }) + "\n"
+                source = await content.store().graphic_source(uid, pid, graphic.sid)
+                if source is None:
+                    raise ValueError(f"Graphic source {graphic.sid} is no longer available.")
+                data, mimetype = source
+                image_url = f"data:{mimetype};base64,{base64.b64encode(data).decode('ascii')}"
+                result = await run_in_threadpool(
+                    graphic_evaluation.evaluate_image,
+                    image_url,
+                    general_text,
+                    methods,
+                    results,
+                    client=client,
+                )
+                evaluation_result = result.model_dump(mode="json")
+                saved = await content.store().save_graphic_evaluation(
+                    uid, pid, graphic.sid, evaluation_result,
+                    expected_hashes[graphic.sid],
+                )
+                if not saved:
+                    raise content.SourceConflictError(
+                        "The poster or its graphics changed during evaluation."
+                    )
+                yield json.dumps({
+                    "type": "result",
+                    "source": {
+                        "sid": graphic.sid,
+                        "filename": graphic.filename,
+                        "category": graphic.category,
+                    },
+                    "evaluation": evaluation_result,
+                }, ensure_ascii=False) + "\n"
+            yield json.dumps({"type": "complete"}) + "\n"
+        except (
+            content.SourceConflictError, psycopg.Error, OSError, GoogleAPIError,
+            GoogleAuthError, openai.OpenAIError, source_processing.ProcessingError,
+            RuntimeError, ValueError,
+        ):
+            logger.exception("Could not evaluate graphics for poster %s", pid)
+            yield json.dumps({
+                "type": "error",
+                "detail": "A graphic could not be evaluated. Please try again.",
+            }) + "\n"
+        finally:
+            if client is not None:
+                client.close()
+
+    return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
 REVIEW_SECTIONS = (
@@ -417,3 +587,20 @@ async def thumbnail(request: Request, sid: int) -> Response:
         logger.exception("Could not load source thumbnail %s", sid)
         raise HTTPException(503, "The source thumbnail could not be loaded.") from None
     return Response(preview, media_type="image/png", headers={"Cache-Control": "private, no-store"})
+
+
+@router.get("/{sid}/image")
+async def graphic_image(request: Request, sid: int) -> Response:
+    try:
+        uid, pid = await selected_draft(request)
+        source = await content.store().graphic_source(uid, pid, sid)
+        if source is None:
+            raise HTTPException(404, "Source graphic not found")
+    except STORAGE_ERRORS:
+        logger.exception("Could not load source graphic %s", sid)
+        raise HTTPException(503, "The source graphic could not be loaded.") from None
+    data, mimetype = source
+    return Response(
+        data, media_type=mimetype,
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )

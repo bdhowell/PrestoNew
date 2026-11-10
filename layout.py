@@ -3,6 +3,7 @@
 import logging
 import html
 import math
+import os
 import re
 from dataclasses import dataclass
 
@@ -29,6 +30,7 @@ from wikkit import Chatbot
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/layout", tags=["layout"])
 PRIVATE = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+MAX_PROFILE_VALIDATION_INTERVAL = 2_147_483_647
 SCALE = {"cm": 1.0, "mm": 0.1, "in": 2.54}
 ALIASES = {
     "methods": "materials and methods", "conclusions": "conclusion",
@@ -46,6 +48,15 @@ def uid_for(request: Request) -> int:
     if type(uid) is not int:
         raise HTTPException(401, "Please sign in to access your poster.")
     return uid
+
+
+def profile_validation_interval() -> int:
+    value = int(os.environ.get("PROFILE_VALIDATION_INTERVAL", '300'))
+    if not 0 <= value <= MAX_PROFILE_VALIDATION_INTERVAL:
+        raise ValueError(
+            f"PROFILE_VALIDATION_INTERVAL must be between 0 and {MAX_PROFILE_VALIDATION_INTERVAL} milliseconds"
+        )
+    return value
 
 
 async def owned(request: Request, pid: int | None = None, *, draft: bool = False) -> posters.Poster:
@@ -122,6 +133,7 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
     layout_element.set("data-resize-settings", sizing.model_dump_json())
     layout_element.set("data-pid", str(pid))
     layout_element.set("data-template", template)
+    layout_element.set("data-profile-validation-interval", str(profile_validation_interval()))
     geometry = (poster.layout_geometry or {}).get(template)
     layout_element.set("data-initial-geometry", (
         posters.LayoutGeometry.model_validate(geometry).model_dump_json() if geometry is not None else "null"

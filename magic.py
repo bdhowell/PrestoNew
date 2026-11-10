@@ -115,26 +115,50 @@ async def _profile_page(page: Page) -> dict:
         occupied = scroll_width * scroll_height
         density = occupied / area
         graph_area = sum(graphic["area"] for graphic in graphics)
-        if density < thresholds["min"]:
+        vertical_overflow = height / scroll_height
+        scroll_ratio = scroll_height / height
+        underflow = scroll_ratio < thresholds["min"]
+        overflow = scroll_ratio > thresholds["max"]
+        fit = TOO_SHORT if underflow else (TOO_LONG if overflow else JUST_RIGHT)
+        if fit == TOO_SHORT:
             underflowing_sections.append(name)
-        if density > thresholds["max"]:
+        if overflow:
             overflowing_sections.append(name)
         sections[name] = {
-            "area": area, "occupied": occupied, "density": density,
-            "graph_area": graph_area, "graph_density": graph_area / area,
-            "vertical_overflow": height / scroll_height,
-            "overflow": density > 1, "underflow": density < thresholds["min"],
-            "fit": TOO_SHORT if density < thresholds["min"] else (
-                TOO_LONG if density > thresholds["max"] else JUST_RIGHT
-            ),
+            "fit": fit,
+            "area": area, "occupied": occupied,
+            "density": density,
+            "graph_area": graph_area,
+            "graph_density": graph_area / area,
+            "vertical_overflow": vertical_overflow,
+            "overflow": overflow,
+            "underflow": underflow,
             "oversized_graphics": oversized_graphics, "graphics": graphics,
         }
         total_area += area
         occupied_area += occupied
         all_oversized_graphics.extend(oversized_graphics)
+    print(f"""
+Total Area: {total_area}
+Occupied Area: {occupied_area}
+Density: {occupied_area / total_area}
+---------------
+Underflowing Sections: {underflowing_sections}
+---------------
+Overflowing Sections: {overflowing_sections}
+---------------
+Oversized Graphics: {all_oversized_graphics}
+---------------
+Overflowing Graphics: {oversized_graphics}
+---------------
+Sections: {sections}
+===============
+""")
     return {
-        "total_area": total_area, "occupied_area": occupied_area,
-        "density": occupied_area / total_area, "sections": sections,
+        "total_area": total_area,
+        "occupied_area": occupied_area,
+        "density": occupied_area / total_area,
+        "sections": sections,
         "overflowing_sections": overflowing_sections,
         "underflowing_sections": underflowing_sections,
         "oversized_graphics": all_oversized_graphics,

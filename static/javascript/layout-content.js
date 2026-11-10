@@ -33,6 +33,7 @@
             if (version === statusVersion) {
                 status.textContent = "Changes saved.";
             }
+            document.dispatchEvent(new Event("poster-layout-updated"));
         }).catch(error => {
             state.dirty = true;
             console.error(`Could not save poster section ${element.dataset.section}`, error);

@@ -62,6 +62,13 @@ psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/schema.sql
 
 The schema objects must be owned by the role in `DATABASE_URL`. The schema is
 for initializing the maintained local database, not for upgrading older schemas.
+
+For an existing database, apply each feature migration explicitly. Graphic
+evaluation requires:
+
+```sh
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-evaluation.sql
+```
 - Poppler (`pdftocairo`) for importing vector figures from PDFs
 - Playwright browser binaries installed
 

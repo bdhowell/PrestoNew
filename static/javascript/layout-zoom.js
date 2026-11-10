@@ -72,6 +72,8 @@
         slider.disabled = minimum === 1;
         output.textContent = `${(scale * 100).toFixed(1)}%`;
         canvas.style.transform = `scale(${scale})`;
+        const contentScale = new DOMMatrixReadOnly(getComputedStyle(content).transform).a;
+        content.style.setProperty("--poster-outline-width", `${3 / (scale * contentScale)}px`);
         stage.style.width = `${width * scale}px`;
         stage.style.height = `${height * scale}px`;
     }

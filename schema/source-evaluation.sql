@@ -1,0 +1,2 @@
+ALTER TABLE source ADD COLUMN IF NOT EXISTS evaluation JSONB;
+ALTER TABLE source ADD COLUMN IF NOT EXISTS evaluation_hash TEXT;

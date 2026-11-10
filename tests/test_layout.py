@@ -82,7 +82,7 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertEqual(document.get_element_by_id("authors").text_content(), "<Ada>\u00a0(Institute)")
         self.assertIn("Experiment", document.get_element_by_id("methods").text_content())
         self.assertEqual(len(document.xpath('//*[@id="methods"]//h2')), 0)
-        self.assertIn("Findings", document.get_element_by_id("conclusion").text_content())
+        self.assertIn("Findings", document.get_element_by_id("conclusions").text_content())
         self.assertEqual(
             document.xpath('//*[@id="methods"]//div[@class="content"]/@contenteditable'),
             ["true"],
@@ -91,6 +91,21 @@ class LayoutRouteTests(unittest.TestCase):
             document.xpath('//*[@id="methods"]//div[@class="content"]/@data-section'),
             ["materials and methods"],
         )
+
+    def test_profile_validation_interval_is_exposed_to_the_editor(self) -> None:
+        with patch.dict(os.environ, {"PROFILE_VALIDATION_INTERVAL": "425"}):
+            document = html.fromstring(self.client.get("/layout/layout").text)
+        self.assertEqual(
+            document.get_element_by_id("layout").get("data-profile-validation-interval"),
+            "425",
+        )
+
+    def test_profile_validation_interval_rejects_invalid_values(self) -> None:
+        for value in ("invalid", "-1", "2147483648"):
+            with self.subTest(value=value), patch.dict(
+                os.environ, {"PROFILE_VALIDATION_INTERVAL": value},
+            ), self.assertRaises(ValueError):
+                routes.profile_validation_interval()
 
     def test_section_headings_use_full_names(self) -> None:
         document = html.fromstring(self.client.get("/layout/layout").text)
