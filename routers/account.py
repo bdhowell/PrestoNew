@@ -368,10 +368,14 @@ async def signout(request: Request) -> HTMLResponse:
     identity.sign_out(request)
     says = f"""
 <p>
-Okay, {name}, you have been signed out of {html.escape(identity.application_name())}.
+Okay, {name}, I&rsquo;ve signed you out of {html.escape(identity.application_name())}.
 </p>
 <p>
 I hope to see you again soon.
+</p>
+
+<p class="centered">
+    <button data-sends="login">Sign in again</button>
 </p>
 """
     return render_page(request, "account/signout.html", "account-signout", says)

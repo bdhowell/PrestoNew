@@ -353,6 +353,28 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.wait_for_url("**/account/signin")
         self.assertEqual(self.errors, [])
 
+    async def test_signout_waits_for_login_button_before_redirecting(self) -> None:
+        client = TestClient(app)
+        self.addCleanup(client.close)
+        response = client.get("/account/signout")
+        await self.page.route(
+            "**/account/signout",
+            lambda route: route.fulfill(body=response.content, content_type="text/html"),
+        )
+        await self.page.route(
+            "**/account/signin",
+            lambda route: route.fulfill(body="<h1>Sign in</h1>", content_type="text/html"),
+        )
+        self.prompt_on_connect = False
+        await self.page.goto("http://testserver/account/signout")
+        button = self.page.locator('#chatlog button[data-sends="login"]')
+        await expect(button).to_be_enabled()
+        await expect(self.page.locator("#chatlog [aria-busy]")).to_have_count(0)
+        self.assertEqual(self.page.url, "http://testserver/account/signout")
+        await button.click()
+        await self.page.wait_for_url("**/account/signin")
+        self.assertEqual(self.errors, [])
+
     async def start_timed_output(self) -> None:
         self.word_interval = 400
         self.word_deviation = 100
