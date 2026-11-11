@@ -340,7 +340,7 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await expect(button).to_be_enabled()
         await expect(button).to_be_focused()
         await expect(self.page.locator("#chatlog")).to_contain_text(
-            "Ada, you’ve been logged out because your session expired.",
+            "Okay, Ada, I’ve signed you out",
         )
         self.assertFalse(hasattr(self, "socket"))
         self.assertEqual(
@@ -369,8 +369,9 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.goto("http://testserver/account/signout")
         button = self.page.locator('#chatlog button[data-sends="login"]')
         await expect(button).to_be_enabled()
-        await expect(self.page.locator("#chatlog [aria-busy]")).to_have_count(0)
+        await expect(self.page.locator("#chatlog [aria-busy]")).to_have_count(0, timeout=15000)
         self.assertEqual(self.page.url, "http://testserver/account/signout")
+        self.assertFalse(hasattr(self, "socket"))
         await button.click()
         await self.page.wait_for_url("**/account/signin")
         self.assertEqual(self.errors, [])

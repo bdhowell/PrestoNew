@@ -133,13 +133,9 @@
         position();
     }
 
-    function visible(handle, show) {
-        if (show) {
-            for (const other of handles) {
-                if (other !== handle && !other.separator.hidden) visible(other, false);
-            }
-        } else if (dragging && dragging.handle === handle) {
-            const {pointer, moved} = dragging;
+    function setHandlesVisible(show) {
+        if (!show && dragging) {
+            const {handle, pointer, moved} = dragging;
             dragging = null;
             if (handle.separator.hasPointerCapture(pointer)) {
                 handle.separator.releasePointerCapture(pointer);
@@ -149,9 +145,11 @@
                 save();
             }
         }
-        handle.separator.hidden = !show;
-        handle.toggle.setAttribute("aria-expanded", String(show));
-        if (!show && document.activeElement === handle.separator) handle.toggle.focus();
+        for (const handle of handles) {
+            handle.separator.hidden = !show;
+            handle.toggle.setAttribute("aria-expanded", String(show));
+            if (!show && document.activeElement === handle.separator) handle.toggle.focus();
+        }
     }
 
     function addHandle(id, axis, label, first, second, kind, row = null, index = null) {
@@ -161,10 +159,10 @@
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = "resize-toggle";
-        toggle.setAttribute("aria-label", `Toggle ${label.toLowerCase()} handle`);
+        toggle.setAttribute("aria-label", `Toggle all resize handles (${label.toLowerCase()})`);
         toggle.setAttribute("aria-expanded", "false");
         toggle.setAttribute("aria-controls", `resize-${id}`);
-        toggle.title = "Click to show or hide this resize handle and deactivate any other handle.";
+        toggle.title = "Click to show or hide all resize handles.";
         const separator = document.createElement("div");
         separator.id = `resize-${id}`;
         separator.className = "resize-handle";
@@ -180,7 +178,7 @@
         overlay.append(gutter);
         const handle = {id, axis, first, second, kind, row, index, gutter, toggle, separator};
         handles.push(handle);
-        toggle.addEventListener("click", () => visible(handle, separator.hidden));
+        toggle.addEventListener("click", () => setHandlesVisible(separator.hidden));
         separator.addEventListener("pointerdown", event => {
             if (event.button !== 0 || dragging) return;
             const firstBounds = bounds(first);
@@ -210,7 +208,7 @@
             const moved = dragging.moved;
             dragging = null;
             if (separator.hasPointerCapture(event.pointerId)) separator.releasePointerCapture(event.pointerId);
-            if (!moved && event.type === "pointerup") visible(handle, false);
+            if (!moved && event.type === "pointerup") setHandlesVisible(false);
             if (moved) {
                 clearTimeout(timer);
                 save();
@@ -221,7 +219,7 @@
         separator.addEventListener("lostpointercapture", finish);
         separator.addEventListener("keydown", event => {
             if (event.key === "Escape") {
-                visible(handle, false);
+                setHandlesVisible(false);
                 event.preventDefault();
                 return;
             }
@@ -296,6 +294,9 @@
         && getComputedStyle(introduction.parentElement).flexDirection === "column"
         ? addHandle("introduction", "y", "Introduction and Materials and Methods height",
             introduction, methods, "introduction") : null;
+    for (const handle of handles) {
+        handle.toggle.setAttribute("aria-controls", handles.map(item => item.separator.id).join(" "));
+    }
 
     function position() {
         const layoutBounds = bounds(layout);
