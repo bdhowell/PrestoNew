@@ -45,15 +45,23 @@
   gap: 0.5rem;
 }
 
-#editor-controls {
+.editor-controls-container {
   grid-column: 1;
   grid-row: 1;
+  position: relative;
+  left: 263px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px;
+  background-color: #2f2766;
+  border-radius: 14px;
+}
+
+#editor-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.375rem;
-  position: relative;
-  left: 263px;
 }
 
 .review-actions > p {
