@@ -4,6 +4,11 @@
     const toolbar = document.getElementById("editor-controls");
     if (!toolbar) return;
 
+    const sources = document.getElementById("sources");
+    if (sources) {
+        sources.addEventListener("click", () => window.location.assign("/content/review"));
+    }
+
     const controlGroups = ["extended", "appearance"]
         .map(id => [document.getElementById(id), document.getElementById(`${id}-controls`)])
         .filter(([button, controls]) => button && controls);

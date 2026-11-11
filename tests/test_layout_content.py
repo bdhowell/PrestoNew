@@ -236,6 +236,10 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.locator("#appearance").get_attribute("aria-expanded"), "false")
         self.assertEqual(await self.page.locator(":focus").get_attribute("id"), "appearance")
 
+    async def test_sources_button_redirects_to_content_review(self) -> None:
+        await self.page.locator("#sources").click()
+        await self.page.wait_for_url("https://presto.test/content/review")
+
     async def test_theme_controls_save_all_settings_and_keep_other_appearance(self) -> None:
         await self.page.locator("#theme").click()
         self.assertTrue(await self.page.locator('input[name="color"][value="blue"]').is_checked())

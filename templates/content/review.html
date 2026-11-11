@@ -26,24 +26,26 @@
             </section>
             {% endfor %}
         </div>
-        <div id="editor-controls" role="toolbar" aria-label="Text formatting">
-            <button type="button" id="bold" aria-label="Bold" title="Bold"><i class="fa-solid fa-bold" aria-hidden="true"></i></button>
-            <button type="button" id="italic" aria-label="Italic" title="Italic"><i class="fa-solid fa-italic" aria-hidden="true"></i></button>
-            <button type="button" id="underline" aria-label="Underline" title="Underline"><i class="fa-solid fa-underline" aria-hidden="true"></i></button>
-            <button type="button" id="strikethrough" aria-label="Strikethrough" title="Strikethrough"><i class="fa-solid fa-strikethrough" aria-hidden="true"></i></button>
-            <button type="button" id="plaintext" aria-label="Plain Text" title="Plain Text"><i class="fa-solid fa-text-slash" aria-hidden="true"></i></button>
-            <button type="button" id="code" aria-label="Code" title="Code"><i class="fa-solid fa-code" aria-hidden="true"></i></button>
-            <button type="button" id="superscript" aria-label="Superscript" title="Superscript"><i class="fa-solid fa-superscript" aria-hidden="true"></i></button>
-            <button type="button" id="subscript" aria-label="Subscript" title="Subscript"><i class="fa-solid fa-subscript" aria-hidden="true"></i></button>
-            <button type="button" id="ullist" aria-label="Unordered List" title="Unordered List"><i class="fa-solid fa-list-ul" aria-hidden="true"></i></button>
-            <button type="button" id="ollist" aria-label="Ordered List" title="Ordered List"><i class="fa-solid fa-list-ol" aria-hidden="true"></i></button>
-            <button type="button" id="cut" aria-label="Cut" title="Cut"><i class="fa-solid fa-cut" aria-hidden="true"></i></button>
-            <button type="button" id="copy" aria-label="Copy" title="Copy"><i class="fa-solid fa-copy" aria-hidden="true"></i></button>
-            <button type="button" id="paste" aria-label="Paste" title="Paste"><i class="fa-solid fa-paste" aria-hidden="true"></i></button>
-        </div>
-        <p><output id="content-save-status" role="status" aria-live="polite"></output></p>
-        <button type="button" id="review-continue">Continue to poster layout</button>
     </div>
+</div>
+<div class="review-actions">
+    <div id="editor-controls" role="toolbar" aria-label="Text formatting">
+        <button type="button" id="bold" aria-label="Bold" title="Bold"><i class="fa-solid fa-bold" aria-hidden="true"></i></button>
+        <button type="button" id="italic" aria-label="Italic" title="Italic"><i class="fa-solid fa-italic" aria-hidden="true"></i></button>
+        <button type="button" id="underline" aria-label="Underline" title="Underline"><i class="fa-solid fa-underline" aria-hidden="true"></i></button>
+        <button type="button" id="strikethrough" aria-label="Strikethrough" title="Strikethrough"><i class="fa-solid fa-strikethrough" aria-hidden="true"></i></button>
+        <button type="button" id="plaintext" aria-label="Plain Text" title="Plain Text"><i class="fa-solid fa-text-slash" aria-hidden="true"></i></button>
+        <button type="button" id="code" aria-label="Code" title="Code"><i class="fa-solid fa-code" aria-hidden="true"></i></button>
+        <button type="button" id="superscript" aria-label="Superscript" title="Superscript"><i class="fa-solid fa-superscript" aria-hidden="true"></i></button>
+        <button type="button" id="subscript" aria-label="Subscript" title="Subscript"><i class="fa-solid fa-subscript" aria-hidden="true"></i></button>
+        <button type="button" id="ullist" aria-label="Unordered List" title="Unordered List"><i class="fa-solid fa-list-ul" aria-hidden="true"></i></button>
+        <button type="button" id="ollist" aria-label="Ordered List" title="Ordered List"><i class="fa-solid fa-list-ol" aria-hidden="true"></i></button>
+        <button type="button" id="cut" aria-label="Cut" title="Cut"><i class="fa-solid fa-cut" aria-hidden="true"></i></button>
+        <button type="button" id="copy" aria-label="Copy" title="Copy"><i class="fa-solid fa-copy" aria-hidden="true"></i></button>
+        <button type="button" id="paste" aria-label="Paste" title="Paste"><i class="fa-solid fa-paste" aria-hidden="true"></i></button>
+    </div>
+    <button type="button" id="review-continue">Return to poster layout</button>
+    <p><output id="content-save-status" role="status" aria-live="polite"></output></p>
 </div>
 <dialog id="revision-dialog" aria-labelledby="revision-title" aria-describedby="revision-description">
     <h2 id="revision-title">Review Wikkit&rsquo;s revision</h2>
