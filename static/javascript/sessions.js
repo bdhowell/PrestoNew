@@ -26,7 +26,7 @@
         const escaped = document.createElement("span");
         escaped.textContent = name;
         window.wikkit.say(
-            `<p>${escaped.innerHTML}, your session will expire in ${minutes} minutes.</p>`
+            `<p>${escaped.innerHTML}, your session will expire in ${numberToWords(minutes)} minutes.</p>`
         );
     }
 

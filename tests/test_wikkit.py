@@ -159,6 +159,8 @@ class WikkitPageTests(unittest.TestCase):
     def test_magic_page_loads_wikkit_and_connects(self) -> None:
         response = self.client.get("/wikkit/magic")
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text.count('src="/static/javascript/common.js"'), 1)
+        self.assertLess(response.text.index('src="/static/javascript/common.js"'), response.text.index("</head>"))
         self.assertIn('src="/static/javascript/wikkit.js"', response.text)
         self.assertIn("connect(", response.text)
         self.assertNotIn("/static/css/pages/wikkit-magic.css", response.text)
@@ -310,6 +312,11 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
 
         await self.page.route("**/*", serve)
         await self.page.route_web_socket("**/wikkit/ws", connect)
+
+    async def test_standard_page_loads_common_script(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        self.assertEqual(await self.page.evaluate("numberToWords(3)"), "three")
+        self.assertEqual(self.errors, [])
 
     async def test_signout_waits_for_login_button_without_a_socket(self) -> None:
         client = TestClient(app)
