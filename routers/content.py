@@ -490,6 +490,7 @@ async def review_page(request: Request) -> Response:
         "Please take a look at each section and give me feedback or make adjustments as needed. "
         "When you give me feedback on a particular section, please be sure to include "
         "the section name so I know which part you are referring to.</p>",
+        clear_chat=True,
         username=(getattr(request.state, "user", None) or {}).get(
             "user-name", identity.DEFAULT_NAME,
         ),

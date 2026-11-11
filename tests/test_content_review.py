@@ -33,6 +33,7 @@ class ReviewRouteTests(unittest.TestCase):
     def test_review_renders_safe_sections_and_resumption(self) -> None:
         response = self.client.get("/content/review")
         self.assertEqual(response.status_code, 200)
+        self.assertIn('data-clear-chat="true"', response.text)
         self.assertEqual(response.headers["cache-control"], "private, no-store")
         self.assertIn('data-section="introduction"', response.text)
         self.assertIn('data-section="abstract"', response.text)
@@ -117,6 +118,41 @@ class ReviewRenderedBrowserTests(unittest.IsolatedAsyncioTestCase):
         test_content.ContentRouteTests.setUp(self)
         self.posters.content.return_value = ([("results", "<p>Results</p>")], [])
         self.sources.graphic_sources.return_value = []
+
+    async def test_loading_review_clears_previous_chat_and_displays_greeting(self) -> None:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            self.addAsyncCleanup(browser.close)
+            page = await browser.new_page()
+
+            async def serve(route):
+                if route.request.url.startswith("http://testserver/"):
+                    response = self.client.get(route.request.url)
+                    await route.fulfill(
+                        status=response.status_code, body=response.content,
+                        content_type=response.headers.get("content-type", "text/plain"),
+                    )
+                else:
+                    await route.abort()
+
+            await page.route("**/*", serve)
+            await page.goto("http://testserver/content/review")
+            await page.add_init_script("""(() => {
+                const saved = JSON.parse(sessionStorage.getItem('wikkit.chatbot'));
+                const content = document.createElement('template');
+                content.innerHTML = saved.content;
+                content.content.querySelector('#chatlog').innerHTML = '<p>Previous chat message</p>';
+                saved.content = content.innerHTML;
+                sessionStorage.setItem('wikkit.chatbot', JSON.stringify(saved));
+            })()""")
+            await page.reload()
+            await page.locator("#chatlog").get_by_text(
+                "Here is my draft of each of the sections of your poster.", exact=False,
+            ).wait_for()
+            self.assertNotIn("Previous chat message", await page.locator("#chatlog").inner_text())
+            await page.wait_for_function(
+                "!JSON.parse(sessionStorage.getItem('wikkit.chatbot')).content.includes('Previous chat message')"
+            )
 
     async def test_divider_resizes_on_rendered_page_with_all_assets(self) -> None:
         async with async_playwright() as playwright:
