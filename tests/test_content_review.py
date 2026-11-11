@@ -364,7 +364,7 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
                 filler.style.height = '1500px';
                 document.getElementById(id).append(filler);
             }
-            document.getElementById('review-sections').scrollTop = 100;
+            document.getElementById('review-sections').scrollTo({top: 100, behavior: 'instant'});
         }""")
         self.assertEqual(await self.page.locator("#review-graphics").evaluate("pane => pane.scrollTop"), 0)
         await self.page.locator("#review-graphics").evaluate("pane => { pane.scrollTop = 200; }")
@@ -395,6 +395,57 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
             "buttonBackground": "rgb(68, 58, 128)",
             "buttonBorder": "rgb(142, 133, 194)",
         })
+
+    async def test_section_link_scrolls_smoothly_into_view(self) -> None:
+        await self.page.evaluate("""() => {
+            const pane = document.getElementById('review-sections');
+            pane.insertAdjacentHTML('beforeend',
+                '<div style="height: 1500px"></div><section id="review-2"><h2>Methods</h2></section>'
+                + '<div style="height: 1000px"></div>');
+            document.querySelector('#review nav ul').insertAdjacentHTML('beforeend',
+                '<li><a href="#review-2">Methods</a></li>');
+            window.sectionScrollPositions = [];
+            window.sectionScrollEnded = false;
+            pane.addEventListener('scroll', () => window.sectionScrollPositions.push(pane.scrollTop));
+            pane.addEventListener('scrollend', () => { window.sectionScrollEnded = true; });
+        }""")
+        await self.page.locator('#review nav a[href="#review-2"]').click()
+        await self.page.wait_for_function("window.sectionScrollEnded")
+        result = await self.page.evaluate("""() => {
+            const pane = document.getElementById('review-sections');
+            const section = document.getElementById('review-2');
+            return {
+                hash: location.hash,
+                positions: window.sectionScrollPositions,
+                pane: pane.getBoundingClientRect().toJSON(),
+                section: section.getBoundingClientRect().toJSON(),
+            };
+        }""")
+        self.assertEqual(result["hash"], "#review-2")
+        self.assertGreater(len(set(result["positions"])), 1)
+        self.assertGreaterEqual(result["section"]["top"], result["pane"]["top"])
+        self.assertLessEqual(result["section"]["bottom"], result["pane"]["bottom"])
+
+    async def test_section_scrolling_respects_reduced_motion(self) -> None:
+        await self.page.emulate_media(reduced_motion="reduce")
+        await self.page.evaluate("""() => {
+            document.getElementById('review-sections').insertAdjacentHTML('beforeend',
+                '<div style="height: 1500px"></div><section id="review-2"><h2>Methods</h2></section>'
+                + '<div style="height: 1000px"></div>');
+            document.querySelector('#review nav ul').insertAdjacentHTML('beforeend',
+                '<li><a href="#review-2">Methods</a></li>');
+        }""")
+        behavior = await self.page.locator("#review-sections").evaluate(
+            "pane => getComputedStyle(pane).scrollBehavior",
+        )
+        self.assertEqual(behavior, "auto")
+        await self.page.locator('#review nav a[href="#review-2"]').click()
+        await self.page.wait_for_function("""() => {
+            const pane = document.getElementById('review-sections').getBoundingClientRect();
+            const section = document.getElementById('review-2').getBoundingClientRect();
+            return section.top >= pane.top && section.bottom <= pane.bottom;
+        }""")
+        self.assertEqual(await self.page.evaluate("location.hash"), "#review-2")
 
     async def test_clicked_section_link_is_highlighted(self) -> None:
         link = self.page.locator("#review nav a")

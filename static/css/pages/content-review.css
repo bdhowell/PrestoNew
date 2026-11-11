@@ -135,6 +135,16 @@
   padding: 0 1rem 1rem;
 }
 
+#review-sections {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #review-sections {
+    scroll-behavior: auto;
+  }
+}
+
 #review-divider {
   position: relative;
   background-color: #2f2766;
