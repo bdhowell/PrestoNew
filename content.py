@@ -148,6 +148,12 @@ class Source:
 
 
 @dataclass(frozen=True)
+class GraphicSource:
+    sid: int
+    filename: str
+
+
+@dataclass(frozen=True)
 class GraphicEvaluationSource:
     sid: int
     filename: str
@@ -665,6 +671,21 @@ class SourceStore(PosterStore):
         if row is None or not row[0]:
             return None
         return await run_in_threadpool(SourceFiles().read, row[0]), row[1]
+
+    async def graphic_sources(self, uid: int, pid: int) -> list[GraphicSource]:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT s.sid, coalesce(s.filename, parent.filename, 'Untitled source') "
+                "FROM source s JOIN poster p USING (pid) "
+                "LEFT JOIN source parent ON parent.sid = s.parent "
+                "WHERE p.uid = %s AND p.pid = %s AND s.width IS NOT NULL "
+                "AND s.height IS NOT NULL AND s.storage_uri IS NOT NULL "
+                "AND s.mimetype IN ('image/png', 'image/jpeg') "
+                "AND s.kind <> 'thumbnail' "
+                "ORDER BY (s.parent IS NOT NULL), s.sid", (uid, pid),
+            )
+            return [GraphicSource(*row) for row in await cursor.fetchall()]
 
     async def evaluation_sources(self, uid: int, pid: int) -> list[GraphicEvaluationSource]:
         connection = await self._connect()

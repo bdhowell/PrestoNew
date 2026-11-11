@@ -435,6 +435,14 @@ Give the user the ability to navigate through sections and make adjustments as n
 Borrow the text editing interface to support dynamic updates and user interactions for each section.
 Clicking in a section will allow you to edit its content directly.
 
+Sections and the selected draft's uploaded and extracted source graphics appear
+side by side in independently scrollable panes. A narrow vertical divider resizes
+the panes by dragging or with the Left/Right arrow keys (Shift for larger steps).
+Home and End select the 20% and 80% section-width limits. When there are no source
+graphics, the graphics pane displays an explicit empty message.
+Loading these previews uses source identifiers and filenames only, not the
+optional graphic evaluation columns or evaluation results.
+
 After elucidation the review page loads the selected draft's saved sections and
 autosaves edits. Continue waits for outstanding saves before opening
 `/conferences/query`. Failed saves can be retried. Wikkit accepts feedback

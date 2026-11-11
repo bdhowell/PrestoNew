@@ -10,6 +10,8 @@
     const reject = document.getElementById("revision-reject");
     const revisionStatus = document.getElementById("revision-status");
     const sectionNavigation = root.querySelector("nav[aria-label='Poster sections']");
+    const panes = document.getElementById("review-panes");
+    const divider = document.getElementById("review-divider");
     const editors = [...root.querySelectorAll(".content[contenteditable='true'][data-section]")];
     const username = root.dataset.username || "Friend";
     document.execCommand("defaultParagraphSeparator", false, "p");
@@ -21,6 +23,48 @@
     let revisionTimer = null;
     let proposal = null;
     let accepting = false;
+    let resizePointer = null;
+
+    function resizePanes(value) {
+        const share = Math.max(20, Math.min(80, value));
+        panes.style.setProperty("--review-sections-width", `${share}fr`);
+        panes.style.setProperty("--review-graphics-width", `${100 - share}fr`);
+        divider.setAttribute("aria-valuenow", String(Math.round(share)));
+        divider.setAttribute("aria-valuetext",
+            `Sections ${Math.round(share)}%, source graphics ${100 - Math.round(share)}%`);
+    }
+
+    divider.addEventListener("pointerdown", event => {
+        if (event.button !== 0 || resizePointer !== null) return;
+        resizePointer = event.pointerId;
+        divider.setPointerCapture(event.pointerId);
+        divider.focus();
+        event.preventDefault();
+    });
+    divider.addEventListener("pointermove", event => {
+        if (resizePointer !== event.pointerId) return;
+        const width = panes.clientWidth - divider.offsetWidth;
+        const offset = event.clientX - panes.getBoundingClientRect().left - panes.clientLeft
+            - divider.offsetWidth / 2;
+        resizePanes(offset / width * 100);
+    });
+    function finishResize(event) {
+        if (resizePointer !== event.pointerId) return;
+        resizePointer = null;
+        if (divider.hasPointerCapture(event.pointerId)) divider.releasePointerCapture(event.pointerId);
+    }
+    divider.addEventListener("pointerup", finishResize);
+    divider.addEventListener("pointercancel", finishResize);
+    divider.addEventListener("lostpointercapture", finishResize);
+    divider.addEventListener("keydown", event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        const current = Number(divider.getAttribute("aria-valuenow"));
+        const step = event.shiftKey ? 10 : 1;
+        const value = event.key === "Home" ? 20 : event.key === "End" ? 80
+            : current + (event.key === "ArrowLeft" ? -step : step);
+        resizePanes(value);
+        event.preventDefault();
+    });
 
     function announceSaveFailure() {
         const name = document.createElement("span");

@@ -478,10 +478,11 @@ async def review_page(request: Request) -> Response:
     try:
         uid, pid = await selected_draft(request)
         saved, _ = await posters.store().content(uid, pid)
+        graphics = await content.store().graphic_sources(uid, pid)
         await common.resume(request)
     except STORAGE_ERRORS:
-        logger.exception("Could not load poster sections for review")
-        raise HTTPException(503, "Your sections could not be loaded. Please try again.") from None
+        logger.exception("Could not load poster sections and graphics for review")
+        raise HTTPException(503, "Your sections and graphics could not be loaded. Please try again.") from None
     values = dict(saved)
     response = render_page(
         request, "content/review.html", "content-review",
@@ -494,6 +495,7 @@ async def review_page(request: Request) -> Response:
         ),
         pid=pid,
         next_page="/layout/edit",
+        graphics=graphics,
         sections=[
             (which, label, Markup(elucidation.clean_html(values.get(which, ""))))
             for which, label in REVIEW_SECTIONS

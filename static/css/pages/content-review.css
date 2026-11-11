@@ -115,14 +115,68 @@
   box-shadow: 0 0 0 2px #fff;
 }
 
-#review-sections {
+#review-panes {
+  display: grid;
+  grid-template-columns: minmax(0, var(--review-sections-width, 1fr)) 10px minmax(0, var(--review-graphics-width, 1fr));
+  box-sizing: border-box;
   height: min(70vh, 45rem);
-  overflow: auto;
+  overflow: hidden;
   border: 1px solid #8e85c2;
   border-radius: 0.5rem;
   background-color: rgba(24, 20, 80, 0.94);
-  padding: 0rem 1rem 1rem 1rem;
   margin-bottom: 1rem;
+}
+
+#review-sections,
+#review-graphics {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 1rem 1rem;
+}
+
+#review-divider {
+  position: relative;
+  background-color: #2f2766;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+#review-divider::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 2rem;
+  background-color: #bdb8d8;
+  border-radius: 1px;
+  transform: translate(-50%, -50%);
+  content: "";
+}
+
+#review-divider:hover,
+#review-divider:focus-visible {
+  background-color: #514080;
+}
+
+#review-divider:focus-visible {
+  outline: 2px solid #bdb8d8;
+  outline-offset: -2px;
+}
+
+#review-graphics figure {
+  margin: 0 0 1.5rem;
+}
+
+#review-graphics img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#review-graphics figcaption {
+  overflow-wrap: anywhere;
 }
 
 #review-sections section {
@@ -130,7 +184,8 @@
   margin-bottom: 1.5rem;
 }
 
-#review-sections h2 {
+#review-sections h2,
+#review-graphics h2 {
   margin-bottom: 0.25rem;
   color: #bfbfbf;
   font: 1.5rem aladin, sans-serif;

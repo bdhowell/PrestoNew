@@ -505,6 +505,30 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ORDER BY s.added, s.sid", statement)
         self.assertEqual(params, (7, 11))
 
+    async def test_graphic_previews_do_not_require_evaluation_columns(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        connection.execute.return_value.fetchall.return_value = [
+            (21, "chart.png"), (22, "paper figure.jpg"),
+        ]
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            items = await store.graphic_sources(7, 11)
+        self.assertEqual(items, [
+            content.GraphicSource(21, "chart.png"), content.GraphicSource(22, "paper figure.jpg"),
+        ])
+        statement, params = connection.execute.await_args.args
+        self.assertNotIn("evaluation", statement)
+        self.assertNotIn("s.hash", statement)
+        self.assertIn("p.uid = %s AND p.pid = %s", statement)
+        self.assertIn("s.width IS NOT NULL", statement)
+        self.assertIn("s.height IS NOT NULL", statement)
+        self.assertIn("s.storage_uri IS NOT NULL", statement)
+        self.assertIn("s.mimetype IN ('image/png', 'image/jpeg')", statement)
+        self.assertIn("s.kind <> 'thumbnail'", statement)
+        self.assertIn("coalesce(s.filename, parent.filename, 'Untitled source')", statement)
+        self.assertIn("ORDER BY (s.parent IS NOT NULL), s.sid", statement)
+        self.assertEqual(params, (7, 11))
+
     async def test_thumbnail_replacement_does_not_require_evaluation_columns(self) -> None:
         store = content.SourceStore()
         connection = AsyncMock()

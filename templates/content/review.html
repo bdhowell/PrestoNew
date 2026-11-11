@@ -17,14 +17,31 @@
         </ul>
     </nav>
     <div class="review-main">
-        <div id="review-sections" tabindex="0" aria-label="Scrollable poster sections">
-            {% for which, label, content in sections %}
-            <section id="review-{{ loop.index }}" aria-labelledby="review-heading-{{ loop.index }}">
-                <h2 id="review-heading-{{ loop.index }}">{{ label }}</h2>
-                <div class="content" contenteditable="true" role="textbox" aria-multiline="true"
-                     aria-labelledby="review-heading-{{ loop.index }}" data-section="{{ which }}">{{ content }}</div>
+        <div id="review-panes">
+            <div id="review-sections" tabindex="0" aria-label="Scrollable poster sections">
+                {% for which, label, content in sections %}
+                <section id="review-{{ loop.index }}" aria-labelledby="review-heading-{{ loop.index }}">
+                    <h2 id="review-heading-{{ loop.index }}">{{ label }}</h2>
+                    <div class="content" contenteditable="true" role="textbox" aria-multiline="true"
+                         aria-labelledby="review-heading-{{ loop.index }}" data-section="{{ which }}">{{ content }}</div>
+                </section>
+                {% endfor %}
+            </div>
+            <div id="review-divider" role="separator" tabindex="0" aria-orientation="vertical"
+                 aria-label="Resize sections and source graphics" aria-controls="review-sections review-graphics"
+                 aria-valuemin="20" aria-valuemax="80" aria-valuenow="50"
+                 aria-valuetext="Sections 50%, source graphics 50%"></div>
+            <section id="review-graphics" tabindex="0" aria-labelledby="review-graphics-heading">
+                <h2 id="review-graphics-heading">Source graphics</h2>
+                {% for graphic in graphics %}
+                <figure>
+                    <img src="/content/{{ graphic.sid }}/image" alt="{{ graphic.filename }}" loading="lazy">
+                    <figcaption>{{ graphic.filename }}</figcaption>
+                </figure>
+                {% else %}
+                <p>No source graphics are available for this poster.</p>
+                {% endfor %}
             </section>
-            {% endfor %}
         </div>
     </div>
 </div>
