@@ -117,7 +117,7 @@
   overflow: auto;
   border: 1px solid #8e85c2;
   border-radius: 0.5rem;
-  background: rgba(24, 20, 48, 1);
+  background-color: rgba(24, 20, 80, 0.94);
   padding: 0rem 1rem 1rem 1rem;
   margin-bottom: 1rem;
 }
