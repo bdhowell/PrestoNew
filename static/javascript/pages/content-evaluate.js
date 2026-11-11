@@ -11,6 +11,13 @@
     let leaving = false;
     let terminalEventReceived = false;
     let controller = null;
+    class EvaluationInterruptedError extends Error {}
+    function rethrowConnectionError(error) {
+        if (error instanceof TypeError) {
+            throw new EvaluationInterruptedError("Evaluation connection was interrupted.", {cause: error});
+        }
+        throw error;
+    }
     const categoryOrder = {uploaded: 0, extracted: 1};
     const ratings = ["none", "weakly", "somewhat", "significantly", "highly", "definitively"];
 
@@ -98,8 +105,17 @@
             window.wikkit.execute({does: "redirect", payload: "/conferences/query"});
         } else if (event.type === "progress") {
             status.textContent = `I am reviewing image ${event.current} of ${event.total}.`;
+            const response = [
+                'I&rsquo;m reviewing graphic',
+                'I&rsquo;m looking at graphic',
+                'Now I&rsquo;m reviewing graphic',
+                'I&rsquo;m considering graphic',
+                'I am thinking about graphic',
+                'I am making progress. I am on graphic',
+                'It&rsquo;s worth the wait, I promise. I&rsquo;m on graphic',
+            ][Math.floor(Math.random() * 7)];
             await window.wikkit.say(
-                `<p>Processing image ${event.current_word} of ${event.total_word}.</p>`,
+                `<p>${response} ${event.current_word} of ${event.total_word}.</p>`,
             );
         } else if (event.type === "result") {
             results.set(event.source.sid, event);
@@ -119,7 +135,7 @@
         }
     }
 
-    async function evaluate() {
+    async function evaluate(attempt = 0) {
         if (running) return;
         running = true;
         retry.hidden = true;
@@ -134,7 +150,7 @@
                 headers: {"Content-Type": "application/json"},
                 body: "{}",
                 signal: controller.signal,
-            });
+            }).catch(rethrowConnectionError);
             if (!response.ok) {
                 let detail = "Your graphics could not be evaluated.";
                 try {
@@ -149,7 +165,7 @@
             const decoder = new TextDecoder();
             let buffer = "";
             while (true) {
-                const {done, value} = await reader.read();
+                const {done, value} = await reader.read().catch(rethrowConnectionError);
                 buffer += decoder.decode(value || new Uint8Array(), {stream: !done});
                 const lines = buffer.split("\n");
                 buffer = lines.pop();
@@ -160,10 +176,27 @@
             }
             if (buffer.trim()) await consumeEvent(JSON.parse(buffer));
             if (!terminalEventReceived) {
-                throw new Error("The evaluation stream ended before all graphics were processed.");
+                throw new EvaluationInterruptedError("Evaluation connection ended without a completion event.");
             }
         } catch (error) {
             if (!leaving && error.name !== "AbortError") {
+                if (error instanceof EvaluationInterruptedError) {
+                    if (attempt < 2) {
+                        console.warn("Reconnecting interrupted graphic evaluation", error);
+                        status.textContent = "Reconnecting to finish evaluating your graphics...";
+                        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+                        if (!leaving) {
+                            running = false;
+                            await evaluate(attempt + 1);
+                        }
+                        return;
+                    }
+                    console.error("Graphic evaluation could not reconnect", error);
+                    error = new Error(
+                        "I couldn't finish evaluating your graphics because the connection was interrupted. "
+                        + "Please try again; completed evaluations have been saved.",
+                    );
+                }
                 console.error("Graphic evaluation failed", error);
                 status.textContent = error.message;
                 render();
@@ -177,7 +210,7 @@
         }
     }
 
-    retry.addEventListener("click", evaluate);
+    retry.addEventListener("click", () => evaluate());
     window.addEventListener("pagehide", () => {
         leaving = true;
         controller?.abort();

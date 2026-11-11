@@ -14,18 +14,13 @@
 
 .graphic-evaluation {
     display: grid;
-    grid-template-columns: minmax(8rem, 0.4fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.5rem 1rem;
     padding: 1rem;
     border: 1px solid #8e85c2;
     border-radius: 0.5rem;
     background: #fff;
     color: #222;
-}
-
-.graphic-evaluation > h3,
-.graphic-evaluation > .evaluation-verdict {
-    grid-column: 1 / -1;
 }
 
 .graphic-evaluation img {
@@ -50,15 +45,4 @@
 
 .evaluation-verdict.not-suitable {
     color: #9c2929;
-}
-
-@media (max-width: 40rem) {
-    .graphic-evaluation {
-        grid-template-columns: minmax(0, 1fr);
-    }
-
-    .graphic-evaluation > h3,
-    .graphic-evaluation > .evaluation-verdict {
-        grid-column: auto;
-    }
 }

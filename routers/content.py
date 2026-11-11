@@ -318,7 +318,7 @@ async def evaluate_page(request: Request) -> Response:
         )
     message = (
         f"<p>Okay, {name}, I&rsquo;m reviewing the {' and '.join(parts)}.</p>"
-        "<p>Give me a few more moments to evaluate them.</p>"
+        "<p>Please give me a few minutes to evaluate them.</p>"
         if parts else None
     )
     return render_page(

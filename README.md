@@ -76,6 +76,8 @@ has an evaluation matching the current source text and poster sections. Otherwis
 it evaluates pending graphics and offers the section review page when finished.
 `/content/evaluate` is its own resumption page: returning after an interruption
 reuses saved evaluations and finishes the remaining graphics.
+Interrupted connections are retried automatically twice before offering a manual
+retry; saved evaluations are reused on each attempt.
 
 The current draft's stored PNG thumbnail appears in both List and Large
 thumbnails views. Opening the poster list refreshes it when the poster or its
