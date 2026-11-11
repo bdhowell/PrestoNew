@@ -74,7 +74,7 @@ class ContentRouteTests(unittest.TestCase):
         self.sources.list_sources.assert_awaited_once_with(7, 11)
 
     def test_content_pages_save_the_requested_resumption_url(self) -> None:
-        for path in ("/content/upload", "/content/extract", "/content/elucidate"):
+        for path in ("/content/upload", "/content/extract", "/content/elucidate", "/content/evaluate"):
             for query in ("tag=a%2Fb&tag=two", "tag=a%2Fb&tag=two&xyzzy=arpa"):
                 with self.subTest(path=path, query=query):
                     self.posters.set_resumption.reset_mock()
@@ -363,7 +363,7 @@ class ContentRouteTests(unittest.TestCase):
         self.uid = None
         self.assertEqual(self.client.post("/content/evaluate/11", json={}).status_code, 401)
 
-    def test_graphic_evaluation_reuses_saved_results_for_the_current_content(self) -> None:
+    def test_graphic_evaluation_skips_to_layout_for_current_saved_results(self) -> None:
         evaluation_result = {"image_analysis": {}, "evaluations": {}}
         expected_hash = content.graphic_evaluation_hash(
             "fingerprint", "No Materials and Methods text was provided.",
@@ -381,9 +381,101 @@ class ContentRouteTests(unittest.TestCase):
         with patch.object(routes.openai, "OpenAI") as openai_client:
             response = self.client.post("/content/evaluate/11", json={})
         events = [json.loads(line) for line in response.text.splitlines()]
-        self.assertEqual([event["type"] for event in events], ["start", "result", "complete"])
-        self.assertEqual(events[1]["evaluation"], evaluation_result)
+        self.assertEqual([event["type"] for event in events], ["start", "already-evaluated"])
         openai_client.assert_not_called()
+        self.sources.graphic_source.assert_not_awaited()
+        self.sources.save_graphic_evaluation.assert_not_awaited()
+
+    def test_graphic_evaluation_reuses_current_results_and_reevaluates_stale_results(self) -> None:
+        evaluation_result = {"image_analysis": {}, "evaluations": {}}
+        expected_hash = content.graphic_evaluation_hash(
+            "fingerprint", "No Materials and Methods text was provided.",
+            "No Results text was provided.", None,
+        )
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(
+                1, "saved.png", "image/png", None, evaluation_result, None, expected_hash,
+            ),
+            content.GraphicEvaluationSource(
+                2, "stale.png", "image/png", None, evaluation_result, None, "outdated",
+            ),
+        ]
+        self.sources.source_text.return_value = content.SourceText(
+            1, "Original research context", "fingerprint", 27,
+        )
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (b"image-bytes", "image/png")
+        self.sources.save_graphic_evaluation.return_value = True
+        with patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.graphic_evaluation, "evaluate_image",
+            return_value=Mock(model_dump=Mock(return_value=evaluation_result)),
+        ) as evaluate:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual([event["type"] for event in events], [
+            "start", "result", "progress", "result", "complete",
+        ])
+        self.assertEqual(events[1]["source"]["sid"], 1)
+        self.assertEqual(events[3]["source"]["sid"], 2)
+        evaluate.assert_called_once()
+        self.sources.graphic_source.assert_awaited_once_with(7, 11, 2)
+        self.sources.save_graphic_evaluation.assert_awaited_once_with(
+            7, 11, 2, evaluation_result, expected_hash,
+        )
+
+    def test_resumed_evaluation_finishes_only_graphics_not_saved_before_interruption(self) -> None:
+        evaluation_result = {"image_analysis": {}, "evaluations": {}}
+        expected_hash = content.graphic_evaluation_hash(
+            "fingerprint", "No Materials and Methods text was provided.",
+            "No Results text was provided.", None,
+        )
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(
+                sid, f"image-{sid}.png", "image/png", None, None, None, None,
+            )
+            for sid in (1, 2)
+        ]
+        self.sources.source_text.return_value = content.SourceText(
+            1, "Original research context", "fingerprint", 27,
+        )
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (b"image-bytes", "image/png")
+
+        async def save_result(uid, pid, sid, result, fingerprint):
+            self.sources.evaluation_sources.return_value[sid - 1] = content.GraphicEvaluationSource(
+                sid, f"image-{sid}.png", "image/png", None, result, None, fingerprint,
+            )
+            return True
+
+        self.sources.save_graphic_evaluation.side_effect = save_result
+        parsed = Mock(model_dump=Mock(return_value=evaluation_result))
+        with patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.graphic_evaluation, "evaluate_image",
+            side_effect=[parsed, RuntimeError("Interrupted")],
+        ), self.assertLogs("routers.content", "ERROR"):
+            response = self.client.post("/content/evaluate/11", json={})
+        self.assertEqual(json.loads(response.text.splitlines()[-1])["type"], "error")
+        self.sources.save_graphic_evaluation.assert_awaited_once_with(
+            7, 11, 1, evaluation_result, expected_hash,
+        )
+
+        self.posters.set_resumption.reset_mock()
+        response = self.client.get("/content/evaluate?xyzzy=arpa")
+        self.assertEqual(response.status_code, 200)
+        self.posters.set_resumption.assert_awaited_once_with(
+            7, 11, "http://testserver/content/evaluate?xyzzy=arpa",
+        )
+        self.sources.graphic_source.reset_mock()
+        with patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.graphic_evaluation, "evaluate_image", return_value=parsed,
+        ) as evaluate:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual([event["type"] for event in events], [
+            "start", "result", "progress", "result", "complete",
+        ])
+        self.sources.graphic_source.assert_awaited_once_with(7, 11, 2)
+        evaluate.assert_called_once()
 
     def test_source_image_route_is_owner_checked_and_private(self) -> None:
         self.sources.graphic_source.return_value = (b"image-bytes", "image/png")

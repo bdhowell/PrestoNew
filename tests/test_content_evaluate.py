@@ -39,6 +39,7 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
                 });
             };
         }""", events)
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/common.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/pages/content-evaluate.js"))
 
     async def test_results_are_grouped_and_suitability_uses_either_section(self) -> None:
@@ -89,9 +90,22 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             "Suitable for the poster.", "Not suitable for the poster.",
         ])
         self.assertEqual(await self.page.locator("#evaluation-status").text_content(),
-                         "Evaluation complete: 1 suitable and 1 not suitable.")
+                         "Evaluation complete: one suitable and one not suitable.")
         self.assertFalse(await self.page.locator("#continue-review").is_hidden())
+        self.assertEqual(await self.page.evaluate("commands"), [])
         self.assertIn("Processing image one of two.", await self.page.evaluate("messages.join(' ')"))
+
+    async def test_already_evaluated_graphics_redirect_to_layout(self) -> None:
+        await self.load_page([
+            {"type": "start", "total": 2, "uploaded": 1, "extracted": 1},
+            {"type": "already-evaluated"},
+        ])
+        self.assertEqual(await self.page.evaluate("commands"), [
+            {"does": "redirect", "payload": "/layout/edit"},
+        ])
+        self.assertTrue(await self.page.locator("#continue-review").is_hidden())
+        self.assertTrue(await self.page.locator("#retry-evaluation").is_hidden())
+        self.assertEqual(await self.page.evaluate("messages"), [])
 
     async def test_no_graphics_message_redirects_to_conference_query(self) -> None:
         await self.load_page([{"type": "start", "total": 0, "uploaded": 0, "extracted": 0},

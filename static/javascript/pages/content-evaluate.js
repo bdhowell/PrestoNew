@@ -86,7 +86,10 @@
     }
 
     async function consumeEvent(event) {
-        if (event.type === "empty") {
+        if (event.type === "already-evaluated") {
+            terminalEventReceived = true;
+            window.wikkit.execute({does: "redirect", payload: "/layout/edit"});
+        } else if (event.type === "empty") {
             terminalEventReceived = true;
             await window.wikkit.say(
                 "<p>Well, that was quick! I didn&rsquo;t find any graphics to evaluate. "
@@ -110,8 +113,8 @@
             status.textContent = `Evaluation complete: ${numberToWords(count)} suitable and ${numberToWords(unsuitable)} not suitable.`;
             next.hidden = false;
             await window.wikkit.say(
-                `<p>I&rsquo;ve finished evaluating the graphics. ${count} may be useful for the poster; `
-                    + `${unsuitable} may need a different image.</p>`,
+                `<p>I&rsquo;ve finished evaluating your graphics. ${numberToWords(count)} may be useful for your poster; `
+                    + `${numberToWords(unsuitable)} have only minimal relevance.</p>`,
             );
         }
     }

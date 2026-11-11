@@ -381,6 +381,9 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
             if not graphics:
                 yield json.dumps({"type": "empty"}) + "\n"
                 return
+            if not pending:
+                yield json.dumps({"type": "already-evaluated"}) + "\n"
+                return
 
             for graphic in graphics:
                 if (
@@ -398,7 +401,7 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                     }, ensure_ascii=False) + "\n"
 
             for index, graphic in enumerate(graphics, start=1):
-                if graphic.evaluation is not None:
+                if graphic not in pending:
                     continue
                 yield json.dumps({
                     "type": "progress",

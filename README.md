@@ -71,6 +71,12 @@ psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-evaluati
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-thumbnail.sql
 ```
 
+The graphics evaluation page skips to `/layout/edit` when every graphic already
+has an evaluation matching the current source text and poster sections. Otherwise,
+it evaluates pending graphics and offers the section review page when finished.
+`/content/evaluate` is its own resumption page: returning after an interruption
+reuses saved evaluations and finishes the remaining graphics.
+
 The current draft's stored PNG thumbnail appears in both List and Large
 thumbnails views. Opening the poster list refreshes it when the poster or its
 sources are newer. Thumbnails preserve the saved poster aspect ratio inside a
