@@ -15,6 +15,9 @@
   list-style: none;
 }
 
+#review nav li {
+  margin-bottom: 0.5rem;
+}
 #review nav a:link,
 #review nav a:visited,
 #review nav a:hover,
