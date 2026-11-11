@@ -6,6 +6,7 @@
     let deadline = null;
     let expiryTimer = null;
     let checking = false;
+    let activityPending = false;
     let stopped = false;
     let name = "Friend";
     const warnings = new Map();
@@ -34,9 +35,12 @@
         if (checking || stopped) return;
         checking = true;
         const started = Date.now();
+        const activity = activityPending;
+        activityPending = false;
         try {
             const response = await fetch("/system/timecheck", {
                 credentials: "same-origin", cache: "no-store",
+                headers: activity ? { "X-Session-Activity": "1" } : {},
                 signal: AbortSignal.timeout(10000),
             });
             if (stopped) return;
@@ -73,6 +77,7 @@
                 }
             }
         } catch (error) {
+            if (activity) activityPending = true;
             console.error("Could not check the session expiry.", error);
             if (deadline !== null && Date.now() >= deadline) logout();
         } finally {
@@ -82,6 +87,11 @@
 
     const poll = setInterval(check, 60000);
     check();
+    for (const event of ["mousemove", "click", "touchstart", "keydown"]) {
+        document.addEventListener(event, () => {
+            activityPending = true;
+        }, { passive: true });
+    }
     window.addEventListener("pagehide", () => {
         stopped = true;
         clearInterval(poll);

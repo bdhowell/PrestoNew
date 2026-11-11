@@ -123,6 +123,24 @@ class SessionMiddlewareTests(unittest.TestCase):
             self.assertEqual(response.headers["cache-control"], "no-store")
         self.store.save.assert_not_awaited()
 
+    def test_active_timecheck_renews_and_returns_the_new_expiry(self) -> None:
+        def renew(session: Session, *, renew: bool = False) -> None:
+            self.assertTrue(renew)
+            session.expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+        self.store.save.side_effect = renew
+        response = self.client.get(
+            "/system/timecheck", headers={"X-Session-Activity": "1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.store.save.assert_awaited_once_with(self.session, renew=True)
+        self.assertGreater(
+            response.json()["expires_at"],
+            (datetime.now(timezone.utc) - timedelta(seconds=1)).timestamp(),
+        )
+        self.assertIn("set-cookie", response.headers)
+
     def test_expired_unknown_or_missing_session_redirects_without_saving(self) -> None:
         for version, expiry in (
             (0, datetime.now(timezone.utc) + timedelta(minutes=10)),
@@ -266,6 +284,12 @@ class SessionBackendTests(unittest.TestCase):
             self.assertGreater(response.json()["remaining_seconds"], 29)
             self.assertLessEqual(response.json()["remaining_seconds"], 30)
         self.assertLessEqual(self.redis.pttl(key), 30000)
+        response = client.get(
+            "/system/timecheck", headers={"X-Session-Activity": "1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertGreater(self.redis.pttl(key), 590000)
+        self.assertIn("set-cookie", response.headers)
         self.assertEqual(client.get("/state").status_code, 200)
         after = run_async(self.store.load(identifier))
         self.assertEqual(after.version, before.version)

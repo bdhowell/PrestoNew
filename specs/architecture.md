@@ -13,10 +13,10 @@ Sessions are managed with Redis (locally installed).
 # Session Management
 
 Sessions expire after {SESSION_MAX_AGE} seconds without a cookie-bearing HTTP
-response. Each such response renews both the PostgreSQL expiry and the session
-cookie lifetime, including read-only requests. Static assets and WebSocket
-traffic do not renew sessions. Renewal does not change the session data version
-or revive an already expired session.
+response. Normal HTTP responses renew both the Redis expiry and the session
+cookie lifetime; `/system/timecheck` renews only when marked by recent client
+activity. Static assets and WebSocket traffic do not renew sessions. Renewal
+does not change the session data version or revive an already expired session.
 Users are notified of incipient session expiration at {SESSION_EXPIRATION_NOTIFICATION=480}.
 When a session is terminated, the session's associated chat websocket must also be closed with an appropriate message.
 

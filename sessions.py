@@ -235,6 +235,11 @@ class RedisSessionMiddleware:
                 "reason": "Load a page over HTTP to establish a session first",
             })
             return
+        renew_timecheck = (
+            scope["type"] == "http" and path == "/system/timecheck"
+            and connection.headers.get("x-session-activity") == "1"
+            and session.version != 0
+        )
         scope["session"] = session.data
         scope["server_session"] = session
         scope["session_monitor"] = True
@@ -244,7 +249,7 @@ class RedisSessionMiddleware:
                 if path != "/system/timecheck":
                     await store.save(session, renew=True)
                 headers = MutableHeaders(scope=message)
-                if path != "/system/timecheck":
+                if path != "/system/timecheck" or renew_timecheck:
                     headers.append("set-cookie", self._cookie(session))
                 headers["cache-control"] = "no-store"
                 headers.add_vary_header("Cookie")
@@ -258,6 +263,8 @@ class RedisSessionMiddleware:
                     await store.save(session)
         else:
             try:
+                if renew_timecheck:
+                    await store.save(session, renew=True)
                 await self.app(scope, receive, send_with_session)
             except SessionConflictError:
                 logger.warning("Concurrent or expired HTTP session write rejected")

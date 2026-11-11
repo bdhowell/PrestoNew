@@ -135,7 +135,9 @@ PostgreSQL or accepting an unverified session.
 `SESSION_MAX_AGE` (seconds, default 600) is an inactivity timeout: normal HTTP
 requests renew it. `/system/timecheck` validates the HttpOnly session cookie and
 returns `remaining_seconds`, `expires_at` (Unix seconds), and the display `name`
-without renewing or creating a session. Missing/expired sessions redirect to
+without renewing or creating a session by default. A timecheck marked with
+`X-Session-Activity: 1` renews a live session after mouse movement, clicking,
+touching, or a key press. Missing/expired sessions redirect to
 `/account/signout`. Both `/account/signout` forms show Wikkit's personalized
 expiry notice, clear session cookies, and do not start a new session.
 Wikkit waits locally for the `login` button, which opens `/account/signin` just
