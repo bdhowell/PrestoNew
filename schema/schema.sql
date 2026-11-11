@@ -171,6 +171,12 @@ CREATE INDEX idx_source_embedding_ivfflat ON source
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 
+CREATE TYPE section_which AS ENUM(
+    'title', 'abstract', 'introduction', 'materials and methods', 'results',
+    'conclusion', 'future plans', 'literature cited', 'additional information',
+    'acknowledgements'
+);
+
 CREATE TABLE assessment (
     aid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
@@ -195,12 +201,6 @@ CREATE TABLE authors (
 );
 
 CREATE INDEX idx_authors_pid ON authors (pid);
-
-CREATE TYPE section_which AS ENUM(
-    'title', 'abstract', 'introduction', 'materials and methods', 'results',
-    'conclusion', 'future plans', 'literature cited', 'additional information',
-    'acknowledgements'
-);
 
 CREATE TABLE section (
     xid         SERIAL PRIMARY KEY,
