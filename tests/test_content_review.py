@@ -502,6 +502,38 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
             "heading": "rgb(244, 211, 94)",
         })
 
+    async def test_section_interaction_highlights_corresponding_link(self) -> None:
+        await self.page.evaluate("""() => {
+            document.querySelector('#review nav ul').insertAdjacentHTML('beforeend',
+                '<li><a href="#review-2">Methods</a></li>');
+            document.getElementById('review-sections').insertAdjacentHTML('beforeend',
+                '<section id="review-2"><h2>Methods</h2>'
+                + '<div class="content" contenteditable="true"><p>Methods text</p></div></section>');
+        }""")
+        first = self.page.locator('#review nav a[href="#review-1"]')
+        second = self.page.locator('#review nav a[href="#review-2"]')
+        first_heading = self.page.locator("#review-1 > h2")
+        second_heading = self.page.locator("#review-2 > h2")
+        await first.click()
+        self.assertEqual(await first_heading.evaluate("heading => getComputedStyle(heading).color"), "rgb(244, 211, 94)")
+        await self.page.locator("#review-2 .content p").click()
+        self.assertIsNone(await first.get_attribute("aria-current"))
+        self.assertEqual(await second.get_attribute("aria-current"), "location")
+        self.assertEqual(await second.evaluate("link => getComputedStyle(link).color"), "rgb(244, 211, 94)")
+        self.assertEqual(await first_heading.evaluate("heading => getComputedStyle(heading).color"), "rgb(191, 191, 191)")
+        self.assertEqual(await second_heading.evaluate("heading => getComputedStyle(heading).color"), "rgb(244, 211, 94)")
+        self.assertEqual(await self.page.evaluate("location.hash"), "#review-1")
+
+        await self.page.locator("#review-1 .content").focus()
+        self.assertEqual(await first.get_attribute("aria-current"), "location")
+        self.assertIsNone(await second.get_attribute("aria-current"))
+        self.assertEqual(await first_heading.evaluate("heading => getComputedStyle(heading).color"), "rgb(244, 211, 94)")
+        self.assertEqual(await second_heading.evaluate("heading => getComputedStyle(heading).color"), "rgb(191, 191, 191)")
+        await self.page.locator("#review-2 h2").click()
+        self.assertEqual(await second.get_attribute("aria-current"), "location")
+        self.assertEqual(await second_heading.evaluate("heading => getComputedStyle(heading).color"), "rgb(244, 211, 94)")
+        self.assertEqual(await self.page.locator('#review nav [aria-current="location"]').count(), 1)
+
     async def test_failed_save_is_announced_and_next_edit_saves(self) -> None:
         editor = self.page.locator(".content")
         self.fail_save = True

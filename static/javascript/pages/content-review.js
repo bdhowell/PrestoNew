@@ -74,13 +74,31 @@
             + "in a few minutes. I apology for inconveniencing you.</p>");
     }
 
-    sectionNavigation.addEventListener("click", event => {
-        const link = event.target.closest("a[href^='#review-']");
-        if (!link || !sectionNavigation.contains(link)) return;
+    const sections = document.getElementById("review-sections");
+    function selectSectionLink(link) {
         sectionNavigation.querySelector("[aria-current='location']")
             ?.removeAttribute("aria-current");
         link.setAttribute("aria-current", "location");
+        sections.querySelector("section.is-selected")?.classList.remove("is-selected");
+        const section = document.getElementById(link.getAttribute("href").slice(1));
+        if (section && section.parentElement === sections) section.classList.add("is-selected");
+    }
+
+    sectionNavigation.addEventListener("click", event => {
+        const link = event.target.closest("a[href^='#review-']");
+        if (!link || !sectionNavigation.contains(link)) return;
+        selectSectionLink(link);
     });
+
+    function selectSection(event) {
+        const section = event.target.closest("#review-sections > section[id]");
+        if (!section) return;
+        const link = [...sectionNavigation.querySelectorAll("a[href^='#review-']")]
+            .find(candidate => candidate.getAttribute("href") === `#${section.id}`);
+        if (link) selectSectionLink(link);
+    }
+    sections.addEventListener("click", selectSection);
+    sections.addEventListener("focusin", selectSection);
 
     function updateContinue() {
         next.disabled = continuing || revising || proposal !== null;
