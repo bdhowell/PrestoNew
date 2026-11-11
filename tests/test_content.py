@@ -1155,6 +1155,22 @@ class ContentDatabaseTests(unittest.TestCase):
         }
         self.assertIn("evaluation", columns)
 
+    def test_image_assessment_migration_is_repeatable(self) -> None:
+        self.connection.execute("ALTER TABLE assessment ALTER COLUMN cid SET NOT NULL")
+        migration = (ROOT / "schema/image-assessment.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        columns = dict(self.connection.execute(
+            "SELECT column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'assessment' "
+        ).fetchall())
+        self.assertEqual(columns["cid"], "YES")
+        self.assertEqual(columns["sid"], "YES")
+        self.assertIsNotNone(self.connection.execute(
+            "SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() "
+            "AND indexname = 'idx_assessment_sid_section'",
+        ).fetchone())
+
     def test_source_thumbnail_migration_is_repeatable(self) -> None:
         self.connection.execute("ALTER TABLE source DROP COLUMN updated")
         self.connection.execute("ALTER TABLE source DROP CONSTRAINT source_kind_check")
@@ -1236,7 +1252,12 @@ class ContentDatabaseTests(unittest.TestCase):
 
     def test_graphic_evaluations_persist_and_are_owner_scoped(self) -> None:
         pid, _ = asyncio.run(self.store.new_or_existing(7))
-        evaluation_result = {"evaluations": {"results": {"rating": "highly"}}}
+        evaluation_result = {"evaluations": {
+            "materials_and_methods": {
+                "rating": "significantly", "explanation": "The image shows the procedure.",
+            },
+            "results": {"rating": "highly", "explanation": "The image shows the findings."},
+        }}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "graphic.png"
             path.write_bytes(b"image")
@@ -1273,6 +1294,35 @@ class ContentDatabaseTests(unittest.TestCase):
             self.assertEqual(
                 asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation_hash,
                 expected_hash,
+            )
+            self.assertEqual(
+                self.connection.execute(
+                    "SELECT cid, sid, section::text, rating, explanation FROM assessment "
+                    "WHERE pid = %s ORDER BY aid", (pid,),
+                ).fetchall(),
+                [
+                    (None, sid, "materials and methods", "significantly", "The image shows the procedure."),
+                    (None, sid, "results", "highly", "The image shows the findings."),
+                ],
+            )
+            updated_result = {"evaluations": {
+                "materials_and_methods": {
+                    "rating": "highly", "explanation": "Updated procedure assessment.",
+                },
+                "results": {"rating": "somewhat", "explanation": "Updated findings assessment."},
+            }}
+            self.assertTrue(asyncio.run(self.store.save_graphic_evaluation(
+                7, pid, sid, updated_result, expected_hash,
+            )))
+            self.assertEqual(
+                self.connection.execute(
+                    "SELECT section::text, rating, explanation FROM assessment "
+                    "WHERE pid = %s ORDER BY section", (pid,),
+                ).fetchall(),
+                [
+                    ("materials and methods", "highly", "Updated procedure assessment."),
+                    ("results", "somewhat", "Updated findings assessment."),
+                ],
             )
             self.assertEqual(asyncio.run(self.store.evaluation_sources(8, pid)), [])
             self.assertTrue(asyncio.run(self.store.save_section(7, pid, "results", "Updated results")))

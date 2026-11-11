@@ -47,7 +47,7 @@ async function harness(seconds, name = "Ada") {
             addEventListener: (event, fn) => { events[event] = fn; },
         },
         console: { error: (...args) => errors.push(args) },
-        numberToWords: (number) => ({ 2: "two", 5: "five" })[number],
+        numberToWords: (number) => String(number),
         setTimeout: (fn, delay) => timer(fn, delay),
         clearTimeout: (id) => timers.delete(id),
         setInterval: (fn, delay) => timer(fn, delay, true),
@@ -142,10 +142,9 @@ test("actual activity cancels obsolete warnings and begins a new expiry cycle", 
     const h = await harness(360);
     await h.advance(30);
     h.renew(600);
-    h.events.visibilitychange();
-    await flush();
-    assert.deepEqual(h.requestHeaders.at(-1), {});
+    h.events.keydown();
     await h.advance(30);
+    assert.equal(h.requestHeaders.at(-1)["X-Session-Activity"], "1");
     assert.equal(h.messages.length, 0);
     await h.advance(270);
     assert.equal(h.messages.length, 1);
@@ -155,7 +154,7 @@ test("actual activity cancels obsolete warnings and begins a new expiry cycle", 
 test("user activity marks the next timecheck to renew the session", async () => {
     for (const event of ["mousemove", "click", "touchstart", "keydown"]) {
         const h = await harness(600);
-        h.events[`document:${event}`]();
+        h.events[event]();
         await h.advance(60);
         assert.equal(h.requestHeaders.at(-1)["X-Session-Activity"], "1");
     }

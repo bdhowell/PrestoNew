@@ -710,7 +710,7 @@ class SourceStore(PosterStore):
         connection = await self._connect()
         async with connection:
             cursor = await connection.execute(
-                "SELECT s.sid, s.hash FROM source s JOIN poster p USING (pid) "
+                "SELECT s.sid, s.hash, p.cid FROM source s JOIN poster p USING (pid) "
                 "WHERE p.uid = %s AND p.pid = %s AND s.sid = %s "
                 "AND s.width IS NOT NULL AND s.height IS NOT NULL "
                 "AND s.mimetype IN ('image/png', 'image/jpeg') "
@@ -734,11 +734,36 @@ class SourceStore(PosterStore):
             current_hash = graphic_evaluation_hash(snapshot.fingerprint, methods, results, row[1])
             if current_hash != expected_hash:
                 return False
+            evaluations = result.get("evaluations")
+            if not isinstance(evaluations, dict):
+                raise ValueError("Graphic evaluation must contain section evaluations.")
+            assessment_rows = []
+            for key, section in (
+                ("materials_and_methods", "materials and methods"),
+                ("results", "results"),
+            ):
+                evaluation = evaluations.get(key)
+                if not isinstance(evaluation, dict):
+                    raise ValueError(f"Graphic evaluation is missing {section}.")
+                rating = evaluation.get("rating")
+                explanation = evaluation.get("explanation")
+                if not isinstance(rating, str) or not isinstance(explanation, str):
+                    raise ValueError(f"Graphic evaluation has invalid {section} assessment.")
+                assessment_rows.append((pid, row[2], sid, section, rating, explanation))
             await connection.execute(
                 "UPDATE source SET evaluation = %s, evaluation_hash = %s "
                 "WHERE pid = %s AND sid = %s",
                 (Jsonb(result), expected_hash, pid, sid),
             )
+            for assessment in assessment_rows:
+                await connection.execute(
+                    "INSERT INTO assessment (pid, cid, sid, section, rating, explanation) "
+                    "VALUES (%s, %s, %s, %s::section_which, %s, %s) "
+                    "ON CONFLICT (sid, section) DO UPDATE SET "
+                    "pid = EXCLUDED.pid, cid = EXCLUDED.cid, rating = EXCLUDED.rating, "
+                    "explanation = EXCLUDED.explanation, created = now()",
+                    assessment,
+                )
         return True
 
 

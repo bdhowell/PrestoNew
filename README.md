@@ -69,6 +69,7 @@ evaluation and poster thumbnail sources require:
 ```sh
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-evaluation.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-thumbnail.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/image-assessment.sql
 ```
 
 The graphics evaluation page skips to `/layout/edit` when every graphic already
@@ -76,6 +77,8 @@ has an evaluation matching the current source text and poster sections. Otherwis
 it evaluates pending graphics and offers the section review page when finished.
 `/content/evaluate` is its own resumption page: returning after an interruption
 reuses saved evaluations and finishes the remaining graphics.
+Each image evaluation is recorded in `assessment` for its Materials and Methods
+and Results sections, linked to the image source; the conference is optional.
 Interrupted connections are retried automatically twice before offering a manual
 retry; saved evaluations are reused on each attempt.
 

@@ -171,10 +171,17 @@ CREATE INDEX idx_source_embedding_ivfflat ON source
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 
+CREATE TYPE section_which AS ENUM(
+    'title', 'abstract', 'introduction', 'materials and methods', 'results',
+    'conclusion', 'future plans', 'literature cited', 'additional information',
+    'acknowledgements'
+);
+
 CREATE TABLE assessment (
     aid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
-    cid         INTEGER NOT NULL REFERENCES conference(cid) ON DELETE CASCADE,
+    cid         INTEGER REFERENCES conference(cid) ON DELETE CASCADE,
+    sid         INTEGER REFERENCES source(sid) ON DELETE CASCADE,
     section     section_which NOT NULL,
     rating      TEXT NOT NULL CHECK (rating IN ('none', 'weakly', 'somewhat', 'significantly', 'highly', 'definitively')),
     explanation TEXT NOT NULL,
@@ -183,6 +190,7 @@ CREATE TABLE assessment (
 
 CREATE INDEX idx_assessment_pid ON assessment (pid);
 CREATE INDEX idx_assessment_cid ON assessment (cid);
+CREATE UNIQUE INDEX idx_assessment_sid_section ON assessment (sid, section);
 
 CREATE TABLE authors (
     aid         SERIAL PRIMARY KEY,
@@ -195,12 +203,6 @@ CREATE TABLE authors (
 );
 
 CREATE INDEX idx_authors_pid ON authors (pid);
-
-CREATE TYPE section_which AS ENUM(
-    'title', 'abstract', 'introduction', 'materials and methods', 'results',
-    'conclusion', 'future plans', 'literature cited', 'additional information',
-    'acknowledgements'
-);
 
 CREATE TABLE section (
     xid         SERIAL PRIMARY KEY,

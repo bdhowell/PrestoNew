@@ -124,6 +124,8 @@ class SessionMiddlewareTests(unittest.TestCase):
         self.store.save.assert_not_awaited()
 
     def test_active_timecheck_renews_and_returns_the_new_expiry(self) -> None:
+        previous_expiry = self.session.expires_at.timestamp()
+
         def renew(session: Session, *, renew: bool = False) -> None:
             self.assertTrue(renew)
             session.expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
@@ -135,10 +137,8 @@ class SessionMiddlewareTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.store.save.assert_awaited_once_with(self.session, renew=True)
-        self.assertGreater(
-            response.json()["expires_at"],
-            (datetime.now(timezone.utc) - timedelta(seconds=1)).timestamp(),
-        )
+        self.assertGreater(response.json()["expires_at"], previous_expiry)
+        self.assertEqual(response.json()["expires_at"], self.session.expires_at.timestamp())
         self.assertIn("set-cookie", response.headers)
 
     def test_expired_unknown_or_missing_session_redirects_without_saving(self) -> None:
