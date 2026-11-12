@@ -72,6 +72,7 @@ FORMATS = {
 IMAGE_CLASSIFICATIONS = frozenset({
     "table", "chart", "diagram", "math expression", "image",
 })
+EVALUATED_MATH_FILENAME_PREFIX = "evaluation-math-expression-"
 
 
 def source_hash(value: str | bytes) -> str:
@@ -530,9 +531,10 @@ class SourceStore(PosterStore):
     async def _insert_source(
         self, connection: psycopg.AsyncConnection, files: SourceFiles, written: list[str], pid: int,
         asset: processing.Asset, parent: int | None, summary: str = "", extracted: bool = True,
+        deduplicate: bool = True,
     ) -> Source:
         digest = source_hash(asset.data)
-        if asset.kind != "thumbnail" and (asset.width is not None or parent is not None):
+        if deduplicate and asset.kind != "thumbnail" and (asset.width is not None or parent is not None):
             cursor = await connection.execute(
                 "SELECT " + self._SOURCE_COLUMNS +
                 " FROM source s LEFT JOIN source parent ON parent.sid = s.parent "
@@ -711,101 +713,187 @@ class SourceStore(PosterStore):
         self, uid: int, pid: int, sid: int, result: dict[str, object],
         expected_hash: str,
     ) -> bool:
+        files = SourceFiles()
+        written: list[str] = []
+        obsolete: list[str] = []
         connection = await self._connect()
-        async with connection:
-            cursor = await connection.execute(
-                "SELECT s.sid, s.hash, p.cid FROM source s JOIN poster p USING (pid) "
-                "WHERE p.uid = %s AND p.pid = %s AND s.sid = %s "
-                "AND s.width IS NOT NULL AND s.height IS NOT NULL "
-                "AND s.mimetype IN ('image/png', 'image/jpeg') "
-                "AND s.kind <> 'thumbnail' "
-                "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
-                "FOR UPDATE OF p, s", (uid, pid, sid),
-            )
-            row = await cursor.fetchone()
-            if row is None:
-                return False
-            snapshot = await self.source_text(uid, pid, connection)
-            cursor = await connection.execute(
-                "SELECT which::text, content FROM section WHERE pid = %s "
-                "AND which IN ('materials and methods', 'results')", (pid,),
-            )
-            sections = dict(await cursor.fetchall())
-            methods = elucidation.plain_text(sections.get("materials and methods", "")) \
-                or "No Materials and Methods text was provided."
-            results = elucidation.plain_text(sections.get("results", "")) \
-                or "No Results text was provided."
-            current_hash = graphic_evaluation_hash(snapshot.fingerprint, methods, results, row[1])
-            if current_hash != expected_hash:
-                return False
-            evaluations = result.get("evaluations")
-            if not isinstance(evaluations, dict):
-                raise ValueError("Graphic evaluation must contain section evaluations.")
-            image_analysis = result.get("image_analysis")
-            classification = (
-                image_analysis.get("classification")
-                if isinstance(image_analysis, dict) else None
-            )
-            if (
-                not isinstance(classification, str)
-                or classification not in IMAGE_CLASSIFICATIONS
-            ):
-                raise ValueError("Graphic evaluation has invalid image classification.")
-            assessment_rows = []
-            for key, section in (
-                ("materials_and_methods", "materials and methods"),
-                ("results", "results"),
-            ):
-                evaluation = evaluations.get(key)
-                if not isinstance(evaluation, dict):
-                    raise ValueError(f"Graphic evaluation is missing {section}.")
-                rating = evaluation.get("rating")
-                explanation = evaluation.get("explanation")
-                criteria = evaluation.get("criteria")
-                supported_elements = evaluation.get("supported_elements")
-                limitations = evaluation.get("limitations")
-                suggested_improvements = evaluation.get("suggested_improvements")
-                if (
-                    not isinstance(rating, str)
-                    or not isinstance(explanation, str)
-                    or not isinstance(criteria, dict)
-                    or set(criteria) != {
-                        "relevance", "technical_accuracy", "specificity", "completeness",
-                        "evidentiary_support", "potential_for_misinterpretation",
-                    }
-                    or not all(isinstance(value, str) for value in criteria.values())
-                    or any(
-                        not isinstance(values, list)
-                        or not all(isinstance(value, str) for value in values)
-                        for values in (
-                            supported_elements, limitations, suggested_improvements,
-                        )
-                    )
-                ):
-                    raise ValueError(f"Graphic evaluation has invalid {section} assessment.")
-                assessment_rows.append((
-                    pid, row[2], sid, section, rating, explanation, Jsonb(criteria),
-                    supported_elements, limitations, suggested_improvements,
-                ))
-            await connection.execute(
-                "UPDATE source SET kind = CASE WHEN %s <> 'image' THEN %s ELSE kind END, "
-                "evaluation = %s, evaluation_hash = %s "
-                "WHERE pid = %s AND sid = %s",
-                (classification, classification, Jsonb(result), expected_hash, pid, sid),
-            )
-            for assessment in assessment_rows:
-                await connection.execute(
-                    "INSERT INTO assessment (pid, cid, sid, section, rating, explanation, "
-                    "criteria, supported_elements, limitations, suggested_improvements) "
-                    "VALUES (%s, %s, %s, %s::section_which, %s, %s, %s, %s, %s, %s) "
-                    "ON CONFLICT (sid, section) DO UPDATE SET "
-                    "pid = EXCLUDED.pid, cid = EXCLUDED.cid, rating = EXCLUDED.rating, "
-                    "explanation = EXCLUDED.explanation, criteria = EXCLUDED.criteria, "
-                    "supported_elements = EXCLUDED.supported_elements, "
-                    "limitations = EXCLUDED.limitations, "
-                    "suggested_improvements = EXCLUDED.suggested_improvements, created = now()",
-                    assessment,
+        chart_old_uri: str | None = None
+        try:
+            async with connection:
+                cursor = await connection.execute(
+                    "SELECT s.sid, s.hash, p.cid, s.filename, s.mimetype, s.storage_uri "
+                    "FROM source s JOIN poster p USING (pid) "
+                    "WHERE p.uid = %s AND p.pid = %s AND s.sid = %s "
+                    "AND s.width IS NOT NULL AND s.height IS NOT NULL "
+                    "AND s.mimetype IN ('image/png', 'image/jpeg') "
+                    "AND s.kind <> 'thumbnail' "
+                    "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
+                    "FOR UPDATE OF p, s", (uid, pid, sid),
                 )
+                row = await cursor.fetchone()
+                if row is None:
+                    return False
+                snapshot = await self.source_text(uid, pid, connection)
+                cursor = await connection.execute(
+                    "SELECT which::text, content FROM section WHERE pid = %s "
+                    "AND which IN ('materials and methods', 'results')", (pid,),
+                )
+                sections = dict(await cursor.fetchall())
+                methods = elucidation.plain_text(sections.get("materials and methods", "")) \
+                    or "No Materials and Methods text was provided."
+                results = elucidation.plain_text(sections.get("results", "")) \
+                    or "No Results text was provided."
+                current_hash = graphic_evaluation_hash(snapshot.fingerprint, methods, results, row[1])
+                if current_hash != expected_hash:
+                    return False
+                evaluations = result.get("evaluations")
+                if not isinstance(evaluations, dict):
+                    raise ValueError("Graphic evaluation must contain section evaluations.")
+                image_analysis = result.get("image_analysis")
+                classification = (
+                    image_analysis.get("classification")
+                    if isinstance(image_analysis, dict) else None
+                )
+                math_expressions = (
+                    image_analysis.get("math_expressions")
+                    if isinstance(image_analysis, dict) else None
+                )
+                if (
+                    not isinstance(classification, str)
+                    or classification not in IMAGE_CLASSIFICATIONS
+                ):
+                    raise ValueError("Graphic evaluation has invalid image classification.")
+                if (
+                    not isinstance(math_expressions, list)
+                    or not all(
+                        isinstance(expression, str) and expression.strip()
+                        for expression in math_expressions
+                    )
+                    or (classification != "math expression" and math_expressions)
+                ):
+                    raise ValueError("Graphic evaluation has invalid math expressions.")
+                assessment_rows = []
+                for key, section in (
+                    ("materials_and_methods", "materials and methods"),
+                    ("results", "results"),
+                ):
+                    evaluation = evaluations.get(key)
+                    if not isinstance(evaluation, dict):
+                        raise ValueError(f"Graphic evaluation is missing {section}.")
+                    rating = evaluation.get("rating")
+                    explanation = evaluation.get("explanation")
+                    criteria = evaluation.get("criteria")
+                    supported_elements = evaluation.get("supported_elements")
+                    limitations = evaluation.get("limitations")
+                    suggested_improvements = evaluation.get("suggested_improvements")
+                    if (
+                        not isinstance(rating, str)
+                        or not isinstance(explanation, str)
+                        or not isinstance(criteria, dict)
+                        or set(criteria) != {
+                            "relevance", "technical_accuracy", "specificity", "completeness",
+                            "evidentiary_support", "potential_for_misinterpretation",
+                        }
+                        or not all(isinstance(value, str) for value in criteria.values())
+                        or any(
+                            not isinstance(values, list)
+                            or not all(isinstance(value, str) for value in values)
+                            for values in (
+                                supported_elements, limitations, suggested_improvements,
+                            )
+                        )
+                    ):
+                        raise ValueError(f"Graphic evaluation has invalid {section} assessment.")
+                    assessment_rows.append((
+                        pid, row[2], sid, section, rating, explanation, Jsonb(criteria),
+                        supported_elements, limitations, suggested_improvements,
+                    ))
+
+                evaluation_hash = expected_hash
+                if classification == "chart" and row[4] != "image/png":
+                    if not row[5]:
+                        raise ValueError("The chart image is no longer available.")
+                    image_data = await run_in_threadpool(files.read, row[5])
+                    png_data = await run_in_threadpool(processing.image_as_png, image_data)
+                    width, height = await run_in_threadpool(processing.image_dimensions, png_data)
+                    fileid = uuid4()
+                    uri = await run_in_threadpool(files.put, fileid, png_data, "image/png")
+                    written.append(uri)
+                    chart_old_uri = row[5]
+                    png_hash = source_hash(png_data)
+                    evaluation_hash = graphic_evaluation_hash(
+                        snapshot.fingerprint, methods, results, png_hash,
+                    )
+                    await connection.execute(
+                        "UPDATE source SET filename = %s, mimetype = 'image/png', size = %s, "
+                        "width = %s, height = %s, fileid = %s, storage_uri = %s, hash = %s, "
+                        "updated = now() "
+                        "WHERE pid = %s AND sid = %s",
+                        (
+                            Path(row[3] or "chart").with_suffix(".png").name,
+                            len(png_data), width, height, fileid, uri, png_hash, pid, sid,
+                        ),
+                    )
+
+                cursor = await connection.execute(
+                    "SELECT storage_uri FROM source WHERE pid = %s AND parent = %s "
+                    "AND kind = 'math expression' AND filename LIKE %s FOR UPDATE",
+                    (pid, sid, f"{EVALUATED_MATH_FILENAME_PREFIX}%"),
+                )
+                obsolete.extend(uri for (uri,) in await cursor.fetchall() if uri)
+                await connection.execute(
+                    "DELETE FROM source WHERE pid = %s AND parent = %s "
+                    "AND kind = 'math expression' AND filename LIKE %s",
+                    (pid, sid, f"{EVALUATED_MATH_FILENAME_PREFIX}%"),
+                )
+                if classification == "math expression":
+                    for index, expression in enumerate(math_expressions, start=1):
+                        data = expression.encode("utf-8")
+                        await self._insert_source(
+                            connection, files, written, pid,
+                            processing.Asset(
+                                f"{EVALUATED_MATH_FILENAME_PREFIX}{index}.tex",
+                                data, "text/plain", "math expression", text=expression,
+                                description="LaTeX expression from image evaluation.",
+                            ),
+                            sid, deduplicate=False,
+                        )
+
+                await connection.execute(
+                    "UPDATE source SET kind = CASE WHEN %s <> 'image' THEN %s ELSE kind END, "
+                    "evaluation = %s, evaluation_hash = %s, updated = now() "
+                    "WHERE pid = %s AND sid = %s",
+                    (
+                        classification, classification, Jsonb(result), evaluation_hash,
+                        pid, sid,
+                    ),
+                )
+                for assessment in assessment_rows:
+                    await connection.execute(
+                        "INSERT INTO assessment (pid, cid, sid, section, rating, explanation, "
+                        "criteria, supported_elements, limitations, suggested_improvements) "
+                        "VALUES (%s, %s, %s, %s::section_which, %s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (sid, section) DO UPDATE SET "
+                        "pid = EXCLUDED.pid, cid = EXCLUDED.cid, rating = EXCLUDED.rating, "
+                        "explanation = EXCLUDED.explanation, criteria = EXCLUDED.criteria, "
+                        "supported_elements = EXCLUDED.supported_elements, "
+                        "limitations = EXCLUDED.limitations, "
+                        "suggested_improvements = EXCLUDED.suggested_improvements, created = now()",
+                        assessment,
+                    )
+        except BaseException:
+            for uri in written:
+                try:
+                    await run_in_threadpool(files.delete, uri)
+                except (OSError, GoogleAPIError, GoogleAuthError, ValueError):
+                    logger.exception("Could not remove failed evaluation source %s", uri)
+            raise
+
+        for uri in [*obsolete, *([chart_old_uri] if chart_old_uri else [])]:
+            try:
+                await run_in_threadpool(files.delete, uri)
+            except (OSError, GoogleAPIError, GoogleAuthError, ValueError):
+                logger.exception("Could not remove replaced evaluation source %s", uri)
         return True
 
 

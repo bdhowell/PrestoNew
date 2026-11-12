@@ -73,6 +73,18 @@ def image_dimensions(data: bytes) -> tuple[int, int]:
         raise ValueError("The image cannot be decoded safely.") from error
 
 
+def image_as_png(data: bytes) -> bytes:
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            if image.mode == "CMYK":
+                image = image.convert("RGB")
+            output = io.BytesIO()
+            image.save(output, format="PNG")
+            return output.getvalue()
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+        raise ValueError("The image cannot be converted to PNG safely.") from error
+
+
 def image_thumbnail(data: bytes) -> bytes:
     with Image.open(io.BytesIO(data)) as image:
         image.thumbnail((160, 120))
@@ -151,7 +163,11 @@ def extract(filename: str, data: bytes) -> Processed:
             text = element.get("text") or ""
             if element["kind"] == "formula" and text and text not in result.text:
                 result.text += "\n\n" + text
-            kind = "table" if element["kind"] == "table" else "image"
+            kind = (
+                "table" if element["kind"] == "table"
+                else "math expression" if element["kind"] == "formula"
+                else "image"
+            )
             if kind == "table":
                 cells = (element.get("data") or {}).get("table_cells", [])
                 by_row: dict[int, list[tuple[int, str]]] = {}
@@ -176,9 +192,9 @@ def extract(filename: str, data: bytes) -> Processed:
                     asset_data, "image/png", kind, text, description, width, height,
                 ))
             if not assets and text:
-                # Formula/table text remains usable even if no crop was produced.
+                extension = ".tex" if kind == "math expression" else ".txt"
                 result.assets.append(Asset(
-                    f"{Path(filename).stem}-{element['kind']}-{number}.txt",
+                    f"{Path(filename).stem}-{element['kind']}-{number}{extension}",
                     text.encode(), "text/plain", kind, text, description or text,
                 ))
         if suffix == ".numbers":

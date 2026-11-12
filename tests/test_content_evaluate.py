@@ -53,6 +53,7 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
                 "evaluation": {
                     "image_analysis": {
                         "classification": "chart",
+                        "math_expressions": [],
                         "description": "A scientific image",
                     },
                     "evaluations": {

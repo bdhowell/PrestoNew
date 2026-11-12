@@ -83,6 +83,9 @@ and Results sections, including criteria, supported elements, limitations, and
 suggested improvements, linked to the image source; the conference is optional.
 Interrupted connections are retried automatically twice before offering a manual
 retry; saved evaluations are reused on each attempt.
+Classified charts are normalized and stored as PNG images. For a classified
+math-expression image, each extracted LaTeX expression is stored in `source.text`
+on its own child source record, while the original image remains available.
 
 The current draft's stored PNG thumbnail appears in both List and Large
 thumbnails views. Opening the poster list refreshes it when the poster or its

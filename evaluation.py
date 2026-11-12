@@ -125,6 +125,9 @@ Use this ordinal rating scale for each section:
 
 - Return the requested structured output.
 - Set `image_analysis.classification` to exactly one Stage 1 category.
+- For a chart, preserve its full visual content; the application stores chart images as PNGs.
+- For a math expression, return each distinct expression as exact LaTeX in `image_analysis.math_expressions`.
+- Return `image_analysis.math_expressions` as an empty list for all other classifications.
 - Keep each criterion assessment to one concise sentence.
 - Keep each overall explanation to at most three sentences.
 - Include only material supported elements, limitations, and improvements.
@@ -176,6 +179,7 @@ class ImageAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     classification: ImageClassification
+    math_expressions: list[str]
     type: str
     description: str
     research_context: str

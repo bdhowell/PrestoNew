@@ -368,10 +368,25 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
             image_analysis.get("classification")
             if isinstance(image_analysis, dict) else None
         )
+        math_expressions = (
+            image_analysis.get("math_expressions")
+            if isinstance(image_analysis, dict) else None
+        )
         return (
             isinstance(classification, str)
             and classification in content.IMAGE_CLASSIFICATIONS
+            and isinstance(math_expressions, list)
+            and all(isinstance(expression, str) and expression.strip() for expression in math_expressions)
+            and (classification == "math expression" or not math_expressions)
         )
+
+    def graphic_filename(
+        graphic: content.GraphicEvaluationSource, evaluation: dict[str, object] | None,
+    ) -> str:
+        image_analysis = evaluation.get("image_analysis") if evaluation else None
+        if isinstance(image_analysis, dict) and image_analysis.get("classification") == "chart":
+            return Path(graphic.filename).with_suffix(".png").name
+        return graphic.filename
 
     def is_current(graphic: content.GraphicEvaluationSource) -> bool:
         return (
@@ -412,7 +427,7 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                         "type": "result",
                         "source": {
                             "sid": graphic.sid,
-                            "filename": graphic.filename,
+                            "filename": graphic_filename(graphic, graphic.evaluation),
                             "category": graphic.category,
                         },
                         "evaluation": graphic.evaluation,
@@ -454,7 +469,7 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                     "type": "result",
                     "source": {
                         "sid": graphic.sid,
-                        "filename": graphic.filename,
+                        "filename": graphic_filename(graphic, evaluation_result),
                         "category": graphic.category,
                     },
                     "evaluation": evaluation_result,

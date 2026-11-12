@@ -22,6 +22,7 @@ from starlette.requests import HTTPConnection
 import content
 import source_processing
 import posters
+from evaluation import EvaluationResponse
 from tests import test_posters
 from routers import content as routes
 from tests.test_posters import DRAFT, ROOT
@@ -308,6 +309,7 @@ class ContentRouteTests(unittest.TestCase):
         evaluation_result = {
             "image_analysis": {
                 "classification": "image",
+                "math_expressions": [],
                 "description": "A research image",
             },
             "evaluations": {
@@ -368,7 +370,7 @@ class ContentRouteTests(unittest.TestCase):
 
     def test_graphic_evaluation_skips_to_layout_for_current_saved_results(self) -> None:
         evaluation_result = {
-            "image_analysis": {"classification": "image"},
+            "image_analysis": {"classification": "image", "math_expressions": []},
             "evaluations": {},
         }
         expected_hash = content.graphic_evaluation_hash(
@@ -392,10 +394,13 @@ class ContentRouteTests(unittest.TestCase):
         self.sources.graphic_source.assert_not_awaited()
         self.sources.save_graphic_evaluation.assert_not_awaited()
 
-    def test_graphic_evaluation_recalculates_saved_results_without_classification(self) -> None:
-        legacy_result = {"image_analysis": {}, "evaluations": {}}
+    def test_graphic_evaluation_recalculates_saved_results_without_latex_field(self) -> None:
+        legacy_result = {
+            "image_analysis": {"classification": "image"},
+            "evaluations": {},
+        }
         evaluation_result = {
-            "image_analysis": {"classification": "chart"},
+            "image_analysis": {"classification": "chart", "math_expressions": []},
             "evaluations": {},
         }
         expected_hash = content.graphic_evaluation_hash(
@@ -431,7 +436,7 @@ class ContentRouteTests(unittest.TestCase):
 
     def test_graphic_evaluation_reuses_current_results_and_reevaluates_stale_results(self) -> None:
         evaluation_result = {
-            "image_analysis": {"classification": "image"},
+            "image_analysis": {"classification": "image", "math_expressions": []},
             "evaluations": {},
         }
         expected_hash = content.graphic_evaluation_hash(
@@ -471,7 +476,7 @@ class ContentRouteTests(unittest.TestCase):
 
     def test_resumed_evaluation_finishes_only_graphics_not_saved_before_interruption(self) -> None:
         evaluation_result = {
-            "image_analysis": {"classification": "image"},
+            "image_analysis": {"classification": "image", "math_expressions": []},
             "evaluations": {},
         }
         expected_hash = content.graphic_evaluation_hash(
@@ -537,6 +542,37 @@ class ContentRouteTests(unittest.TestCase):
         self.sources.graphic_source.assert_awaited_once_with(7, 11, 1)
         self.sources.graphic_source.return_value = None
         self.assertEqual(self.client.get("/content/99/image").status_code, 404)
+
+
+class EvaluationModelTests(unittest.TestCase):
+    def test_math_classification_includes_latex_expressions(self) -> None:
+        criteria = {
+            key: "Assessment." for key in (
+                "relevance", "technical_accuracy", "specificity", "completeness",
+                "evidentiary_support", "potential_for_misinterpretation",
+            )
+        }
+        section = {
+            "rating": "significantly", "explanation": "Supports the methods.",
+            "criteria": criteria, "supported_elements": [], "limitations": [],
+            "suggested_improvements": [],
+        }
+        response = EvaluationResponse.model_validate({
+            "image_analysis": {
+                "classification": "math expression",
+                "math_expressions": [r"E=mc^2", r"\frac{1}{2}"],
+                "type": "Equation", "description": "Two equations.",
+                "research_context": "Research.",
+            },
+            "evaluations": {
+                "materials_and_methods": section,
+                "results": section,
+            },
+        })
+        self.assertEqual(
+            response.image_analysis.math_expressions,
+            [r"E=mc^2", r"\frac{1}{2}"],
+        )
 
 
 class SourceFileTests(unittest.TestCase):
@@ -830,6 +866,73 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params, (11, content.source_hash(b"image")))
         files.put.assert_not_called()
 
+    async def test_math_expressions_are_saved_as_distinct_latex_child_sources(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        digest = content.source_hash(b"source image")
+        locked, sections, prior, deleted = (
+            AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock(),
+        )
+        locked.fetchone.return_value = (1, digest, None, "equation.png", "image/png", "/sources/source")
+        sections.fetchall.return_value = []
+        prior.fetchall.return_value = []
+        inserted = []
+        for index, expression in enumerate((r"E=mc^2", r"\frac{1}{2}"), start=1):
+            cursor = AsyncMock()
+            cursor.fetchone.return_value = (
+                index + 10, f"evaluation-math-expression-{index}.tex", "text/plain",
+                len(expression), "now", 1, "LaTeX expression", None, None,
+                "math expression", True,
+            )
+            inserted.append(cursor)
+        connection.execute.side_effect = [
+            locked, sections, prior, deleted, *inserted,
+            AsyncMock(), AsyncMock(), AsyncMock(),
+        ]
+        files = Mock()
+        files.put.side_effect = ["/sources/equation-1", "/sources/equation-2"]
+        snapshot = content.SourceText(1, "", "fingerprint", 0)
+        expected_hash = content.graphic_evaluation_hash(
+            snapshot.fingerprint, "No Materials and Methods text was provided.",
+            "No Results text was provided.", digest,
+        )
+        criteria = {
+            key: "Assessment." for key in (
+                "relevance", "technical_accuracy", "specificity", "completeness",
+                "evidentiary_support", "potential_for_misinterpretation",
+            )
+        }
+        section = {
+            "rating": "significantly", "explanation": "Supports the methods.",
+            "criteria": criteria, "supported_elements": [], "limitations": [],
+            "suggested_improvements": [],
+        }
+        result = {
+            "image_analysis": {
+                "classification": "math expression",
+                "math_expressions": [r"E=mc^2", r"\frac{1}{2}"],
+            },
+            "evaluations": {
+                "materials_and_methods": section, "results": section,
+            },
+        }
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                patch.object(store, "source_text", AsyncMock(return_value=snapshot)), \
+                patch.object(content, "SourceFiles", return_value=files):
+            self.assertTrue(await store.save_graphic_evaluation(
+                7, 11, 1, result, expected_hash,
+            ))
+        self.assertEqual(
+            [call.args[1] for call in files.put.call_args_list],
+            [b"E=mc^2", b"\\frac{1}{2}"],
+        )
+        source_inserts = [
+            call.args[1] for call in connection.execute.await_args_list
+            if "INSERT INTO source" in call.args[0]
+        ]
+        self.assertEqual([params[2] for params in source_inserts], [1, 1])
+        self.assertEqual([params[9] for params in source_inserts], [r"E=mc^2", r"\frac{1}{2}"])
+
     async def test_logo_replacement_uses_pixel_area_and_keeps_smaller_as_image(self) -> None:
         for old_area, expected_kind in ((100, "logo"), (1000000, "image"), (90000, "image")):
             with self.subTest(old_area=old_area):
@@ -964,6 +1067,15 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProcessingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_chart_images_can_be_normalized_to_png(self) -> None:
+        from PIL import Image
+
+        source = io.BytesIO()
+        Image.new("RGB", (37, 23), "blue").save(source, format="JPEG")
+        png = source_processing.image_as_png(source.getvalue())
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(source_processing.image_dimensions(png), (37, 23))
+
     async def test_spreadsheet_cells_and_sheet_names_are_html_escaped(self) -> None:
         from openpyxl import Workbook
         workbook = Workbook()
@@ -992,15 +1104,22 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
                 }, {
                     "kind": "formula", "caption_refs": [], "annotations": [],
                     "text": r"E=mc^2", "assets": [],
+                }, {
+                    "kind": "formula", "caption_refs": [], "annotations": [],
+                    "text": r"x=\frac{1}{2}", "assets": [],
                 }],
             }
             with patch.dict(os.environ, {"DOCLING_SERVICE_URL": "https://converter.invalid"}), \
                     patch.object(source_processing.docxtractor, "extract_document", return_value=manifest) as convert:
                 result = source_processing.extract("research.pdf", b"%PDF-1.7")
-            self.assertEqual(result.text, "Figure 1\n\nE=mc^2")
+            self.assertEqual(result.text, "Figure 1\n\nE=mc^2\n\nx=\\frac{1}{2}")
             self.assertEqual(result.assets[0].width, 299)
             self.assertEqual(result.assets[0].description, "Figure 1\nA graph")
             self.assertEqual(result.assets[1].text, "E=mc^2")
+            self.assertEqual(result.assets[1].kind, "math expression")
+            self.assertTrue(result.assets[1].filename.endswith(".tex"))
+            self.assertEqual(result.assets[2].text, r"x=\frac{1}{2}")
+            self.assertEqual(result.assets[2].kind, "math expression")
             self.assertTrue(convert.call_args.kwargs["describe_pictures"])
             self.assertTrue(convert.call_args.kwargs["extract_chart_data"])
             self.assertTrue(convert.call_args.kwargs["enrich_formulas"])
@@ -1324,6 +1443,66 @@ class ContentDatabaseTests(unittest.TestCase):
         self.purchase(pid)
         self.assertIsNone(asyncio.run(self.store.thumbnail_state(7, pid)))
 
+    def test_chart_evaluation_normalizes_jpeg_to_png(self) -> None:
+        from PIL import Image
+
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "chart.jpg"
+            image = io.BytesIO()
+            Image.new("RGB", (37, 23), "blue").save(image, format="JPEG")
+            data = image.getvalue()
+            path.write_bytes(data)
+            sid = self.connection.execute(
+                "INSERT INTO source (pid, kind, filename, size, mimetype, width, height, "
+                "storage_uri, hash) VALUES (%s, 'image', 'chart.jpg', %s, 'image/jpeg', "
+                "37, 23, %s, %s) RETURNING sid",
+                (pid, len(data), str(path), content.source_hash(data)),
+            ).fetchone()[0]
+            snapshot = asyncio.run(self.store.source_text(7, pid))
+            expected_hash = content.graphic_evaluation_hash(
+                snapshot.fingerprint, "No Materials and Methods text was provided.",
+                "No Results text was provided.", content.source_hash(data),
+            )
+            criteria = {
+                key: "Assessment." for key in (
+                    "relevance", "technical_accuracy", "specificity", "completeness",
+                    "evidentiary_support", "potential_for_misinterpretation",
+                )
+            }
+            section = {
+                "rating": "significantly", "explanation": "Chart support.",
+                "criteria": criteria, "supported_elements": [], "limitations": [],
+                "suggested_improvements": [],
+            }
+            result = {
+                "image_analysis": {
+                    "classification": "chart", "math_expressions": [],
+                },
+                "evaluations": {
+                    "materials_and_methods": section, "results": section,
+                },
+            }
+            with patch.dict(os.environ, {
+                "SOURCES_DIR": str(Path(directory) / "stored"), "GCS_BUCKET": "",
+            }):
+                self.assertTrue(asyncio.run(self.store.save_graphic_evaluation(
+                    7, pid, sid, result, expected_hash,
+                )))
+                row = self.connection.execute(
+                    "SELECT kind, filename, mimetype, storage_uri, hash, evaluation_hash "
+                    "FROM source WHERE sid = %s", (sid,),
+                ).fetchone()
+                png = Path(row[3]).read_bytes()
+            self.assertEqual(row[:3], ("chart", "chart.png", "image/png"))
+            self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertFalse(path.exists())
+            self.assertEqual(row[4], content.source_hash(png))
+            self.assertEqual(row[5], content.graphic_evaluation_hash(
+                snapshot.fingerprint, "No Materials and Methods text was provided.",
+                "No Results text was provided.", row[4],
+            ))
+
     def test_graphic_evaluations_persist_and_are_owner_scoped(self) -> None:
         pid, _ = asyncio.run(self.store.new_or_existing(7))
         criteria = {
@@ -1346,7 +1525,7 @@ class ContentDatabaseTests(unittest.TestCase):
             }
 
         evaluation_result = {
-            "image_analysis": {"classification": "image"},
+            "image_analysis": {"classification": "image", "math_expressions": []},
             "evaluations": {
                 "materials_and_methods": section_evaluation(
                     "significantly", "The image shows the procedure.",
@@ -1432,7 +1611,7 @@ class ContentDatabaseTests(unittest.TestCase):
             updated_results = section_evaluation("somewhat", "Updated findings assessment.")
             updated_results["criteria"] = updated_criteria
             updated_result = {
-                "image_analysis": {"classification": "diagram"},
+                "image_analysis": {"classification": "diagram", "math_expressions": []},
                 "evaluations": {
                     "materials_and_methods": updated_methods,
                     "results": updated_results,
@@ -1467,6 +1646,34 @@ class ContentDatabaseTests(unittest.TestCase):
                     ),
                 ],
             )
+            math_result = {
+                "image_analysis": {
+                    "classification": "math expression",
+                    "math_expressions": [r"E=mc^2", r"\frac{1}{2}"],
+                },
+                "evaluations": {
+                    "materials_and_methods": updated_methods,
+                    "results": updated_results,
+                },
+            }
+            with patch.dict(os.environ, {
+                "SOURCES_DIR": str(Path(directory) / "math-sources"), "GCS_BUCKET": "",
+            }):
+                self.assertTrue(asyncio.run(self.store.save_graphic_evaluation(
+                    7, pid, sid, math_result, expected_hash,
+                )))
+                expressions = self.connection.execute(
+                    "SELECT parent, kind, text, filename, storage_uri FROM source "
+                    "WHERE parent = %s ORDER BY sid", (sid,),
+                ).fetchall()
+                self.assertEqual(
+                    [(parent, kind, text, filename) for parent, kind, text, filename, _ in expressions],
+                    [
+                        (sid, "math expression", r"E=mc^2", "evaluation-math-expression-1.tex"),
+                        (sid, "math expression", r"\frac{1}{2}", "evaluation-math-expression-2.tex"),
+                    ],
+                )
+                self.assertTrue(all(Path(uri).is_file() for *_, uri in expressions))
             self.assertEqual(asyncio.run(self.store.evaluation_sources(8, pid)), [])
             self.assertTrue(asyncio.run(self.store.save_section(7, pid, "results", "Updated results")))
             self.assertIsNone(asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation)
