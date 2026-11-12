@@ -86,6 +86,12 @@ class ContentRouteTests(unittest.TestCase):
                         7, 11, f"http://testserver{path}?{query}{marker}",
                     )
 
+    def test_elucidation_page_shows_wikkit_writing_graphic(self) -> None:
+        response = self.client.get("/content/elucidate")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('/static/graphics/wikkitwriting.png', response.text)
+        self.assertIn('alt="Wikkit writing"', response.text)
+
     def test_existing_files_escape_names_and_do_not_repeat_first_upload_intro(self) -> None:
         self.sources.list_sources.return_value = [ITEM]
         response = self.client.get("/content/upload")
@@ -202,6 +208,8 @@ class ContentRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("your content has finished uploading", response.text)
         self.assertIn("reading through it now", response.text)
+        self.assertIn('/static/graphics/wikkitbooks.png', response.text)
+        self.assertIn('alt="Wikkit reading from books"', response.text)
         self.assertIn("/static/javascript/pages/content-extract.js", response.text)
         self.assertIn('"sid": 1', response.text)
         self.assertNotIn('"sid": 2', response.text)
@@ -288,6 +296,8 @@ class ContentRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("one graphic you uploaded", response.text)
         self.assertIn("one graphic I was able to extract", response.text)
+        self.assertIn('/static/graphics/wikkitmeasuring.png', response.text)
+        self.assertIn('alt="Wikkit measuring a graphic"', response.text)
         self.assertIn("/static/javascript/pages/content-evaluate.js", response.text)
         self.assertIn('"pid": 11', response.text)
         self.sources.evaluation_sources.assert_awaited_once_with(7, 11)
