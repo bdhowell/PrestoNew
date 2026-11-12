@@ -10,7 +10,7 @@
         }
 
         const version = state.version;
-        const value = element.innerHTML;
+        const value = window.mathJaxSource?.serialize(element) ?? element.innerHTML;
         state.dirty = false;
         state.ready = false;
         state.saving = true;
@@ -68,5 +68,7 @@
                 save(element, state);
             }, 300);
         });
+        element.addEventListener("focusin", () => window.mathJaxSource?.restore(element));
+        element.addEventListener("focusout", () => window.mathJaxSource?.typeset(element));
     }
 })();

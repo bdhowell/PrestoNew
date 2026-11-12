@@ -404,7 +404,9 @@ class SourceStore(PosterStore):
 
     _SOURCE_COLUMNS = (
         "s.sid, coalesce(s.filename, parent.filename, 'Untitled source'), s.mimetype, "
-        "s.size, s.added::text, s.parent, s.description, s.width, s.height, s.kind, s.extracted"
+        "s.size, s.added::text, s.parent, "
+        "CASE WHEN s.kind = 'math expression' THEN s.text ELSE s.description END, "
+        "s.width, s.height, s.kind, s.extracted"
     )
 
     async def list_sources(self, uid: int, pid: int) -> list[Source]:

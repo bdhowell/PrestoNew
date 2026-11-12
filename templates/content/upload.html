@@ -1,5 +1,6 @@
 {% extends "page.html" %}
 {% block title %}Upload content - {{ app_name() }}{% endblock %}
+{% block scripts %}{% include "mathjax.html" %}{% endblock %}
 {% block content %}
 <h1>Upload source content</h1>
 <section id="drop-content" aria-label="Upload source files">
@@ -18,7 +19,13 @@
             <td>{% if item.thumbnail %}<img src="/content/{{ item.sid }}/thumbnail" alt="Preview of {{ item.filename }}" width="80" loading="lazy">{% else %}<span aria-label="Document">DOC</span>{% endif %}</td>
             <td style="padding-left: {{ item.depth * 1.5 }}rem">
                 <span{% if item.ill_sized %} class="ill-sized"{% endif %}>{{ item.filename }}</span>
-                {% if item.description %}<p class="source-description">{{ item.description.splitlines()[0] }}</p>{% endif %}
+                {% if item.description %}
+                    {% if item.kind == 'math expression' %}
+                    <p class="source-description">\[{{ item.description }}\]</p>
+                    {% else %}
+                    <p class="source-description">{{ item.description.splitlines()[0] }}</p>
+                    {% endif %}
+                {% endif %}
             </td>
             <td>{{ item.mimetype }}</td>
         </tr>

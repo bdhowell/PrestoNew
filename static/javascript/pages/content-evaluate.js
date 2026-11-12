@@ -89,6 +89,15 @@
                     `evaluation-verdict ${isSuitable ? "suitable" : "not-suitable"}`,
                 ));
                 card.append(element("p", item.evaluation.image_analysis.description));
+                const expressions = item.evaluation.image_analysis.math_expressions || [];
+                if (expressions.length) {
+                    card.append(element("h4", "Math expressions"));
+                    for (const expression of expressions) {
+                        const formula = element("p", `\\[${expression}\\]`, "graphic-math");
+                        card.append(formula);
+                        window.mathJaxSource.typeset(formula);
+                    }
+                }
                 renderSection(card, "Materials and Methods", item.evaluation.evaluations.materials_and_methods);
                 renderSection(card, "Results", item.evaluation.evaluations.results);
                 group.append(card);

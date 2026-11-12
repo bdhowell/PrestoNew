@@ -1112,7 +1112,7 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(os.environ, {"DOCLING_SERVICE_URL": "https://converter.invalid"}), \
                     patch.object(source_processing.docxtractor, "extract_document", return_value=manifest) as convert:
                 result = source_processing.extract("research.pdf", b"%PDF-1.7")
-            self.assertEqual(result.text, "Figure 1\n\nE=mc^2\n\nx=\\frac{1}{2}")
+            self.assertEqual(result.text, "Figure 1\n\n\\[E=mc^2\\]\n\n\\[x=\\frac{1}{2}\\]")
             self.assertEqual(result.assets[0].width, 299)
             self.assertEqual(result.assets[0].description, "Figure 1\nA graph")
             self.assertEqual(result.assets[1].text, "E=mc^2")

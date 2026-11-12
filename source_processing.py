@@ -161,13 +161,26 @@ def extract(filename: str, data: bytes) -> Processed:
             ]
             description = "\n".join(captions + descriptions)
             text = element.get("text") or ""
-            if element["kind"] == "formula" and text and text not in result.text:
-                result.text += "\n\n" + text
             kind = (
                 "table" if element["kind"] == "table"
                 else "math expression" if element["kind"] == "formula"
                 else "image"
             )
+            if kind == "math expression" and text:
+                display = f"\\[{text}\\]"
+                lines = result.text.splitlines(keepends=True)
+                matched = False
+                for index, line in enumerate(lines):
+                    body = line.rstrip("\r\n")
+                    if body.strip() == text:
+                        start = len(body) - len(body.lstrip())
+                        end = len(body.rstrip())
+                        lines[index] = body[:start] + display + body[end:] + line[len(body):]
+                        matched = True
+                if matched:
+                    result.text = "".join(lines)
+                elif display not in result.text:
+                    result.text += "\n\n" + display
             if kind == "table":
                 cells = (element.get("data") or {}).get("table_cells", [])
                 by_row: dict[int, list[tuple[int, str]]] = {}

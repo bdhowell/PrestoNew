@@ -114,7 +114,9 @@
         const state = states.get(element);
         const expected = document.createElement("div");
         expected.innerHTML = original;
-        return !state.dirty && !state.saving && element.innerHTML === expected.innerHTML;
+        const serialize = value => window.mathJaxSource?.serialize(value) ?? value.innerHTML;
+        return !state.dirty && !state.saving
+            && serialize(element) === serialize(expected);
     }
 
     function updateStatus() {
@@ -129,7 +131,7 @@
         const state = states.get(element);
         if (state.saving) return state.saving;
         if (!state.dirty) return true;
-        const value = element.innerHTML;
+        const value = window.mathJaxSource?.serialize(element) ?? element.innerHTML;
         state.dirty = false;
         state.failed = false;
         state.saving = (async () => {
@@ -165,6 +167,8 @@
 
     for (const element of editors) {
         const state = states.get(element);
+        element.addEventListener("focusin", () => window.mathJaxSource?.restore(element));
+        element.addEventListener("focusout", () => window.mathJaxSource?.typeset(element));
         element.addEventListener("input", () => {
             state.dirty = true;
             state.failed = false;
@@ -240,6 +244,7 @@
             }
             if (unchanged(element, payload.original)) {
                 element.innerHTML = payload.content;
+                window.mathJaxSource?.typeset(element);
                 updateStatus();
                 clearProposal();
                 window.wikkit.say("<p>I&rsquo;ve saved the accepted revision.</p>");
@@ -304,6 +309,7 @@
                 revisionStatus.textContent = "";
                 accept.disabled = false;
                 dialog.showModal();
+                window.mathJaxSource?.typeset(dialog);
                 window.wikkit.say("<p>Please review my proposed revision and accept or reject it.</p>");
             } finally {
                 clearTimeout(revisionTimer);

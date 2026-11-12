@@ -30,6 +30,10 @@
     object-fit: contain;
 }
 
+.graphic-math {
+    overflow-x: auto;
+}
+
 .graphic-evaluation ul {
     margin-bottom: 0.75rem;
     padding-left: 1.5rem;

@@ -19,6 +19,28 @@ FORMATTING = {
 }
 
 
+class MathJaxSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mathjax_output_serializes_and_restores_as_latex(self) -> None:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            try:
+                page = await browser.new_page()
+                await page.set_content("""<div id="formula">
+                    \\[E=mc^2\\]
+                </div>""")
+                await page.add_script_tag(path=str(ROOT / "static/javascript/mathjax.js"))
+                result = await page.locator("#formula").evaluate("""element => {
+                    window.mathJaxSource.prepare(element);
+                    const saved = window.mathJaxSource.serialize(element);
+                    window.mathJaxSource.restore(element);
+                    return {saved, restored: element.textContent.trim()};
+                }""")
+                self.assertIn(r"\[E=mc^2\]", result["saved"])
+                self.assertEqual(result["restored"], r"\[E=mc^2\]")
+            finally:
+                await browser.close()
+
+
 class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
     async def test_flush_header_doubles_height_and_aligns_text_with_body(self) -> None:
         await self.page.set_content("""<body class="blue colored-section-headers">

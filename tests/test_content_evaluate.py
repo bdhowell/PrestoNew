@@ -120,6 +120,50 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
                         self.assertAlmostEqual(current["left"], previous["left"], delta=1)
                         self.assertAlmostEqual(current["width"], previous["width"], delta=1)
 
+    async def test_math_expressions_are_rendered_as_latex(self) -> None:
+        await self.page.set_content("""
+            <script id="evaluation-poster" type="application/json">{"pid":11}</script>
+            <p id="evaluation-status"></p><div id="graphic-evaluations"></div>
+            <button id="retry-evaluation" hidden></button><a id="continue-review" hidden></a>
+        """)
+        await self.page.evaluate("""() => {
+            window.mathJaxSource = {typeset() {}};
+            window.wikkit = {say: () => Promise.resolve(), execute: () => {}};
+            const evaluation = {
+                image_analysis: {
+                    classification: "math expression",
+                    math_expressions: ["E=mc^2", "\\\\frac{1}{2}"],
+                    description: "Two equations.",
+                },
+                evaluations: {
+                    materials_and_methods: {
+                        rating: "weakly", explanation: "", supported_elements: [],
+                        limitations: [], suggested_improvements: [],
+                    },
+                    results: {
+                        rating: "weakly", explanation: "", supported_elements: [],
+                        limitations: [], suggested_improvements: [],
+                    },
+                },
+            };
+            const events = [
+                {type: "result", source: {sid: 1, category: "uploaded", filename: "equations.png"}, evaluation},
+                {type: "complete"},
+            ];
+            window.fetch = async () => new Response(
+                events.map(event => JSON.stringify(event)).join("\\n") + "\\n",
+                {status: 200, headers: {"Content-Type": "application/x-ndjson"}},
+            );
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/common.js"))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/pages/content-evaluate.js"))
+        await self.page.wait_for_function(
+            "() => document.querySelectorAll('.graphic-math').length === 2",
+        )
+        self.assertEqual(await self.page.locator(".graphic-math").all_text_contents(), [
+            r"\[E=mc^2\]", r"\[\frac{1}{2}\]",
+        ])
+
     async def test_already_evaluated_graphics_redirect_to_layout(self) -> None:
         await self.load_page([
             {"type": "start", "total": 2, "uploaded": 1, "extracted": 1},
