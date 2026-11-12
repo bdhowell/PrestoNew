@@ -96,3 +96,7 @@
         return wordResult.trim();
     }
     
+function capitalizeFirstLetter(str) {
+    if (!str) return ""; // Prevents errors on empty strings
+    return str.charAt(0).toUpperCase() + str.slice(1);
+}

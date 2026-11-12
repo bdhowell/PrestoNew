@@ -747,9 +747,32 @@ class SourceStore(PosterStore):
                     raise ValueError(f"Graphic evaluation is missing {section}.")
                 rating = evaluation.get("rating")
                 explanation = evaluation.get("explanation")
-                if not isinstance(rating, str) or not isinstance(explanation, str):
+                criteria = evaluation.get("criteria")
+                supported_elements = evaluation.get("supported_elements")
+                limitations = evaluation.get("limitations")
+                suggested_improvements = evaluation.get("suggested_improvements")
+                if (
+                    not isinstance(rating, str)
+                    or not isinstance(explanation, str)
+                    or not isinstance(criteria, dict)
+                    or set(criteria) != {
+                        "relevance", "technical_accuracy", "specificity", "completeness",
+                        "evidentiary_support", "potential_for_misinterpretation",
+                    }
+                    or not all(isinstance(value, str) for value in criteria.values())
+                    or any(
+                        not isinstance(values, list)
+                        or not all(isinstance(value, str) for value in values)
+                        for values in (
+                            supported_elements, limitations, suggested_improvements,
+                        )
+                    )
+                ):
                     raise ValueError(f"Graphic evaluation has invalid {section} assessment.")
-                assessment_rows.append((pid, row[2], sid, section, rating, explanation))
+                assessment_rows.append((
+                    pid, row[2], sid, section, rating, explanation, Jsonb(criteria),
+                    supported_elements, limitations, suggested_improvements,
+                ))
             await connection.execute(
                 "UPDATE source SET evaluation = %s, evaluation_hash = %s "
                 "WHERE pid = %s AND sid = %s",
@@ -757,11 +780,15 @@ class SourceStore(PosterStore):
             )
             for assessment in assessment_rows:
                 await connection.execute(
-                    "INSERT INTO assessment (pid, cid, sid, section, rating, explanation) "
-                    "VALUES (%s, %s, %s, %s::section_which, %s, %s) "
+                    "INSERT INTO assessment (pid, cid, sid, section, rating, explanation, "
+                    "criteria, supported_elements, limitations, suggested_improvements) "
+                    "VALUES (%s, %s, %s, %s::section_which, %s, %s, %s, %s, %s, %s) "
                     "ON CONFLICT (sid, section) DO UPDATE SET "
                     "pid = EXCLUDED.pid, cid = EXCLUDED.cid, rating = EXCLUDED.rating, "
-                    "explanation = EXCLUDED.explanation, created = now()",
+                    "explanation = EXCLUDED.explanation, criteria = EXCLUDED.criteria, "
+                    "supported_elements = EXCLUDED.supported_elements, "
+                    "limitations = EXCLUDED.limitations, "
+                    "suggested_improvements = EXCLUDED.suggested_improvements, created = now()",
                     assessment,
                 )
         return True

@@ -44,10 +44,19 @@ You will receive:
 - Materials and Methods section text.
 - Results section text.
 
-Your task is to evaluate how effectively the image supports each of the two
+Your task is to classify and evaluate how effectively the image supports each of the two
 poster sections.
 
-## Stage 1: Shared image analysis
+## Stage 1: Image classification
+
+    Classify the provided image into exactly one of the following categories:
+    - 'table': Structured data arranged in rows and columns.
+    - 'chart': Data visualizations like bar graphs, line plots, pie charts, or scatter plots.
+    - 'diagram': Flowcharts, architecture schematics, mind maps, circuit diagrams, or labeled illustrations.
+    - 'math expression': Mathematical equations, formulas, or symbolic expressions.
+    - 'image': Default category for photographs, general artwork, screenshots, or anything that does not clearly fit the categories above.
+
+## Stage 2: Shared image analysis
 
 Analyze the image once to identify:
 - Its type and principal subject.
@@ -56,9 +65,9 @@ Analyze the image once to identify:
 - Its relationship to the general research text.
 - Any apparent inaccuracies, ambiguities, or unsupported implications.
 
-## Stage 2: Independent section evaluations
+## Stage 3: Independent section evaluations
 
-Evaluate the image separately for:
+Evaluate the image's support for each of the following two poster sections:
 
 ### Materials and Methods
 
@@ -92,35 +101,25 @@ Use this ordinal rating scale for each section:
 2. weakly: Broadly related, with little direct support.
 3. somewhat: Some meaningful support, but substantial limitations.
 4. significantly: Clear support for important elements, with meaningful gaps.
-5. highly: Direct and accurate support for most relevant information, with
-   only minor limitations.
-6. definitively: Direct and unambiguous support for the specific information
-   being evaluated, without material omissions or unsupported implications.
+5. highly: Direct and accurate support for most relevant information, with only minor limitations.
+6. definitively: Direct and unambiguous support for the specific information being evaluated, without material omissions or unsupported implications.
 
 ## Evaluation requirements
 
 - Apply all six criteria separately to each section.
 - Assign exactly one overall rating to Materials and Methods and one to Results.
 - Do not average numerical scores to determine the overall ratings.
-- Base each overall rating on the importance of the supported information
-  and material inaccuracies or omissions.
-- Treat general research text as context, not a substitute for
-  section-specific evidence.
-- Evaluate the two sections independently; do not let one section's rating
-  determine or influence the other's rating.
+- Base each overall rating on the importance of the supported information and material inaccuracies or omissions.
+- Treat general research text as context, not a substitute for section-specific evidence.
+- Evaluate the two sections independently; do not let one section's rating determine or influence the other's rating.
 - Distinguish depiction of methodology from evidence of results.
-- Do not penalize an image for omitting unrelated content or content outside
-  the particular scope the image is intended to illustrate.
+- Do not penalize an image for omitting unrelated content or content outside the particular scope the image is intended to illustrate.
 - Do not assume information not visible in the image or present in the text.
 - Distinguish contradictions from mere omissions.
-- If a criterion cannot be assessed, explicitly state that limitation in
-  its assessment rather than fabricating a conclusion.
-- A technically accurate image can receive a low rating if it does not
-  support the particular section.
-- Treat 'definitively' as representational support, not independent
-  scientific proof.
-- Be cautious about declaring an image objectively accurate when supplied
-  materials do not independently establish its correctness.
+- If a criterion cannot be assessed, explicitly state that limitation in its assessment rather than fabricating a conclusion.
+- A technically accurate image can receive a low rating if it does notsupport the particular section.
+- Treat 'definitively' as representational support, not independentvscientific proof.
+- Be cautious about declaring an image objectively accurate when supplied materials do not independently establish its correctness.
 
 ## Output requirements
 

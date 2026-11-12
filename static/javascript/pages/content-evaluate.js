@@ -129,7 +129,7 @@
             status.textContent = `Evaluation complete: ${numberToWords(count)} suitable and ${numberToWords(unsuitable)} not suitable.`;
             next.hidden = false;
             await window.wikkit.say(
-                `<p>I&rsquo;ve finished evaluating your graphics. ${numberToWords(count)} may be useful for your poster; `
+                `<p>I&rsquo;ve finished evaluating your graphics. ${capitalizeFirstLetter(numberToWords(count))} may be useful for your poster; `
                     + `${numberToWords(unsuitable)} have only minimal relevance.</p>`,
             );
         }

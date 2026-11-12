@@ -185,6 +185,10 @@ CREATE TABLE assessment (
     section     section_which NOT NULL,
     rating      TEXT NOT NULL CHECK (rating IN ('none', 'weakly', 'somewhat', 'significantly', 'highly', 'definitively')),
     explanation TEXT NOT NULL,
+    criteria               JSONB,
+    supported_elements     TEXT[],
+    limitations            TEXT[],
+    suggested_improvements TEXT[],
     created     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

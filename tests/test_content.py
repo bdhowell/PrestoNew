@@ -1157,6 +1157,10 @@ class ContentDatabaseTests(unittest.TestCase):
 
     def test_image_assessment_migration_is_repeatable(self) -> None:
         self.connection.execute("ALTER TABLE assessment ALTER COLUMN cid SET NOT NULL")
+        self.connection.execute(
+            "ALTER TABLE assessment DROP COLUMN criteria, DROP COLUMN supported_elements, "
+            "DROP COLUMN limitations, DROP COLUMN suggested_improvements"
+        )
         migration = (ROOT / "schema/image-assessment.sql").read_text()
         self.connection.execute(migration)
         self.connection.execute(migration)
@@ -1166,6 +1170,10 @@ class ContentDatabaseTests(unittest.TestCase):
         ).fetchall())
         self.assertEqual(columns["cid"], "YES")
         self.assertEqual(columns["sid"], "YES")
+        for column in (
+            "criteria", "supported_elements", "limitations", "suggested_improvements",
+        ):
+            self.assertIn(column, columns)
         self.assertIsNotNone(self.connection.execute(
             "SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() "
             "AND indexname = 'idx_assessment_sid_section'",
@@ -1252,11 +1260,30 @@ class ContentDatabaseTests(unittest.TestCase):
 
     def test_graphic_evaluations_persist_and_are_owner_scoped(self) -> None:
         pid, _ = asyncio.run(self.store.new_or_existing(7))
+        criteria = {
+            "relevance": "Relevant.",
+            "technical_accuracy": "Accurate.",
+            "specificity": "Specific.",
+            "completeness": "Complete.",
+            "evidentiary_support": "Supported.",
+            "potential_for_misinterpretation": "Clear.",
+        }
+
+        def section_evaluation(rating: str, explanation: str) -> dict[str, object]:
+            return {
+                "rating": rating,
+                "explanation": explanation,
+                "criteria": criteria.copy(),
+                "supported_elements": ["A labeled element."],
+                "limitations": ["One limitation."],
+                "suggested_improvements": ["Add a legend."],
+            }
+
         evaluation_result = {"evaluations": {
-            "materials_and_methods": {
-                "rating": "significantly", "explanation": "The image shows the procedure.",
-            },
-            "results": {"rating": "highly", "explanation": "The image shows the findings."},
+            "materials_and_methods": section_evaluation(
+                "significantly", "The image shows the procedure.",
+            ),
+            "results": section_evaluation("highly", "The image shows the findings."),
         }}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "graphic.png"
@@ -1297,31 +1324,63 @@ class ContentDatabaseTests(unittest.TestCase):
             )
             self.assertEqual(
                 self.connection.execute(
-                    "SELECT cid, sid, section::text, rating, explanation FROM assessment "
+                    "SELECT cid, sid, section::text, rating, explanation, criteria, "
+                    "supported_elements, limitations, suggested_improvements FROM assessment "
                     "WHERE pid = %s ORDER BY aid", (pid,),
                 ).fetchall(),
                 [
-                    (None, sid, "materials and methods", "significantly", "The image shows the procedure."),
-                    (None, sid, "results", "highly", "The image shows the findings."),
+                    (
+                        None, sid, "materials and methods", "significantly",
+                        "The image shows the procedure.", criteria,
+                        ["A labeled element."], ["One limitation."], ["Add a legend."],
+                    ),
+                    (
+                        None, sid, "results", "highly", "The image shows the findings.",
+                        criteria,
+                        ["A labeled element."], ["One limitation."], ["Add a legend."],
+                    ),
                 ],
             )
+            updated_methods = section_evaluation("highly", "Updated procedure assessment.")
+            updated_criteria = {
+                "relevance": "Updated relevance.",
+                "technical_accuracy": "Updated accuracy.",
+                "specificity": "Updated specificity.",
+                "completeness": "Updated completeness.",
+                "evidentiary_support": "Updated support.",
+                "potential_for_misinterpretation": "Updated clarity.",
+            }
+            updated_methods["criteria"] = updated_criteria
+            updated_methods["supported_elements"] = ["Updated element."]
+            updated_methods["limitations"] = ["Updated limitation."]
+            updated_methods["suggested_improvements"] = ["Add an updated legend."]
+            updated_results = section_evaluation("somewhat", "Updated findings assessment.")
+            updated_results["criteria"] = updated_criteria
             updated_result = {"evaluations": {
-                "materials_and_methods": {
-                    "rating": "highly", "explanation": "Updated procedure assessment.",
-                },
-                "results": {"rating": "somewhat", "explanation": "Updated findings assessment."},
+                "materials_and_methods": updated_methods,
+                "results": updated_results,
             }}
             self.assertTrue(asyncio.run(self.store.save_graphic_evaluation(
                 7, pid, sid, updated_result, expected_hash,
             )))
             self.assertEqual(
                 self.connection.execute(
-                    "SELECT section::text, rating, explanation FROM assessment "
+                    "SELECT section::text, rating, explanation, criteria, "
+                    "supported_elements, limitations, suggested_improvements FROM assessment "
                     "WHERE pid = %s ORDER BY section", (pid,),
                 ).fetchall(),
                 [
-                    ("materials and methods", "highly", "Updated procedure assessment."),
-                    ("results", "somewhat", "Updated findings assessment."),
+                    (
+                        "materials and methods", "highly", "Updated procedure assessment.",
+                        updated_criteria,
+                        ["Updated element."],
+                        ["Updated limitation."], ["Add an updated legend."],
+                    ),
+                    (
+                        "results", "somewhat", "Updated findings assessment.",
+                        updated_criteria,
+                        ["A labeled element."], ["One limitation."], ["Add a legend."],
+                    ),
                 ],
             )
             self.assertEqual(asyncio.run(self.store.evaluation_sources(8, pid)), [])

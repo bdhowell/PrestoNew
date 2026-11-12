@@ -78,7 +78,8 @@ it evaluates pending graphics and offers the section review page when finished.
 `/content/evaluate` is its own resumption page: returning after an interruption
 reuses saved evaluations and finishes the remaining graphics.
 Each image evaluation is recorded in `assessment` for its Materials and Methods
-and Results sections, linked to the image source; the conference is optional.
+and Results sections, including criteria, supported elements, limitations, and
+suggested improvements, linked to the image source; the conference is optional.
 Interrupted connections are retried automatically twice before offering a manual
 retry; saved evaluations are reused on each attempt.
 
