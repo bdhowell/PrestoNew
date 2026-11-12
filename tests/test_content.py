@@ -289,8 +289,8 @@ class ContentRouteTests(unittest.TestCase):
 
     def test_graphic_evaluation_page_shows_counts_and_uses_selected_poster(self) -> None:
         self.sources.evaluation_sources.return_value = [
-            content.GraphicEvaluationSource(1, "upload.png", "image/png", None, None, None, None),
-            content.GraphicEvaluationSource(2, "extract.png", "image/png", 1, None, None, None),
+            content.GraphicEvaluationSource(1, "upload.png", "image/png", None, None, None),
+            content.GraphicEvaluationSource(2, "extract.png", "image/png", 1, None, None),
         ]
         response = self.client.get("/content/evaluate")
         self.assertEqual(response.status_code, 200)
@@ -304,8 +304,8 @@ class ContentRouteTests(unittest.TestCase):
 
     def test_graphic_evaluation_streams_persists_and_groups_source_results(self) -> None:
         self.sources.evaluation_sources.return_value = [
-            content.GraphicEvaluationSource(1, "uploaded.png", "image/png", None, None, None, None),
-            content.GraphicEvaluationSource(2, "extracted.jpg", "image/jpeg", 1, None, None, None),
+            content.GraphicEvaluationSource(1, "uploaded.png", "image/png", None, None, None),
+            content.GraphicEvaluationSource(2, "extracted.jpg", "image/jpeg", 1, None, None),
         ]
         self.sources.source_text.return_value = content.SourceText(
             1, "Original research context", "fingerprint", 27,
@@ -383,13 +383,9 @@ class ContentRouteTests(unittest.TestCase):
             "image_analysis": {"classification": "image", "math_expressions": []},
             "evaluations": {},
         }
-        expected_hash = content.graphic_evaluation_hash(
-            "fingerprint", "No Materials and Methods text was provided.",
-            "No Results text was provided.", None,
-        )
         self.sources.evaluation_sources.return_value = [
             content.GraphicEvaluationSource(
-                1, "saved.png", "image/png", None, evaluation_result, None, expected_hash,
+                1, "saved.png", "image/png", None, evaluation_result, None,
             ),
         ]
         self.sources.source_text.return_value = content.SourceText(
@@ -419,7 +415,7 @@ class ContentRouteTests(unittest.TestCase):
         )
         self.sources.evaluation_sources.return_value = [
             content.GraphicEvaluationSource(
-                1, "saved.png", "image/png", None, legacy_result, None, expected_hash,
+                1, "saved.png", "image/png", None, legacy_result, None,
             ),
         ]
         self.sources.source_text.return_value = content.SourceText(
@@ -455,10 +451,10 @@ class ContentRouteTests(unittest.TestCase):
         )
         self.sources.evaluation_sources.return_value = [
             content.GraphicEvaluationSource(
-                1, "saved.png", "image/png", None, evaluation_result, None, expected_hash,
+                1, "saved.png", "image/png", None, evaluation_result, None,
             ),
             content.GraphicEvaluationSource(
-                2, "stale.png", "image/png", None, evaluation_result, None, "outdated",
+                2, "stale.png", "image/png", None, None, None,
             ),
         ]
         self.sources.source_text.return_value = content.SourceText(
@@ -495,7 +491,7 @@ class ContentRouteTests(unittest.TestCase):
         )
         self.sources.evaluation_sources.return_value = [
             content.GraphicEvaluationSource(
-                sid, f"image-{sid}.png", "image/png", None, None, None, None,
+                sid, f"image-{sid}.png", "image/png", None, None, None,
             )
             for sid in (1, 2)
         ]
@@ -507,7 +503,7 @@ class ContentRouteTests(unittest.TestCase):
 
         async def save_result(uid, pid, sid, result, fingerprint):
             self.sources.evaluation_sources.return_value[sid - 1] = content.GraphicEvaluationSource(
-                sid, f"image-{sid}.png", "image/png", None, result, None, fingerprint,
+                sid, f"image-{sid}.png", "image/png", None, result, None,
             )
             return True
 
@@ -883,7 +879,9 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         locked, sections, prior, deleted = (
             AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock(),
         )
-        locked.fetchone.return_value = (1, digest, None, "equation.png", "image/png", "/sources/source")
+        locked.fetchone.return_value = (
+            1, digest, None, "equation.png", "image/png", "/sources/source", None,
+        )
         sections.fetchall.return_value = []
         prior.fetchall.return_value = []
         inserted = []
@@ -1017,7 +1015,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                     content.processing.summarize.assert_not_awaited()
                     statement, params = connection.execute.await_args_list[-1].args
                     self.assertIn("extracted = TRUE", statement)
-                    self.assertEqual(params, ("text", None, None, None, None, "text", 1))
+                    self.assertEqual(params, ("text", None, None, None, "text", 1))
 
     async def test_failed_conversion_keeps_original_for_retry(self) -> None:
         store = content.SourceStore()
@@ -1320,9 +1318,12 @@ class ContentDatabaseTests(unittest.TestCase):
     def setUp(self) -> None:
         test_posters.PosterDatabaseTests.setUp(self)
 
-    def test_graphic_evaluation_migration_is_repeatable(self) -> None:
-        self.connection.execute("ALTER TABLE source DROP COLUMN evaluation, DROP COLUMN evaluation_hash")
-        migration = (ROOT / "schema/source-evaluation.sql").read_text()
+    def test_source_analysis_cleanup_migration_is_repeatable(self) -> None:
+        self.connection.execute(
+            "ALTER TABLE source ADD COLUMN summary TEXT, ADD COLUMN evaluation JSONB, "
+            "ADD COLUMN evaluation_hash TEXT"
+        )
+        migration = (ROOT / "schema/source-analysis-cleanup.sql").read_text()
         self.connection.execute(migration)
         self.connection.execute(migration)
         columns = {
@@ -1331,7 +1332,9 @@ class ContentDatabaseTests(unittest.TestCase):
                 "WHERE table_schema = current_schema() AND table_name = 'source'",
             ).fetchall()
         }
-        self.assertIn("evaluation", columns)
+        self.assertNotIn("summary", columns)
+        self.assertNotIn("evaluation", columns)
+        self.assertNotIn("evaluation_hash", columns)
 
     def test_image_assessment_migration_is_repeatable(self) -> None:
         self.connection.execute("ALTER TABLE assessment ALTER COLUMN cid SET NOT NULL")
@@ -1500,7 +1503,7 @@ class ContentDatabaseTests(unittest.TestCase):
                     7, pid, sid, result, expected_hash,
                 )))
                 row = self.connection.execute(
-                    "SELECT kind, filename, mimetype, storage_uri, hash, evaluation_hash "
+                    "SELECT kind, filename, mimetype, storage_uri, hash "
                     "FROM source WHERE sid = %s", (sid,),
                 ).fetchone()
                 png = Path(row[3]).read_bytes()
@@ -1508,10 +1511,8 @@ class ContentDatabaseTests(unittest.TestCase):
             self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
             self.assertFalse(path.exists())
             self.assertEqual(row[4], content.source_hash(png))
-            self.assertEqual(row[5], content.graphic_evaluation_hash(
-                snapshot.fingerprint, "No Materials and Methods text was provided.",
-                "No Results text was provided.", row[4],
-            ))
+            cached = asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation
+            self.assertEqual(cached["image_analysis"]["classification"], "chart")
 
     def test_graphic_evaluations_persist_and_are_owner_scoped(self) -> None:
         pid, _ = asyncio.run(self.store.new_or_existing(7))
@@ -1558,7 +1559,7 @@ class ContentDatabaseTests(unittest.TestCase):
             )
             graphics = asyncio.run(self.store.evaluation_sources(7, pid))
             self.assertEqual(graphics, [
-                content.GraphicEvaluationSource(sid, "graphic.png", "image/png", None, None, None, None),
+                content.GraphicEvaluationSource(sid, "graphic.png", "image/png", None, None, None),
             ])
             self.assertEqual(
                 asyncio.run(self.store.graphic_source(7, pid, sid)),
@@ -1578,14 +1579,16 @@ class ContentDatabaseTests(unittest.TestCase):
                 ).fetchone()[0],
                 "image",
             )
-            self.assertEqual(
-                asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation,
-                evaluation_result,
-            )
-            self.assertEqual(
-                asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation_hash,
-                expected_hash,
-            )
+            cached = asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation
+            self.assertEqual(cached["image_analysis"], {
+                "classification": "image", "description": "", "math_expressions": [],
+            })
+            self.assertEqual(cached["evaluations"]["materials_and_methods"], section_evaluation(
+                "significantly", "The image shows the procedure.",
+            ))
+            self.assertEqual(cached["evaluations"]["results"], section_evaluation(
+                "highly", "The image shows the findings.",
+            ))
             self.assertEqual(
                 self.connection.execute(
                     "SELECT cid, sid, section::text, rating, explanation, criteria, "
@@ -1687,7 +1690,6 @@ class ContentDatabaseTests(unittest.TestCase):
             self.assertEqual(asyncio.run(self.store.evaluation_sources(8, pid)), [])
             self.assertTrue(asyncio.run(self.store.save_section(7, pid, "results", "Updated results")))
             self.assertIsNone(asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation)
-            self.assertIsNone(asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation_hash)
 
 
     def test_multiple_top_level_sources_persist_in_order_and_are_owner_scoped(self) -> None:

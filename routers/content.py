@@ -392,7 +392,6 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
         return (
             graphic.evaluation is not None
             and has_classification(graphic)
-            and graphic.evaluation_hash == expected_hashes[graphic.sid]
         )
 
     pending = [

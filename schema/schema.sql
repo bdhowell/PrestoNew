@@ -143,7 +143,6 @@ CREATE TABLE source (
     parent      INTEGER REFERENCES source(sid) ON DELETE CASCADE,
     text        TEXT,
     description TEXT,
-    summary     TEXT,
     extracted   BOOLEAN NOT NULL DEFAULT TRUE,
     size        INTEGER NOT NULL,
     height      INTEGER,
@@ -156,8 +155,6 @@ CREATE TABLE source (
     added       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     usable      BOOLEAN NOT NULL DEFAULT TRUE,
-    evaluation  JSONB,
-    evaluation_hash TEXT,
     search_vector tsvector,
     embedding   vector(1536)
 );

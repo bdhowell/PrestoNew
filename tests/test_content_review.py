@@ -26,9 +26,6 @@ class ReviewRouteTests(unittest.TestCase):
         ], [])
         self.posters.set_resumption.return_value = True
         self.sources.graphic_sources.return_value = []
-        self.sources.evaluation_sources.side_effect = psycopg.errors.UndefinedColumn(
-            "column s.evaluation does not exist",
-        )
 
     def test_review_renders_safe_sections_and_resumption(self) -> None:
         response = self.client.get("/content/review")

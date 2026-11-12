@@ -63,26 +63,27 @@ psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/schema.sql
 The schema objects must be owned by the role in `DATABASE_URL`. The schema is
 for initializing the maintained local database, not for upgrading older schemas.
 
-For an existing database, apply each feature migration explicitly. Graphic
-evaluation and poster thumbnail sources require:
+For an existing database, apply each feature migration explicitly. Remove
+obsolete source-analysis columns and install the poster thumbnail and image
+assessment features with:
 
 ```sh
-psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-evaluation.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-analysis-cleanup.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-thumbnail.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/image-assessment.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-image-classification.sql
 ```
 
-The graphics evaluation page skips to `/layout/edit` when every graphic already
-has an evaluation matching the current source text and poster sections. Otherwise,
-it evaluates pending graphics and offers the section review page when finished.
-`/content/evaluate` is its own resumption page: returning after an interruption
-reuses saved evaluations and finishes the remaining graphics.
+The graphics evaluation page skips to `/layout/edit` when every graphic has
+current assessments for its Materials and Methods and Results sections.
+Otherwise, it evaluates pending graphics and offers the section review page
+when finished. `/content/evaluate` is its own resumption page: returning after
+an interruption reuses current assessments and finishes the remaining graphics.
 Each image evaluation is recorded in `assessment` for its Materials and Methods
 and Results sections, including criteria, supported elements, limitations, and
 suggested improvements, linked to the image source; the conference is optional.
 Interrupted connections are retried automatically twice before offering a manual
-retry; saved evaluations are reused on each attempt.
+retry; saved assessments are reused on each attempt.
 Classified charts are normalized and stored as PNG images. For a classified
 math-expression image, each extracted LaTeX expression is stored in `source.text`
 on its own child source record, while the original image remains available.

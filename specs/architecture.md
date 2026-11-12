@@ -811,8 +811,8 @@ Write a local function that takes a Python text or binary object and produces a 
   this flow. It adds `source.extracted` and marks pre-existing sources as already
   extracted, preserving their completed work. The migration is safe to repeat.
 
-  The current schema also adds `source.summary`, allows top-level sources with a null
-  `parent`, and updates the special-kind uniqueness index. Retry the upload
+  The current schema allows top-level sources with a null `parent` and updates
+  the special-kind uniqueness index. Retry the upload
   after the migration completes. The reduced-feature Docling warning is
   independent of database schema compatibility.
   Run `bin/python -m unittest tests.test_content tests.test_posters tests.test_wikkit`; set
@@ -916,7 +916,6 @@ For each uploaded item:
 If the document is a PDF, DocX, MD, Apple Pages:
 - Use Docling for IBM Watson X to extract texts, charts, formulae (math), tables images, math (as latex) from source documents: (descriptions for images and charts turned on)
  - For text documents, store the text, if any, in the source's db source record's text field.
-	- Use the LLM to summarize the text and store the summary in the source reccord's summary field.
 	- Hash images, charts, formulae (math), and graphs and verify that they don't already exist in the database.
 - For extracted images, charts, formulae (math), and graphs:
 	- Hash images, charts, formulae (math), and graphs and verify that they don't already exist in the database.
@@ -982,8 +981,9 @@ As each item is uploaded and added to the database, display it in the #items-lis
 - After successful elucidation is saved, the browser redirects to
   `/content/evaluate`. The owner-checked evaluation stream processes eligible
   uploaded and extracted PNG/JPEG sources one at a time, persists each
-  structured result in `source.evaluation`, and reports progress to Wikkit.
-  Section edits clear persisted evaluations. A graphic is suitable when either
+  results in `assessment` rows linked to each source image, and reports progress
+  to Wikkit. Assessments are reused only while source and section timestamps
+  remain current. A graphic is suitable when either
   its Materials and Methods or Results rating is at least `significantly`.
   The results page groups uploaded before extracted graphics and continues to
   `/content/review`; when no eligible graphics exist, Wikkit redirects to
@@ -995,7 +995,7 @@ As each item is uploaded and added to the database, display it in the #items-lis
   is returned before persistence completes.
 - Success navigates to `/content/evaluate` before graphic assessment and review.
   The evaluation image route is owner-scoped. Apply
-  `schema/source-evaluation.sql` to existing databases and install
+  `schema/source-analysis-cleanup.sql` to existing databases and install
   `requirements-content.txt`.
   Run `bin/python -m unittest tests.test_elucidation tests.test_content tests.test_posters tests.test_wikkit`.
 

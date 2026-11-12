@@ -55,7 +55,6 @@ class Asset:
 @dataclass
 class Processed:
     text: str = ""
-    summary: str = ""
     description: str = ""
     width: int | None = None
     height: int | None = None

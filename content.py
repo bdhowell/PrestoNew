@@ -166,7 +166,6 @@ class GraphicEvaluationSource:
     parent: int | None
     evaluation: dict[str, object] | None
     digest: str | None
-    evaluation_hash: str | None
 
     @property
     def category(self) -> str:
@@ -371,7 +370,7 @@ class SourceStore(PosterStore):
                     await connection.execute(
                         "UPDATE source SET filename = 'thumbnail.png', mimetype = 'image/png', "
                         "size = %s, height = %s, width = %s, fileid = %s, storage_uri = %s, "
-                        "hash = %s, parent = NULL, text = NULL, summary = NULL, description = NULL, "
+                        "hash = %s, parent = NULL, text = NULL, description = NULL, "
                         "added = now(), updated = now(), extracted = TRUE WHERE sid = %s",
                         (len(data), height, width, fileid, uri, source_hash(data), sid),
                     )
@@ -514,11 +513,11 @@ class SourceStore(PosterStore):
                 )
                 kind = await self._asset_kind(connection, pid, original)
                 await connection.execute(
-                    "UPDATE source SET text = %s, summary = %s, description = %s, "
+                    "UPDATE source SET text = %s, description = %s, "
                     "width = %s, height = %s, kind = %s, extracted = TRUE, updated = now() "
                     "WHERE sid = %s",
-                    (result.text or None, result.summary or None, result.description or None,
-                     result.width, result.height, kind, sid),
+                    (result.text or None, result.description or None, result.width,
+                     result.height, kind, sid),
                 )
                 for asset in result.assets:
                     await self._insert_source(connection, files, written, pid, asset, sid)
@@ -532,7 +531,7 @@ class SourceStore(PosterStore):
 
     async def _insert_source(
         self, connection: psycopg.AsyncConnection, files: SourceFiles, written: list[str], pid: int,
-        asset: processing.Asset, parent: int | None, summary: str = "", extracted: bool = True,
+        asset: processing.Asset, parent: int | None, extracted: bool = True,
         deduplicate: bool = True,
     ) -> Source:
         digest = source_hash(asset.data)
@@ -552,11 +551,11 @@ class SourceStore(PosterStore):
         written.append(uri)
         cursor = await connection.execute(
             "INSERT INTO source (pid, kind, parent, filename, mimetype, size, fileid, hash, "
-            "storage_uri, text, summary, description, width, height, extracted) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "storage_uri, text, description, width, height, extracted) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
             "RETURNING sid, filename, mimetype, size, added::text, parent, description, width, height, kind, extracted",
             (pid, kind, parent, asset.filename, asset.mimetype, len(asset.data), fileid,
-             digest, uri, asset.text or None, summary or None, asset.description or None,
+             digest, uri, asset.text or None, asset.description or None,
              asset.width, asset.height, extracted),
         )
         row = await cursor.fetchone()
@@ -647,10 +646,6 @@ class SourceStore(PosterStore):
                     "updated = excluded.updated, embedding = NULL",
                     (pid, which, text),
                 )
-            await connection.execute(
-                "UPDATE source SET evaluation = NULL, evaluation_hash = NULL WHERE pid = %s",
-                (pid,),
-            )
             await connection.execute("UPDATE poster SET updated = now(), embedding = NULL WHERE pid = %s", (pid,))
 
     async def graphic(self, uid: int, pid: int, sid: int) -> bytes | None:
@@ -700,16 +695,81 @@ class SourceStore(PosterStore):
         async with connection:
             cursor = await connection.execute(
                 "SELECT s.sid, coalesce(s.filename, parent.filename, 'Untitled source'), "
-                "s.mimetype, s.parent, s.evaluation, s.hash, s.evaluation_hash "
+                "s.mimetype, s.parent, s.kind, s.description, s.hash, "
+                "ARRAY(SELECT formula.text FROM source formula "
+                "WHERE formula.pid = s.pid AND formula.parent = s.sid "
+                "AND formula.kind = 'math expression' "
+                "AND formula.filename LIKE %s "
+                "ORDER BY formula.sid), "
+                "a.section::text, a.rating, a.explanation, a.criteria, "
+                "a.supported_elements, a.limitations, a.suggested_improvements, a.created, "
+                "(SELECT max(root.updated) FROM source root WHERE root.pid = s.pid "
+                "AND root.parent IS NULL AND root.kind <> 'thumbnail'), "
+                "(SELECT max(section.updated) FROM section "
+                "WHERE section.pid = s.pid AND section.which IN "
+                "('materials and methods', 'results')), s.updated "
                 "FROM source s JOIN poster p USING (pid) "
                 "LEFT JOIN source parent ON parent.sid = s.parent "
+                "LEFT JOIN assessment a ON a.sid = s.sid "
+                "AND a.section IN ('materials and methods', 'results') "
                 "WHERE p.uid = %s AND p.pid = %s AND s.width IS NOT NULL "
                 "AND s.height IS NOT NULL AND s.storage_uri IS NOT NULL "
                 "AND s.mimetype IN ('image/png', 'image/jpeg') "
                 "AND s.kind <> 'thumbnail' "
-                "ORDER BY (s.parent IS NOT NULL), s.sid", (uid, pid),
+                "ORDER BY (s.parent IS NOT NULL), s.sid, a.section",
+                (f"{EVALUATED_MATH_FILENAME_PREFIX}%", uid, pid),
             )
-            return [GraphicEvaluationSource(*row) for row in await cursor.fetchall()]
+            rows = await cursor.fetchall()
+
+        graphics: list[GraphicEvaluationSource] = []
+        index = 0
+        while index < len(rows):
+            sid = rows[index][0]
+            grouped = []
+            while index < len(rows) and rows[index][0] == sid:
+                grouped.append(rows[index])
+                index += 1
+            row = grouped[0]
+            assessments = {
+                item[8]: {
+                    "rating": item[9],
+                    "explanation": item[10],
+                    "criteria": item[11],
+                    "supported_elements": item[12] or [],
+                    "limitations": item[13] or [],
+                    "suggested_improvements": item[14] or [],
+                }
+                for item in grouped if item[8] is not None
+            }
+            assessment_times = [item[15] for item in grouped if item[15] is not None]
+            latest_change = max(
+                (value for value in (row[16], row[17], row[18]) if value is not None),
+                default=None,
+            )
+            current = (
+                set(assessments) == {"materials and methods", "results"}
+                and len(assessment_times) == 2
+                and latest_change is not None
+                and all(created >= latest_change for created in assessment_times)
+            )
+            classification = row[4] if row[4] in IMAGE_CLASSIFICATIONS else "image"
+            evaluation = None
+            if current:
+                evaluation = {
+                    "image_analysis": {
+                        "classification": classification,
+                        "description": row[5] or "",
+                        "math_expressions": row[7] or [],
+                    },
+                    "evaluations": {
+                        "materials_and_methods": assessments["materials and methods"],
+                        "results": assessments["results"],
+                    },
+                }
+            graphics.append(GraphicEvaluationSource(
+                row[0], row[1], row[2], row[3], evaluation, row[6],
+            ))
+        return graphics
 
     async def save_graphic_evaluation(
         self, uid: int, pid: int, sid: int, result: dict[str, object],
@@ -723,7 +783,7 @@ class SourceStore(PosterStore):
         try:
             async with connection:
                 cursor = await connection.execute(
-                    "SELECT s.sid, s.hash, p.cid, s.filename, s.mimetype, s.storage_uri "
+                    "SELECT s.sid, s.hash, p.cid, s.filename, s.mimetype, s.storage_uri, s.description "
                     "FROM source s JOIN poster p USING (pid) "
                     "WHERE p.uid = %s AND p.pid = %s AND s.sid = %s "
                     "AND s.width IS NOT NULL AND s.height IS NOT NULL "
@@ -811,7 +871,6 @@ class SourceStore(PosterStore):
                         supported_elements, limitations, suggested_improvements,
                     ))
 
-                evaluation_hash = expected_hash
                 if classification == "chart" and row[4] != "image/png":
                     if not row[5]:
                         raise ValueError("The chart image is no longer available.")
@@ -823,9 +882,6 @@ class SourceStore(PosterStore):
                     written.append(uri)
                     chart_old_uri = row[5]
                     png_hash = source_hash(png_data)
-                    evaluation_hash = graphic_evaluation_hash(
-                        snapshot.fingerprint, methods, results, png_hash,
-                    )
                     await connection.execute(
                         "UPDATE source SET filename = %s, mimetype = 'image/png', size = %s, "
                         "width = %s, height = %s, fileid = %s, storage_uri = %s, hash = %s, "
@@ -863,11 +919,11 @@ class SourceStore(PosterStore):
 
                 await connection.execute(
                     "UPDATE source SET kind = CASE WHEN %s <> 'image' THEN %s ELSE kind END, "
-                    "evaluation = %s, evaluation_hash = %s, updated = now() "
+                    "description = %s, updated = now() "
                     "WHERE pid = %s AND sid = %s",
                     (
-                        classification, classification, Jsonb(result), evaluation_hash,
-                        pid, sid,
+                        classification, classification,
+                        image_analysis.get("description") or row[6], pid, sid,
                     ),
                 )
                 for assessment in assessment_rows:
