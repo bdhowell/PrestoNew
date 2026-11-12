@@ -306,7 +306,10 @@ class ContentRouteTests(unittest.TestCase):
         self.sources.graphic_source.return_value = (b"image-bytes", "image/png")
         self.sources.save_graphic_evaluation.return_value = True
         evaluation_result = {
-            "image_analysis": {"description": "A research image"},
+            "image_analysis": {
+                "classification": "image",
+                "description": "A research image",
+            },
             "evaluations": {
                 "materials_and_methods": {"rating": "significantly"},
                 "results": {"rating": "weakly"},
@@ -364,7 +367,10 @@ class ContentRouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/content/evaluate/11", json={}).status_code, 401)
 
     def test_graphic_evaluation_skips_to_layout_for_current_saved_results(self) -> None:
-        evaluation_result = {"image_analysis": {}, "evaluations": {}}
+        evaluation_result = {
+            "image_analysis": {"classification": "image"},
+            "evaluations": {},
+        }
         expected_hash = content.graphic_evaluation_hash(
             "fingerprint", "No Materials and Methods text was provided.",
             "No Results text was provided.", None,
@@ -386,8 +392,48 @@ class ContentRouteTests(unittest.TestCase):
         self.sources.graphic_source.assert_not_awaited()
         self.sources.save_graphic_evaluation.assert_not_awaited()
 
+    def test_graphic_evaluation_recalculates_saved_results_without_classification(self) -> None:
+        legacy_result = {"image_analysis": {}, "evaluations": {}}
+        evaluation_result = {
+            "image_analysis": {"classification": "chart"},
+            "evaluations": {},
+        }
+        expected_hash = content.graphic_evaluation_hash(
+            "fingerprint", "No Materials and Methods text was provided.",
+            "No Results text was provided.", None,
+        )
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(
+                1, "saved.png", "image/png", None, legacy_result, None, expected_hash,
+            ),
+        ]
+        self.sources.source_text.return_value = content.SourceText(
+            1, "Original research context", "fingerprint", 27,
+        )
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (b"image-bytes", "image/png")
+        self.sources.save_graphic_evaluation.return_value = True
+        with patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.graphic_evaluation, "evaluate_image",
+            return_value=Mock(model_dump=Mock(return_value=evaluation_result)),
+        ) as evaluate:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(
+            [event["type"] for event in events],
+            ["start", "progress", "result", "complete"],
+        )
+        self.assertEqual(events[2]["evaluation"]["image_analysis"]["classification"], "chart")
+        evaluate.assert_called_once()
+        self.sources.save_graphic_evaluation.assert_awaited_once_with(
+            7, 11, 1, evaluation_result, expected_hash,
+        )
+
     def test_graphic_evaluation_reuses_current_results_and_reevaluates_stale_results(self) -> None:
-        evaluation_result = {"image_analysis": {}, "evaluations": {}}
+        evaluation_result = {
+            "image_analysis": {"classification": "image"},
+            "evaluations": {},
+        }
         expected_hash = content.graphic_evaluation_hash(
             "fingerprint", "No Materials and Methods text was provided.",
             "No Results text was provided.", None,
@@ -424,7 +470,10 @@ class ContentRouteTests(unittest.TestCase):
         )
 
     def test_resumed_evaluation_finishes_only_graphics_not_saved_before_interruption(self) -> None:
-        evaluation_result = {"image_analysis": {}, "evaluations": {}}
+        evaluation_result = {
+            "image_analysis": {"classification": "image"},
+            "evaluations": {},
+        }
         expected_hash = content.graphic_evaluation_hash(
             "fingerprint", "No Materials and Methods text was provided.",
             "No Results text was provided.", None,
@@ -1208,6 +1257,23 @@ class ContentDatabaseTests(unittest.TestCase):
             "VALUES (%s, 'thumbnail', 0, 'image/png')", (pid,),
         )
 
+    def test_source_image_classification_migration_is_repeatable(self) -> None:
+        self.connection.execute("ALTER TABLE source DROP CONSTRAINT source_kind_check")
+        self.connection.execute(
+            "ALTER TABLE source ADD CONSTRAINT source_kind_check CHECK "
+            "(kind IN ('text', 'svg', 'mixed', 'image', 'math', 'chart', 'table', "
+            "'logo', 'moreinfo', 'qrcode', 'thumbnail'))"
+        )
+        migration = (ROOT / "schema/source-image-classification.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        for kind in ("diagram", "math expression"):
+            self.connection.execute(
+                "INSERT INTO source (pid, kind, size, mimetype) "
+                "VALUES (%s, %s, 1, 'image/png')", (pid, kind),
+            )
+
     def test_poster_thumbnail_refreshes_for_poster_and_source_updates(self) -> None:
         from PIL import Image
 
@@ -1279,12 +1345,15 @@ class ContentDatabaseTests(unittest.TestCase):
                 "suggested_improvements": ["Add a legend."],
             }
 
-        evaluation_result = {"evaluations": {
-            "materials_and_methods": section_evaluation(
-                "significantly", "The image shows the procedure.",
-            ),
-            "results": section_evaluation("highly", "The image shows the findings."),
-        }}
+        evaluation_result = {
+            "image_analysis": {"classification": "image"},
+            "evaluations": {
+                "materials_and_methods": section_evaluation(
+                    "significantly", "The image shows the procedure.",
+                ),
+                "results": section_evaluation("highly", "The image shows the findings."),
+            },
+        }
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "graphic.png"
             path.write_bytes(b"image")
@@ -1314,6 +1383,12 @@ class ContentDatabaseTests(unittest.TestCase):
                 7, pid, sid, evaluation_result,
                 expected_hash,
             )))
+            self.assertEqual(
+                self.connection.execute(
+                    "SELECT kind FROM source WHERE sid = %s", (sid,),
+                ).fetchone()[0],
+                "image",
+            )
             self.assertEqual(
                 asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation,
                 evaluation_result,
@@ -1356,13 +1431,22 @@ class ContentDatabaseTests(unittest.TestCase):
             updated_methods["suggested_improvements"] = ["Add an updated legend."]
             updated_results = section_evaluation("somewhat", "Updated findings assessment.")
             updated_results["criteria"] = updated_criteria
-            updated_result = {"evaluations": {
-                "materials_and_methods": updated_methods,
-                "results": updated_results,
-            }}
+            updated_result = {
+                "image_analysis": {"classification": "diagram"},
+                "evaluations": {
+                    "materials_and_methods": updated_methods,
+                    "results": updated_results,
+                },
+            }
             self.assertTrue(asyncio.run(self.store.save_graphic_evaluation(
                 7, pid, sid, updated_result, expected_hash,
             )))
+            self.assertEqual(
+                self.connection.execute(
+                    "SELECT kind FROM source WHERE sid = %s", (sid,),
+                ).fetchone()[0],
+                "diagram",
+            )
             self.assertEqual(
                 self.connection.execute(
                     "SELECT section::text, rating, explanation, criteria, "

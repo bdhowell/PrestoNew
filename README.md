@@ -70,6 +70,7 @@ evaluation and poster thumbnail sources require:
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-evaluation.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-thumbnail.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/image-assessment.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-image-classification.sql
 ```
 
 The graphics evaluation page skips to `/layout/edit` when every graphic already

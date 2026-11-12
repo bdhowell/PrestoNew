@@ -358,10 +358,31 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
         )
         for graphic in graphics
     } if snapshot is not None else {}
+
+    def has_classification(graphic: content.GraphicEvaluationSource) -> bool:
+        evaluation = graphic.evaluation
+        if not isinstance(evaluation, dict):
+            return False
+        image_analysis = evaluation.get("image_analysis")
+        classification = (
+            image_analysis.get("classification")
+            if isinstance(image_analysis, dict) else None
+        )
+        return (
+            isinstance(classification, str)
+            and classification in content.IMAGE_CLASSIFICATIONS
+        )
+
+    def is_current(graphic: content.GraphicEvaluationSource) -> bool:
+        return (
+            graphic.evaluation is not None
+            and has_classification(graphic)
+            and graphic.evaluation_hash == expected_hashes[graphic.sid]
+        )
+
     pending = [
         graphic for graphic in graphics
-        if graphic.evaluation is None
-        or graphic.evaluation_hash != expected_hashes[graphic.sid]
+        if not is_current(graphic)
     ]
     try:
         client = openai.OpenAI() if pending else None
@@ -386,10 +407,7 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                 return
 
             for graphic in graphics:
-                if (
-                    graphic.evaluation is not None
-                    and graphic.evaluation_hash == expected_hashes[graphic.sid]
-                ):
+                if is_current(graphic):
                     yield json.dumps({
                         "type": "result",
                         "source": {

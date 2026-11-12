@@ -51,7 +51,10 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
                 "type": "result",
                 "source": {"sid": sid, "category": category, "filename": filename},
                 "evaluation": {
-                    "image_analysis": {"description": "A scientific image"},
+                    "image_analysis": {
+                        "classification": "chart",
+                        "description": "A scientific image",
+                    },
                     "evaluations": {
                         "materials_and_methods": {
                             "rating": methods,
@@ -92,6 +95,9 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertEqual(await self.page.locator(".evaluation-verdict").all_text_contents(), [
             "Suitable for the poster.", "Not suitable for the poster.",
+        ])
+        self.assertEqual(await self.page.locator(".graphic-classification").all_text_contents(), [
+            "Classification: chart", "Classification: chart",
         ])
         self.assertEqual(await self.page.locator("#evaluation-status").text_content(),
                          "Evaluation complete: one suitable and one not suitable.")

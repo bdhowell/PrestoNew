@@ -69,6 +69,10 @@ FORMATS = {
     ".md": ("text/markdown", "text"),
 }
 
+IMAGE_CLASSIFICATIONS = frozenset({
+    "table", "chart", "diagram", "math expression", "image",
+})
+
 
 def source_hash(value: str | bytes) -> str:
     return hashlib.sha256(value.encode("utf-8") if isinstance(value, str) else value).hexdigest()
@@ -737,6 +741,16 @@ class SourceStore(PosterStore):
             evaluations = result.get("evaluations")
             if not isinstance(evaluations, dict):
                 raise ValueError("Graphic evaluation must contain section evaluations.")
+            image_analysis = result.get("image_analysis")
+            classification = (
+                image_analysis.get("classification")
+                if isinstance(image_analysis, dict) else None
+            )
+            if (
+                not isinstance(classification, str)
+                or classification not in IMAGE_CLASSIFICATIONS
+            ):
+                raise ValueError("Graphic evaluation has invalid image classification.")
             assessment_rows = []
             for key, section in (
                 ("materials_and_methods", "materials and methods"),
@@ -774,9 +788,10 @@ class SourceStore(PosterStore):
                     supported_elements, limitations, suggested_improvements,
                 ))
             await connection.execute(
-                "UPDATE source SET evaluation = %s, evaluation_hash = %s "
+                "UPDATE source SET kind = CASE WHEN %s <> 'image' THEN %s ELSE kind END, "
+                "evaluation = %s, evaluation_hash = %s "
                 "WHERE pid = %s AND sid = %s",
-                (Jsonb(result), expected_hash, pid, sid),
+                (classification, classification, Jsonb(result), expected_hash, pid, sid),
             )
             for assessment in assessment_rows:
                 await connection.execute(

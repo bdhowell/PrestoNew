@@ -124,6 +124,7 @@ Use this ordinal rating scale for each section:
 ## Output requirements
 
 - Return the requested structured output.
+- Set `image_analysis.classification` to exactly one Stage 1 category.
 - Keep each criterion assessment to one concise sentence.
 - Keep each overall explanation to at most three sentences.
 - Include only material supported elements, limitations, and improvements.
@@ -139,6 +140,14 @@ class Rating(str, Enum):
     significantly = "significantly"
     highly = "highly"
     definitively = "definitively"
+
+
+class ImageClassification(str, Enum):
+    table = "table"
+    chart = "chart"
+    diagram = "diagram"
+    math_expression = "math expression"
+    image = "image"
 
 
 class Criteria(BaseModel):
@@ -166,6 +175,7 @@ class SectionEvaluation(BaseModel):
 class ImageAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    classification: ImageClassification
     type: str
     description: str
     research_context: str

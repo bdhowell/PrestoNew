@@ -136,7 +136,10 @@ CREATE INDEX idx_show_approved ON show (approved) WHERE approved IS NULL;
 CREATE TABLE source (
     sid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
-    kind        TEXT NOT NULL CHECK (kind IN ('text', 'svg','mixed','image','math','chart','table','logo','moreinfo', 'qrcode','thumbnail')),
+    kind        TEXT NOT NULL CHECK (kind IN (
+        'text', 'svg', 'mixed', 'image', 'math', 'math expression', 'chart', 'table',
+        'diagram', 'logo', 'moreinfo', 'qrcode', 'thumbnail'
+    )),
     parent      INTEGER REFERENCES source(sid) ON DELETE CASCADE,
     text        TEXT,
     description TEXT,

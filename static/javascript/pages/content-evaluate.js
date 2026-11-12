@@ -80,6 +80,11 @@
                 card.append(image);
                 card.append(element(
                     "p",
+                    `Classification: ${item.evaluation.image_analysis.classification}`,
+                    "graphic-classification",
+                ));
+                card.append(element(
+                    "p",
                     isSuitable ? "Suitable for the poster." : "Not suitable for the poster.",
                     `evaluation-verdict ${isSuitable ? "suitable" : "not-suitable"}`,
                 ));
