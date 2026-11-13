@@ -24,25 +24,35 @@
                 <section id="review-{{ loop.index }}" aria-labelledby="review-heading-{{ loop.index }}">
                     <h2 id="review-heading-{{ loop.index }}">{{ label }}</h2>
                     <div class="content" contenteditable="true" role="textbox" aria-multiline="true"
+                         data-category="{{ 'methods' if which == 'materials and methods' else which }}"
                          aria-labelledby="review-heading-{{ loop.index }}" data-section="{{ which }}">{{ content }}</div>
                 </section>
                 {% endfor %}
             </div>
             <div id="review-divider" role="separator" tabindex="0" aria-orientation="vertical"
-                 aria-label="Resize sections and source graphics" aria-controls="review-sections review-graphics"
+                 aria-label="Resize sections and source graphics" aria-controls="review-sections review-graphic-panes"
                  aria-valuemin="20" aria-valuemax="80" aria-valuenow="50"
                  aria-valuetext="Sections 50%, source graphics 50%"></div>
-            <section id="review-graphics" tabindex="0" aria-labelledby="review-graphics-heading">
-                <h2 id="review-graphics-heading">Source graphics</h2>
-                {% for graphic in graphics %}
-                <figure>
-                    <img src="/content/{{ graphic.sid }}/image" alt="{{ graphic.filename }}" loading="lazy">
-                    <figcaption>{{ graphic.filename }}</figcaption>
-                </figure>
-                {% else %}
-                <p>No source graphics are available for this poster.</p>
-                {% endfor %}
-            </section>
+            <div id="review-graphic-panes">
+                <section id="review-graphics" tabindex="0" aria-labelledby="review-graphics-heading" hidden>
+                    <h2 id="review-graphics-heading">Source graphics</h2>
+                    <p data-graphics-empty {% if graphics %}hidden{% endif %}>{% if not graphics %}No source graphics are available for this poster.{% endif %}</p>
+                    {% for graphic in graphics %}
+                    <figure>
+                        <button type="button" class="review-graphic" data-sid="{{ graphic.sid }}"
+                                data-type="{{ graphic.type }}" aria-pressed="false">
+                            <img src="/content/{{ graphic.sid }}/image" alt="{{ graphic.filename }}" loading="lazy">
+                        </button>
+                        <figcaption>{{ graphic.filename }}</figcaption>
+                    </figure>
+                    {% endfor %}
+                </section>
+                <section id="review-assessment" aria-labelledby="review-assessment-heading" hidden>
+                    <h2 id="review-assessment-heading">Graphic Assessment</h2>
+                    <div id="review-assessment-content" aria-live="polite"></div>
+                </section>
+            </div>
+            <script id="review-graphics-data" type="application/json">{{ graphics_data|tojson }}</script>
         </div>
     </div>
 </div>
@@ -68,7 +78,7 @@
     <p><output id="content-save-status" role="status" aria-live="polite"></output></p>
 </div>
 <dialog id="revision-dialog" aria-labelledby="revision-title" aria-describedby="revision-description">
-    <h2 id="revision-title">Review Wikkit&rsquo;s revision</h2>
+    <h2 id="revision-title">Review but t&rsquo;s revision</h2>
     <p id="revision-description">Compare the current section with the proposed revision before deciding.</p>
     <p id="revision-section"></p>
     <div class="revision-comparison">

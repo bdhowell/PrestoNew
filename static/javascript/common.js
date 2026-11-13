@@ -100,3 +100,8 @@ function capitalizeFirstLetter(str) {
     if (!str) return ""; // Prevents errors on empty strings
     return str.charAt(0).toUpperCase() + str.slice(1);
 }
+
+function capitalizeWords(str) {
+    if (!str) return ""; // Prevents errors on empty strings
+    return str.split(" ").map(word => capitalizeFirstLetter(word)).join(" ");
+}

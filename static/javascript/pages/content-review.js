@@ -75,13 +75,143 @@
     }
 
     const sections = document.getElementById("review-sections");
+    const graphicPanes = document.getElementById("review-graphic-panes");
+    const graphicsPanel = document.getElementById("review-graphics");
+    const assessmentPanel = document.getElementById("review-assessment");
+    const assessmentContent = document.getElementById("review-assessment-content");
+    const graphicsData = JSON.parse(document.getElementById("review-graphics-data").textContent);
+    const figureBySid = new Map(
+        [...graphicsPanel.querySelectorAll(".review-graphic")]
+            .map(button => [Number(button.dataset.sid), button.closest("figure")]),
+    );
+    const originalFigureOrder = new Map([...figureBySid.values()].map((figure, index) => [figure, index]));
+    const imageTypes = ["svg", "png", "jpg", "jpeg", "gif", "tables", "math"];
+    const visibleTypes = {
+        introduction: new Set(["math"]),
+        methods: new Set(imageTypes),
+        results: new Set(imageTypes),
+        conclusion: new Set(["math"]),
+    };
+    const ratingOrder = ["none", "weakly", "somewhat", "significantly", "highly", "definitively"];
+    let selectedCategory = null;
+
+    function appendText(parent, tag, value, className = "") {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        element.textContent = value;
+        parent.append(element);
+        return element;
+    }
+
+    function appendAssessmentList(parent, title, values) {
+        if (!Array.isArray(values) || !values.length) return;
+        appendText(parent, "h4", title);
+        const list = document.createElement("ul");
+        for (const value of values) appendText(list, "li", value);
+        parent.append(list);
+    }
+
+    function showAssessment(sid) {
+        for (const button of graphicsPanel.querySelectorAll(".review-graphic")) {
+            const selected = Number(button.dataset.sid) === sid;
+            button.classList.toggle("is-selected", selected);
+            button.setAttribute("aria-pressed", String(selected));
+        }
+        assessmentContent.replaceChildren();
+        const graphic = graphicsData.find(item => item.sid === sid);
+        if (!graphic) return;
+
+        appendText(assessmentContent, "h3", "Description");
+        appendText(assessmentContent, "p", graphic.description || "No description is available.");
+        const section = selectedCategory === "methods" ? "materials and methods" : "results";
+        const label = selectedCategory === "methods" ? "Materials and Methods" : "Results";
+        const assessment = graphic.assessments[section];
+        appendText(assessmentContent, "h3", `${label} Assessment`);
+        if (!assessment) {
+            appendText(assessmentContent, "p", `No current ${label} assessment is available.`);
+            return;
+        }
+        appendText(assessmentContent, "p", `Rating: ${assessment.rating || "not rated"}`, "graphic-assessment-rating");
+        appendText(assessmentContent, "p", assessment.explanation || "");
+        const criteria = assessment.criteria || {};
+        const criterionEntries = Object.entries(criteria);
+        if (criterionEntries.length) {
+            appendText(assessmentContent, "h4", "Criteria");
+            const list = document.createElement("dl");
+            for (const [criterion, explanation] of criterionEntries) {
+                appendText(list, "dt", criterion.replaceAll("_", " "));
+                appendText(list, "dd", explanation);
+            }
+            assessmentContent.append(list);
+        }
+        appendAssessmentList(assessmentContent, "Supported elements", assessment.supported_elements);
+        appendAssessmentList(assessmentContent, "Limitations", assessment.limitations);
+        appendAssessmentList(assessmentContent, "Suggested improvements", assessment.suggested_improvements);
+    }
+
+    function updateGraphicPanels(category) {
+        selectedCategory = category;
+        const types = visibleTypes[category];
+        const assessmentVisible = category === "methods" || category === "results";
+        graphicsPanel.hidden = !types;
+        assessmentPanel.hidden = !assessmentVisible;
+        graphicPanes.classList.toggle("has-assessment", assessmentVisible);
+        if (!types) {
+            assessmentContent.replaceChildren();
+            return;
+        }
+
+        const figures = [...figureBySid.entries()].map(([sid, figure]) => ({
+            sid, figure, button: figure.querySelector(".review-graphic"),
+            graphic: graphicsData.find(item => item.sid === sid),
+        }));
+        const visible = figures.filter(item => types.has(item.button.dataset.type));
+        if (assessmentVisible) {
+            const typeOrder = type => imageTypes.indexOf(type);
+            const rating = graphic => ratingOrder.indexOf(
+                graphic?.assessments[category === "methods" ? "materials and methods" : "results"]?.rating,
+            );
+            visible.sort((first, second) =>
+                typeOrder(first.button.dataset.type) - typeOrder(second.button.dataset.type)
+                || rating(second.graphic) - rating(first.graphic)
+                || originalFigureOrder.get(first.figure) - originalFigureOrder.get(second.figure));
+        } else {
+            visible.sort((first, second) =>
+                originalFigureOrder.get(first.figure) - originalFigureOrder.get(second.figure));
+        }
+        const visibleSet = new Set(visible.map(item => item.figure));
+        for (const {figure} of figures) figure.hidden = !visibleSet.has(figure);
+        const empty = graphicsPanel.querySelector("[data-graphics-empty]");
+        empty.hidden = visible.length > 0;
+        empty.textContent = graphicsData.length
+            ? "No graphics of the supported types are available for this section."
+            : "No source graphics are available for this poster.";
+        graphicsPanel.append(...visible.map(item => item.figure));
+        graphicsPanel.append(...figures.filter(item => !visibleSet.has(item.figure))
+            .sort((first, second) => originalFigureOrder.get(first.figure) - originalFigureOrder.get(second.figure))
+            .map(item => item.figure));
+        showAssessment(visible[0]?.sid ?? null);
+        if (assessmentVisible && !visible.length) {
+            appendText(assessmentContent, "p", "No matching graphics are available for assessment.");
+        }
+    }
+
+    graphicsPanel.addEventListener("click", event => {
+        const button = event.target.closest(".review-graphic");
+        if (!button || !graphicsPanel.contains(button)) return;
+        showAssessment(Number(button.dataset.sid));
+    });
+
     function selectSectionLink(link) {
         sectionNavigation.querySelector("[aria-current='location']")
             ?.removeAttribute("aria-current");
         link.setAttribute("aria-current", "location");
         sections.querySelector("section.is-selected")?.classList.remove("is-selected");
         const section = document.getElementById(link.getAttribute("href").slice(1));
-        if (section && section.parentElement === sections) section.classList.add("is-selected");
+        if (section && section.parentElement === sections) {
+            section.classList.add("is-selected");
+            updateGraphicPanels(section.querySelector("[data-category]")?.dataset.category);
+        }
     }
 
     sectionNavigation.addEventListener("click", event => {
@@ -99,6 +229,10 @@
     }
     sections.addEventListener("click", selectSection);
     sections.addEventListener("focusin", selectSection);
+    const initialLink = [...sectionNavigation.querySelectorAll("a[href^='#review-']")]
+        .find(link => link.getAttribute("href") === location.hash)
+        || sectionNavigation.querySelector("a[href^='#review-']");
+    if (initialLink) selectSectionLink(initialLink);
 
     function updateContinue() {
         next.disabled = continuing || revising || proposal !== null;

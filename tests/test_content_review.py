@@ -183,6 +183,114 @@ class ReviewRenderedBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(errors, [])
             self.assertGreater(after["width"], before["width"] + 50)
 
+    async def test_graphics_follow_section_types_and_show_selected_assessment(self) -> None:
+        self.posters.content.return_value = ([
+            ("title", "Title"),
+            ("abstract", "Abstract"),
+            ("introduction", "Introduction"),
+            ("materials and methods", "Methods"),
+            ("results", "Results"),
+            ("conclusion", "Conclusion"),
+        ], [])
+
+        def graphic(
+            sid: int, filename: str, kind: str, description: str,
+            methods_rating: str | None, results_rating: str | None,
+        ) -> content.GraphicSource:
+            assessments = {}
+            for section, rating in (
+                ("materials and methods", methods_rating), ("results", results_rating),
+            ):
+                if rating:
+                    assessments[section] = {
+                        "rating": rating,
+                        "explanation": f"{section} explanation for {filename}.",
+                        "criteria": {}, "supported_elements": [],
+                        "limitations": [], "suggested_improvements": [],
+                    }
+            return content.GraphicSource(
+                sid, filename, "image/png", kind, f"{filename} description",
+                None, kind, assessments,
+            )
+
+        self.sources.graphic_sources.return_value = [
+            graphic(1, "low.png", "png", "low", "somewhat", "weakly"),
+            graphic(2, "formula.png", "math", "formula", "highly", "highly"),
+            graphic(3, "table.png", "tables", "table", "highly", "highly"),
+            graphic(4, "diagram.svg", "svg", "diagram", "highly", "highly"),
+            graphic(5, "high.png", "png", "high", "highly", "significantly"),
+            graphic(6, "animation.gif", "gif", "animation", "none", "none"),
+        ]
+        self.sources.graphic_source.return_value = (b"", "image/png")
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            self.addAsyncCleanup(browser.close)
+            page = await browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+
+            async def serve(route):
+                if route.request.url.startswith("http://testserver/"):
+                    response = self.client.get(route.request.url)
+                    await route.fulfill(
+                        status=response.status_code, body=response.content,
+                        content_type=response.headers.get("content-type", "text/plain"),
+                    )
+                else:
+                    await route.abort()
+
+            await page.route("**/*", serve)
+            await page.goto("http://testserver/content/review")
+            graphics = page.locator("#review-graphics")
+            assessment = page.locator("#review-assessment")
+            self.assertTrue(await graphics.evaluate("panel => panel.hidden"))
+            self.assertTrue(await assessment.evaluate("panel => panel.hidden"))
+
+            await page.get_by_role("link", name="Introduction").click()
+            self.assertFalse(await graphics.evaluate("panel => panel.hidden"))
+            self.assertTrue(await assessment.evaluate("panel => panel.hidden"))
+            self.assertEqual(
+                await page.locator("#review-graphics figure:not([hidden]) .review-graphic")
+                .evaluate_all("buttons => buttons.map(button => button.dataset.type)"),
+                ["math"],
+            )
+
+            await page.get_by_role("link", name="Methods").click()
+            self.assertFalse(await assessment.evaluate("panel => panel.hidden"))
+            self.assertEqual(
+                await page.locator("#review-graphics figure:not([hidden]) .review-graphic")
+                .evaluate_all("buttons => buttons.map(button => button.dataset.type)"),
+                ["svg", "png", "png", "gif", "tables", "math"],
+            )
+            self.assertEqual(
+                await page.locator("#review-graphics figure:not([hidden]) .review-graphic")
+                .evaluate_all("buttons => buttons.filter(button => button.dataset.type === 'png')"
+                              ".map(button => button.closest('figure').querySelector('figcaption').textContent)"),
+                ["high.png", "low.png"],
+            )
+            self.assertIn("diagram.svg description", await assessment.inner_text())
+            self.assertIn("materials and methods explanation for diagram.svg.", await assessment.inner_text())
+            self.assertEqual(
+                await page.locator("#review-assessment-content").evaluate(
+                    """content => [...content.querySelectorAll('h3, p')]
+                        .map(element => getComputedStyle(element).color)""",
+                ),
+                ["rgb(255, 255, 255)"] * 5,
+            )
+
+            await page.get_by_role("link", name="Results").click()
+            self.assertIn("Results Assessment", await assessment.inner_text())
+            self.assertIn("results explanation for diagram.svg.", await assessment.inner_text())
+            await page.locator("#review-graphics .review-graphic[data-sid='5']").click()
+            selected = page.locator("#review-graphics .review-graphic.is-selected")
+            self.assertEqual(await selected.get_attribute("data-sid"), "5")
+            self.assertIn("results explanation for high.png.", await assessment.inner_text())
+            self.assertEqual(errors, [])
+
+            await page.get_by_role("link", name="Abstract").click()
+            self.assertTrue(await graphics.evaluate("panel => panel.hidden"))
+            self.assertTrue(await assessment.evaluate("panel => panel.hidden"))
+
 
 class ReviewWorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def test_names_and_ambiguous_feedback(self) -> None:
@@ -287,21 +395,32 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
                     <div id="review-panes">
                     <div id="review-sections">
                     <section id="review-1"><h2>Results</h2>
-                    <div class="content" contenteditable="true" data-section="results"><p>Original</p></div>
+                    <div class="content" contenteditable="true" data-section="results"
+                         data-category="results"><p>Original</p></div>
                     </section>
                     </div>
                     <div id="review-divider" role="separator" tabindex="0" aria-orientation="vertical"
                          aria-label="Resize sections and source graphics" aria-controls="review-sections review-graphics"
                          aria-valuemin="20" aria-valuemax="80" aria-valuenow="50"
                          aria-valuetext="Sections 50%, source graphics 50%"></div>
-                    <section id="review-graphics" tabindex="0" aria-labelledby="review-graphics-heading">
+                    <div id="review-graphic-panes">
+                    <section id="review-graphics" tabindex="0" aria-labelledby="review-graphics-heading" hidden>
                     <h2 id="review-graphics-heading">Source graphics</h2>
-                    <figure><img alt="Source chart" width="600" height="400"
+                    <p data-graphics-empty>No source graphics are available for this poster.</p>
+                    <figure><button class="review-graphic" data-sid="21" data-type="png" aria-pressed="false">
+                    <img alt="Source chart" width="600" height="400"
                         src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='400'%3E%3C/svg%3E">
-                    <figcaption>chart.png</figcaption></figure>
+                    </button><figcaption>chart.png</figcaption></figure>
                     </section>
+                    <section id="review-assessment" aria-labelledby="review-assessment-heading" hidden>
+                    <h2 id="review-assessment-heading">Graphic Assessment</h2>
+                    <div id="review-assessment-content"></div></section>
+                    </div>
                     </div>
                     </div></div>
+                    <script id="review-graphics-data" type="application/json">
+                    [{"sid":21,"description":"Source chart description","assessments":{}}]
+                    </script>
                     <div class="review-actions">
                     <div class="editor-controls-container">
                     <div id="editor-controls">
@@ -341,7 +460,7 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
             };
             return {
                 sections: rect('review-sections'), divider: rect('review-divider'),
-                graphics: rect('review-graphics'), panes: rect('review-panes'),
+                graphics: rect('review-graphic-panes'), panes: rect('review-panes'),
             };
         }""")
 
@@ -355,10 +474,16 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(bounds["divider"]["width"], 10)
                 self.assertEqual(bounds["sections"]["top"], bounds["graphics"]["top"])
                 self.assertEqual(bounds["sections"]["bottom"], bounds["graphics"]["bottom"])
-                fits = await self.page.locator("#review-graphics").evaluate(
-                    "pane => pane.scrollWidth === pane.clientWidth",
+                dimensions = await self.page.locator("#review-graphics").evaluate(
+                    """pane => ({
+                        scrollWidth: pane.scrollWidth,
+                        clientWidth: pane.clientWidth,
+                        figureWidth: pane.querySelector('figure').getBoundingClientRect().width,
+                        buttonWidth: pane.querySelector('button').getBoundingClientRect().width,
+                        imageWidth: pane.querySelector('img').getBoundingClientRect().width,
+                    })""",
                 )
-                self.assertTrue(fits)
+                self.assertEqual(dimensions["scrollWidth"], dimensions["clientWidth"], dimensions)
 
     async def test_divider_resizes_with_pointer_and_clamps_both_panes(self) -> None:
         before = await self.pane_bounds()
@@ -420,7 +545,7 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
             };
         }""")
         self.assertEqual(styles, {
-            "color": "rgb(0, 0, 205)",
+            "color": "rgb(244, 211, 94)",
             "weight": "700",
             "decoration": "none",
             "bullets": "none",

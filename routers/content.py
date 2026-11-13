@@ -532,6 +532,7 @@ async def review_page(request: Request) -> Response:
         pid=pid,
         next_page="/layout/edit",
         graphics=graphics,
+        graphics_data=[asdict(graphic) for graphic in graphics],
         sections=[
             (which, label, Markup(elucidation.clean_html(values.get(which, ""))))
             for which, label in REVIEW_SECTIONS

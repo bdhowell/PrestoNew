@@ -692,25 +692,149 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         store = content.SourceStore()
         connection = AsyncMock()
         connection.execute.return_value.fetchall.return_value = [
-            (21, "chart.png"), (22, "paper figure.jpg"),
+            (
+                21, "chart.png", "image/png", "image", "A chart", None,
+                None, None, None, None, None, None, None, None, None, None,
+                datetime(2026, 11, 10, tzinfo=timezone.utc),
+            ),
+            (
+                22, "paper figure.jpg", "image/jpeg", "image", None, 1,
+                None, None, None, None, None, None, None, None, None, None,
+                datetime(2026, 11, 10, tzinfo=timezone.utc),
+            ),
         ]
         with patch.object(store, "_connect", AsyncMock(return_value=connection)):
             items = await store.graphic_sources(7, 11)
         self.assertEqual(items, [
-            content.GraphicSource(21, "chart.png"), content.GraphicSource(22, "paper figure.jpg"),
+            content.GraphicSource(
+                21, "chart.png", "image/png", "image", "A chart", None, "png", {},
+            ),
+            content.GraphicSource(
+                22, "paper figure.jpg", "image/jpeg", "image", None, 1, "jpg", {},
+            ),
         ])
         statement, params = connection.execute.await_args.args
         self.assertNotIn("evaluation", statement)
-        self.assertNotIn("s.hash", statement)
+        self.assertIn("LEFT JOIN assessment a", statement)
         self.assertIn("p.uid = %s AND p.pid = %s", statement)
         self.assertIn("s.width IS NOT NULL", statement)
         self.assertIn("s.height IS NOT NULL", statement)
         self.assertIn("s.storage_uri IS NOT NULL", statement)
-        self.assertIn("s.mimetype IN ('image/png', 'image/jpeg')", statement)
+        self.assertIn(
+            "s.mimetype IN ('image/svg+xml', 'image/png', 'image/jpeg', 'image/gif')",
+            statement,
+        )
         self.assertIn("s.kind <> 'thumbnail'", statement)
         self.assertIn("coalesce(s.filename, parent.filename, 'Untitled source')", statement)
-        self.assertIn("ORDER BY (s.parent IS NOT NULL), s.sid", statement)
+        self.assertIn("ORDER BY (s.parent IS NOT NULL), s.sid, a.section", statement)
         self.assertEqual(params, (7, 11))
+
+    async def test_graphic_sources_include_only_current_assessments(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        cursor = AsyncMock()
+        updated = datetime(2026, 11, 10, tzinfo=timezone.utc)
+
+        def row(section: str, created: datetime) -> tuple:
+            return (
+                21, "chart.png", "image/png", "chart", "A chart", None,
+                section, "highly", "Supports results.", {"relevance": "Relevant"},
+                ["Data"], ["None"], ["Add a key"], created, updated, updated, updated,
+            )
+
+        cursor.fetchall.return_value = [
+            row("materials and methods", updated),
+            row("results", updated.replace(day=9)),
+        ]
+        connection.execute.return_value = cursor
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            graphic = (await store.graphic_sources(7, 11))[0]
+
+        self.assertEqual(graphic.type, "png")
+        self.assertEqual(graphic.assessments, {
+            "materials and methods": {
+                "rating": "highly",
+                "explanation": "Supports results.",
+                "criteria": {"relevance": "Relevant"},
+                "supported_elements": ["Data"],
+                "limitations": ["None"],
+                "suggested_improvements": ["Add a key"],
+            },
+        })
+
+    def test_graphic_types_follow_source_classification_and_image_format(self) -> None:
+        for values, expected in (
+            (("image/svg+xml", "image", "figure.svg"), "svg"),
+            (("image/png", "table", "table.png"), "tables"),
+            (("image/png", "math expression", "formula.png"), "math"),
+            (("image/jpeg", "image", "photo.jpeg"), "jpeg"),
+            (("image/jpeg", "image", "photo.jpg"), "jpg"),
+            (("image/gif", "image", "animation.gif"), "gif"),
+            (("text/plain", "image", "figure.txt"), None),
+        ):
+            with self.subTest(values=values):
+                self.assertEqual(content.graphic_type(*values), expected)
+
+    async def test_evaluation_sources_rebuilds_results_from_current_assessments(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        cursor = AsyncMock()
+        updated = datetime(2026, 11, 10, tzinfo=timezone.utc)
+        criteria = {"relevance": "Relevant"}
+
+        def assessment_row(section: str, rating: str) -> tuple:
+            return (
+                21, "figure.png", "image/png", None, "diagram", "A diagram",
+                "digest", [], section, rating, "Assessment explanation.",
+                criteria, ["Supported"], ["Limitation"], ["Improvement"],
+                updated, updated, updated, updated,
+            )
+
+        rows = [
+            assessment_row("materials and methods", "significantly"),
+            assessment_row("results", "highly"),
+        ]
+        stale_rows = [
+            (*row[:17], updated.replace(day=11), row[18])
+            for row in rows
+        ]
+        cursor.fetchall.side_effect = [rows, stale_rows]
+        connection.execute.return_value = cursor
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            graphic = (await store.evaluation_sources(7, 11))[0]
+            stale_graphic = (await store.evaluation_sources(7, 11))[0]
+
+        self.assertEqual(graphic.evaluation, {
+            "image_analysis": {
+                "classification": "diagram",
+                "description": "A diagram",
+                "math_expressions": [],
+            },
+            "evaluations": {
+                "materials_and_methods": {
+                    "rating": "significantly",
+                    "explanation": "Assessment explanation.",
+                    "criteria": criteria,
+                    "supported_elements": ["Supported"],
+                    "limitations": ["Limitation"],
+                    "suggested_improvements": ["Improvement"],
+                },
+                "results": {
+                    "rating": "highly",
+                    "explanation": "Assessment explanation.",
+                    "criteria": criteria,
+                    "supported_elements": ["Supported"],
+                    "limitations": ["Limitation"],
+                    "suggested_improvements": ["Improvement"],
+                },
+            },
+        })
+        self.assertIsNone(stale_graphic.evaluation)
+        statement, params = connection.execute.await_args.args
+        self.assertNotIn("s.evaluation", statement)
+        self.assertNotIn("evaluation_hash", statement)
+        self.assertIn("LEFT JOIN assessment a", statement)
+        self.assertEqual(params, ("evaluation-math-expression-%", 7, 11))
 
     async def test_thumbnail_replacement_does_not_require_evaluation_columns(self) -> None:
         store = content.SourceStore()

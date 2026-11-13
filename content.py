@@ -8,7 +8,7 @@ import logging
 import re
 import json
 from html import unescape
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -87,6 +87,23 @@ def graphic_evaluation_hash(
     ))
 
 
+def graphic_type(mimetype: str, kind: str, filename: str) -> str | None:
+    if kind == "table":
+        return "tables"
+    if kind == "math expression":
+        return "math"
+    if mimetype == "image/svg+xml":
+        return "svg"
+    if mimetype == "image/png":
+        return "png"
+    if mimetype == "image/gif":
+        return "gif"
+    if mimetype == "image/jpeg":
+        suffix = Path(filename).suffix.lower()
+        return suffix[1:] if suffix in (".jpg", ".jpeg") else "jpg"
+    return None
+
+
 def validate_file(filename: str, data: bytes) -> tuple[str, str]:
     suffix = Path(filename).suffix.lower()
     if suffix not in FORMATS:
@@ -156,6 +173,12 @@ class Source:
 class GraphicSource:
     sid: int
     filename: str
+    mimetype: str = "image/png"
+    kind: str = "image"
+    description: str | None = None
+    parent: int | None = None
+    type: str = "png"
+    assessments: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -667,7 +690,7 @@ class SourceStore(PosterStore):
                 "SELECT s.storage_uri, s.mimetype FROM source s JOIN poster p USING (pid) "
                 "WHERE p.uid = %s AND p.pid = %s AND s.sid = %s "
                 "AND s.width IS NOT NULL AND s.height IS NOT NULL "
-                "AND s.mimetype IN ('image/png', 'image/jpeg') "
+                "AND s.mimetype IN ('image/svg+xml', 'image/png', 'image/jpeg', 'image/gif') "
                 "AND s.kind <> 'thumbnail'", (uid, pid, sid),
             )
             row = await cursor.fetchone()
@@ -679,16 +702,62 @@ class SourceStore(PosterStore):
         connection = await self._connect()
         async with connection:
             cursor = await connection.execute(
-                "SELECT s.sid, coalesce(s.filename, parent.filename, 'Untitled source') "
+                "SELECT s.sid, coalesce(s.filename, parent.filename, 'Untitled source'), "
+                "s.mimetype, s.kind, s.description, s.parent, "
+                "a.section::text, a.rating, a.explanation, a.criteria, "
+                "a.supported_elements, a.limitations, a.suggested_improvements, a.created, "
+                "(SELECT max(root.updated) FROM source root WHERE root.pid = s.pid "
+                "AND root.parent IS NULL AND root.kind <> 'thumbnail'), "
+                "(SELECT section.updated FROM section "
+                "WHERE section.pid = s.pid AND section.which::text = a.section::text), s.updated "
                 "FROM source s JOIN poster p USING (pid) "
                 "LEFT JOIN source parent ON parent.sid = s.parent "
+                "LEFT JOIN assessment a ON a.sid = s.sid "
+                "AND a.section IN ('materials and methods', 'results') "
                 "WHERE p.uid = %s AND p.pid = %s AND s.width IS NOT NULL "
                 "AND s.height IS NOT NULL AND s.storage_uri IS NOT NULL "
-                "AND s.mimetype IN ('image/png', 'image/jpeg') "
+                "AND s.mimetype IN ('image/svg+xml', 'image/png', 'image/jpeg', 'image/gif') "
                 "AND s.kind <> 'thumbnail' "
-                "ORDER BY (s.parent IS NOT NULL), s.sid", (uid, pid),
+                "ORDER BY (s.parent IS NOT NULL), s.sid, a.section", (uid, pid),
             )
-            return [GraphicSource(*row) for row in await cursor.fetchall()]
+            rows = await cursor.fetchall()
+
+        graphics: list[GraphicSource] = []
+        index = 0
+        while index < len(rows):
+            sid = rows[index][0]
+            grouped = []
+            while index < len(rows) and rows[index][0] == sid:
+                grouped.append(rows[index])
+                index += 1
+            row = grouped[0]
+            filename = row[1]
+            source_type = graphic_type(row[2], row[3], filename)
+            if source_type is None:
+                continue
+            assessments = {}
+            for item in grouped:
+                section = item[6]
+                if section is None or item[13] is None:
+                    continue
+                latest_change = max(
+                    (value for value in (item[14], item[15], item[16]) if value is not None),
+                    default=None,
+                )
+                if latest_change is None or item[13] < latest_change:
+                    continue
+                assessments[section] = {
+                    "rating": item[7],
+                    "explanation": item[8],
+                    "criteria": item[9] or {},
+                    "supported_elements": item[10] or [],
+                    "limitations": item[11] or [],
+                    "suggested_improvements": item[12] or [],
+                }
+            graphics.append(GraphicSource(
+                sid, filename, row[2], row[3], row[4], row[5], source_type, assessments,
+            ))
+        return graphics
 
     async def evaluation_sources(self, uid: int, pid: int) -> list[GraphicEvaluationSource]:
         connection = await self._connect()
@@ -918,7 +987,8 @@ class SourceStore(PosterStore):
                         )
 
                 await connection.execute(
-                    "UPDATE source SET kind = CASE WHEN %s <> 'image' THEN %s ELSE kind END, "
+                    "UPDATE source SET kind = CASE "
+                    "WHEN %s = 'image' AND kind = 'logo' THEN kind ELSE %s END, "
                     "description = %s, updated = now() "
                     "WHERE pid = %s AND sid = %s",
                     (

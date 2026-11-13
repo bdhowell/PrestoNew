@@ -129,11 +129,30 @@
 }
 
 #review-sections,
-#review-graphics {
+#review-graphics,
+#review-assessment {
   min-width: 0;
   min-height: 0;
   overflow: auto;
   padding: 0 1rem 1rem;
+}
+
+#review-graphic-panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#review-graphic-panes.has-assessment {
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+}
+
+#review-graphics[hidden],
+#review-assessment[hidden],
+#review-graphics figure[hidden] {
+  display: none;
 }
 
 #review-sections {
@@ -180,6 +199,25 @@
   margin: 0 0 1.5rem;
 }
 
+#review-graphics .review-graphic {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+#review-graphics .review-graphic.is-selected {
+  outline: 3px solid rgb(244, 211, 94);
+  outline-offset: 3px;
+}
+
+#review-graphics .review-graphic:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
+
 #review-graphics img {
   display: block;
   max-width: 100%;
@@ -196,10 +234,39 @@
 }
 
 #review-sections h2,
-#review-graphics h2 {
+#review-graphics h2,
+#review-assessment h2 {
   margin-bottom: 0.25rem;
   color: #bfbfbf;
   font: 1.5rem aladin, sans-serif;
+  overflow-wrap: anywhere;
+}
+
+#review-assessment h3 {
+  margin-bottom: 0.25rem;
+  color: #fff;
+}
+
+#review-assessment {
+  color: #fff;
+}
+
+#review-assessment h4 {
+  margin-bottom: 0.25rem;
+}
+
+#review-assessment dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem;
+}
+
+#review-assessment dt {
+  font-weight: bold;
+}
+
+#review-assessment dd {
+  margin: 0 0 0.5rem;
 }
 
 #review-sections .content {
