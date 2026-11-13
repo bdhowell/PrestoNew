@@ -127,6 +127,7 @@ Use this ordinal rating scale for each section:
 - Set `image_analysis.classification` to exactly one Stage 1 category.
 - For a chart, preserve its full visual content; the application stores chart images as PNGs.
 - For a math expression, return each distinct expression as exact LaTeX in `image_analysis.math_expressions`.
+    - Remove equation numbering and reference labels, including: (1), (2.3), (A.12), [4], and similar identifiers.
 - Return `image_analysis.math_expressions` as an empty list for all other classifications.
 - Keep each criterion assessment to one concise sentence.
 - Keep each overall explanation to at most three sentences.
