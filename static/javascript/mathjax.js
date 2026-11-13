@@ -2,22 +2,72 @@
     "use strict";
 
     const scrollTimers = new WeakMap();
-    document.addEventListener("scroll", event => {
-        const element = event.target;
-        if (!(element instanceof Element)
-            || !element.matches(".graphic-math, .review-graphic-math, mjx-container")) return;
+    const scrollAnimations = new WeakMap();
+    const mathGraphics = ".graphic-math, .review-graphic-math, mjx-container";
 
+    function scheduleScrollReturn(element) {
         clearTimeout(scrollTimers.get(element));
         scrollTimers.delete(element);
         if (element.scrollLeft === 0 && element.scrollTop === 0) return;
 
         scrollTimers.set(element, setTimeout(() => {
             scrollTimers.delete(element);
-            if (element.isConnected) {
-                element.scrollTo({left: 0, top: 0, behavior: "smooth"});
+            if (!element.isConnected) return;
+            const left = element.scrollLeft;
+            const top = element.scrollTop;
+            const started = performance.now();
+            const animation = {left, top, frame: 0};
+            scrollAnimations.set(element, animation);
+            function step(now) {
+                if (!element.isConnected) {
+                    scrollAnimations.delete(element);
+                    return;
+                }
+                // jQuery's swing curve, with a 600ms duration (400ms / (2/3)).
+                const progress = Math.min((now - started) / 600, 1);
+                const remaining = (1 + Math.cos(Math.PI * progress)) / 2;
+                element.scrollTo({
+                    left: progress === 1 ? 0 : left * remaining,
+                    top: progress === 1 ? 0 : top * remaining,
+                    behavior: "instant",
+                });
+                animation.left = element.scrollLeft;
+                animation.top = element.scrollTop;
+                if (progress < 1) {
+                    animation.frame = requestAnimationFrame(step);
+                } else {
+                    scrollAnimations.delete(element);
+                }
             }
+            animation.frame = requestAnimationFrame(step);
         }, 5000));
+    }
+
+    function stopScrollReturn(element) {
+        const animation = scrollAnimations.get(element);
+        if (animation) {
+            cancelAnimationFrame(animation.frame);
+            scrollAnimations.delete(element);
+        }
+    }
+
+    document.addEventListener("scroll", event => {
+        const element = event.target;
+        if (!(element instanceof Element) || !element.matches(mathGraphics)) return;
+        const animation = scrollAnimations.get(element);
+        if (animation && element.scrollLeft === animation.left && element.scrollTop === animation.top) return;
+        stopScrollReturn(element);
+        scheduleScrollReturn(element);
     }, {capture: true, passive: true});
+
+    for (const event of ["wheel", "pointerdown", "touchstart", "keydown"]) {
+        document.addEventListener(event, event => {
+            const element = event.target instanceof Element ? event.target.closest(mathGraphics) : null;
+            if (!element || !scrollAnimations.has(element)) return;
+            stopScrollReturn(element);
+            scheduleScrollReturn(element);
+        }, {capture: true, passive: true});
+    }
 
     function replaceMath(root, replace) {
         for (const wrapper of root.querySelectorAll("[data-mathjax-tex]")) {
