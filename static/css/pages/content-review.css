@@ -205,6 +205,9 @@
   padding: 0;
   border: 0;
   background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
@@ -222,6 +225,28 @@
   display: block;
   max-width: 100%;
   height: auto;
+}
+
+#review-graphics .review-graphic-table {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 0.5rem;
+  background-color: #fff;
+  color: #000;
+}
+
+#review-graphics .review-graphic-table table {
+  min-width: 100%;
+  border-collapse: collapse;
+  font: inherit;
+}
+
+#review-graphics .review-graphic-table th,
+#review-graphics .review-graphic-table td {
+  padding: 0.35em 0.5em;
+  border: 1px solid currentColor;
+  text-align: left;
+  vertical-align: top;
 }
 
 #review-graphics .review-graphic-math {

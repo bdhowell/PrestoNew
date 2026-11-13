@@ -304,7 +304,10 @@ class ContentRouteTests(unittest.TestCase):
 
     def test_graphic_evaluation_streams_persists_and_groups_source_results(self) -> None:
         self.sources.evaluation_sources.return_value = [
-            content.GraphicEvaluationSource(1, "uploaded.png", "image/png", None, None, None),
+            content.GraphicEvaluationSource(
+                1, "uploaded.png", "image/png", None, None, None,
+                "tables", "<table><tr><td>Data</td></tr></table>",
+            ),
             content.GraphicEvaluationSource(2, "extracted.jpg", "image/jpeg", 1, None, None),
         ]
         self.sources.source_text.return_value = content.SourceText(
@@ -347,6 +350,10 @@ class ContentRouteTests(unittest.TestCase):
         self.assertEqual(
             [events[index]["source"]["category"] for index in (2, 4)],
             ["uploaded", "extracted"],
+        )
+        self.assertEqual(events[2]["source"]["type"], "tables")
+        self.assertEqual(
+            events[2]["source"]["table_html"], "<table><tr><td>Data</td></tr></table>",
         )
         self.assertEqual(evaluate.call_count, 2)
         self.assertEqual(evaluate.call_args.args[1:], (
@@ -779,13 +786,18 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
             row(2, "math expression", r"x^2", []),
             row(3, "math expression", "   ", []),
             row(4, "image", "not a formula", []),
+            row(5, "table", "<table><tr><td>Table</td></tr></table>", []),
         ]
         with patch.object(store, "_connect", AsyncMock(return_value=connection)):
             graphics = await store.graphic_sources(7, 11)
 
         self.assertEqual([graphic.math_expressions for graphic in graphics], [
-            [r"E=mc^2", r"\frac{1}{2}"], [r"x^2"], [], [],
+            [r"E=mc^2", r"\frac{1}{2}"], [r"x^2"], [], [], [],
         ])
+        self.assertEqual(
+            graphics[4].table_html,
+            "<table><tbody><tr><td>Table</td></tr></tbody></table>",
+        )
         statement, _ = connection.execute.await_args.args
         self.assertIn("formula.pid = s.pid AND formula.parent = s.sid", statement)
         self.assertIn("ORDER BY formula.sid", statement)
@@ -812,10 +824,11 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
 
         def assessment_row(section: str, rating: str) -> tuple:
             return (
-                21, "figure.png", "image/png", None, "diagram", "A diagram",
+                21, "figure.png", "image/png", None, "table", "A table",
                 "digest", [], section, rating, "Assessment explanation.",
                 criteria, ["Supported"], ["Limitation"], ["Improvement"],
                 updated, updated, updated, updated,
+                "<table><tr><td>Data</td></tr></table><script>alert(1)</script>",
             )
 
         rows = [
@@ -823,7 +836,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
             assessment_row("results", "highly"),
         ]
         stale_rows = [
-            (*row[:17], updated.replace(day=11), row[18])
+            (*row[:17], updated.replace(day=11), row[18], row[19])
             for row in rows
         ]
         cursor.fetchall.side_effect = [rows, stale_rows]
@@ -832,10 +845,15 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
             graphic = (await store.evaluation_sources(7, 11))[0]
             stale_graphic = (await store.evaluation_sources(7, 11))[0]
 
+        self.assertEqual(graphic.type, "tables")
+        self.assertEqual(
+            graphic.table_html,
+            "<table><tbody><tr><td>Data</td></tr></tbody></table>alert(1)",
+        )
         self.assertEqual(graphic.evaluation, {
             "image_analysis": {
-                "classification": "diagram",
-                "description": "A diagram",
+                "classification": "table",
+                "description": "A table",
                 "math_expressions": [],
             },
             "evaluations": {

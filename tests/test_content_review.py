@@ -61,11 +61,18 @@ class ReviewRouteTests(unittest.TestCase):
         self.sources.graphic_sources.return_value = [
             content.GraphicSource(21, '<chart & "data">.png'),
             content.GraphicSource(22, "paper figure.jpg"),
+            content.GraphicSource(
+                23, "table.png", type="tables",
+                table_html="<table><tr><th>Group</th></tr><tr><td>Control</td></tr></table>",
+            ),
         ]
         response = self.client.get("/content/review")
         self.assertEqual(response.status_code, 200)
         self.assertIn('src="/content/21/image"', response.text)
         self.assertIn('src="/content/22/image"', response.text)
+        self.assertIn("<th>Group</th>", response.text)
+        self.assertIn("<td>Control</td>", response.text)
+        self.assertNotIn('src="/content/23/image"', response.text)
         self.assertIn('alt="&lt;chart &amp; &#34;data&#34;&gt;.png"', response.text)
         self.assertIn("<figcaption>paper figure.jpg</figcaption>", response.text)
         self.assertNotIn("No source graphics are available", response.text)
@@ -199,6 +206,49 @@ class ReviewRenderedBrowserTests(unittest.IsolatedAsyncioTestCase):
             await formula.click()
             self.assertEqual(await formula.get_attribute("aria-pressed"), "true")
             self.assertEqual(errors, [])
+
+    async def test_table_graphics_are_visible_on_the_review_pane(self) -> None:
+        self.sources.graphic_sources.return_value = [
+            content.GraphicSource(
+                23, "table.png", type="tables",
+                table_html="<table><tr><th>Group</th></tr><tr><td>Control</td></tr></table>",
+            ),
+        ]
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            self.addAsyncCleanup(browser.close)
+            page = await browser.new_page()
+
+            async def serve(route):
+                if route.request.url.startswith("http://testserver/"):
+                    response = self.client.get(route.request.url)
+                    await route.fulfill(
+                        status=response.status_code, body=response.content,
+                        content_type=response.headers.get("content-type", "text/plain"),
+                    )
+                else:
+                    await route.abort()
+
+            await page.route("**/*", serve)
+            await page.goto("http://testserver/content/review")
+            await page.get_by_role("link", name="Results").click()
+            table = page.locator(".review-graphic-table table")
+            await table.wait_for(state="visible")
+            self.assertEqual(await table.locator("th").inner_text(), "Group")
+            self.assertEqual(await table.locator("td").inner_text(), "Control")
+            self.assertEqual(await table.evaluate(
+                "table => getComputedStyle(table).font",
+            ), await page.locator(".review-graphic").evaluate(
+                "parent => getComputedStyle(parent).font",
+            ))
+            appearance = await page.locator(".review-graphic-table").evaluate("""element => ({
+                background: getComputedStyle(element).backgroundColor,
+                color: getComputedStyle(element).color,
+                bounds: element.getBoundingClientRect().toJSON(),
+            })""")
+            self.assertEqual(appearance["background"], "rgb(255, 255, 255)")
+            self.assertEqual(appearance["color"], "rgb(0, 0, 0)")
+            self.assertGreater(appearance["bounds"]["height"], 0)
 
     async def test_loading_review_clears_previous_chat_and_displays_greeting(self) -> None:
         async with async_playwright() as playwright:

@@ -2,17 +2,18 @@
 
 import hashlib
 import io
-import os
-import zipfile
-import logging
-import re
 import json
-from html import unescape
+import logging
+import os
+import re
+import zipfile
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from html import unescape
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import bleach
 from google.cloud import storage
 from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.auth.exceptions import GoogleAuthError
@@ -73,6 +74,9 @@ IMAGE_CLASSIFICATIONS = frozenset({
     "table", "chart", "diagram", "math expression", "image",
 })
 EVALUATED_MATH_FILENAME_PREFIX = "evaluation-math-expression-"
+GRAPHIC_TABLE_TAGS = {
+    "caption", "col", "colgroup", "table", "tbody", "td", "tfoot", "th", "thead", "tr",
+}
 
 
 def source_hash(value: str | bytes) -> str:
@@ -102,6 +106,20 @@ def graphic_type(mimetype: str, kind: str, filename: str) -> str | None:
         suffix = Path(filename).suffix.lower()
         return suffix[1:] if suffix in (".jpg", ".jpeg") else "jpg"
     return None
+
+
+def clean_graphic_table(value: str) -> str:
+    return bleach.clean(
+        value,
+        tags=GRAPHIC_TABLE_TAGS,
+        attributes={
+            "col": ["span"],
+            "colgroup": ["span"],
+            "td": ["colspan", "rowspan"],
+            "th": ["colspan", "rowspan", "scope"],
+        },
+        strip=True,
+    )
 
 
 def validate_file(filename: str, data: bytes) -> tuple[str, str]:
@@ -180,6 +198,7 @@ class GraphicSource:
     type: str = "png"
     assessments: dict[str, dict[str, object]] = field(default_factory=dict)
     math_expressions: list[str] = field(default_factory=list)
+    table_html: str = ""
 
 
 @dataclass(frozen=True)
@@ -190,6 +209,8 @@ class GraphicEvaluationSource:
     parent: int | None
     evaluation: dict[str, object] | None
     digest: str | None
+    type: str = "png"
+    table_html: str = ""
 
     @property
     def category(self) -> str:
@@ -765,6 +786,7 @@ class SourceStore(PosterStore):
             graphics.append(GraphicSource(
                 sid, filename, row[2], row[3], row[4], row[5], source_type, assessments,
                 expressions if source_type == "math" else [],
+                clean_graphic_table(row[17] or "") if source_type == "tables" else "",
             ))
         return graphics
 
@@ -785,7 +807,7 @@ class SourceStore(PosterStore):
                 "AND root.parent IS NULL AND root.kind <> 'thumbnail'), "
                 "(SELECT max(section.updated) FROM section "
                 "WHERE section.pid = s.pid AND section.which IN "
-                "('materials and methods', 'results')), s.updated "
+                "('materials and methods', 'results')), s.updated, s.text "
                 "FROM source s JOIN poster p USING (pid) "
                 "LEFT JOIN source parent ON parent.sid = s.parent "
                 "LEFT JOIN assessment a ON a.sid = s.sid "
@@ -844,8 +866,11 @@ class SourceStore(PosterStore):
                         "results": assessments["results"],
                     },
                 }
+            source_type = graphic_type(row[2], row[4], row[1]) or ""
             graphics.append(GraphicEvaluationSource(
                 row[0], row[1], row[2], row[3], evaluation, row[6],
+                source_type,
+                clean_graphic_table(row[19] or "") if source_type == "tables" else "",
             ))
         return graphics
 

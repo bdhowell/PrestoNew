@@ -47,6 +47,8 @@
                                 {% else %}
                                 <span class="review-graphic-math">No LaTeX is available for this source.</span>
                                 {% endfor %}
+                            {% elif graphic.type == "tables" and graphic.table_html %}
+                                <div class="review-graphic-table">{{ graphic.table_html|safe }}</div>
                             {% else %}
                             <img src="/content/{{ graphic.sid }}/image" alt="{{ graphic.filename }}" loading="lazy">
                             {% endif %}

@@ -318,7 +318,7 @@ async def evaluate_page(request: Request) -> Response:
         )
     message = (
         f"<p>Okay, {name}, I&rsquo;m reviewing the {' and '.join(parts)}.</p>"
-        "<p>Please give me a few minutes to evaluate them.</p>"
+        f"<p>Please give me a few minutes to evaluate them&mdash;I&rsquo;m estimating {num2words.num2words(len(graphics) * 1/3)} minutes.</p>"
         if parts else None
     )
     return render_page(
@@ -394,6 +394,17 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
             and has_classification(graphic)
         )
 
+    def graphic_source_payload(
+        graphic: content.GraphicEvaluationSource, evaluation: dict[str, object] | None,
+    ) -> dict[str, object]:
+        return {
+            "sid": graphic.sid,
+            "filename": graphic_filename(graphic, evaluation),
+            "category": graphic.category,
+            "type": graphic.type,
+            "table_html": graphic.table_html,
+        }
+
     pending = [
         graphic for graphic in graphics
         if not is_current(graphic)
@@ -424,11 +435,7 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                 if is_current(graphic):
                     yield json.dumps({
                         "type": "result",
-                        "source": {
-                            "sid": graphic.sid,
-                            "filename": graphic_filename(graphic, graphic.evaluation),
-                            "category": graphic.category,
-                        },
+                        "source": graphic_source_payload(graphic, graphic.evaluation),
                         "evaluation": graphic.evaluation,
                     }, ensure_ascii=False) + "\n"
 
@@ -466,11 +473,7 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                     )
                 yield json.dumps({
                     "type": "result",
-                    "source": {
-                        "sid": graphic.sid,
-                        "filename": graphic_filename(graphic, evaluation_result),
-                        "category": graphic.category,
-                    },
+                    "source": graphic_source_payload(graphic, evaluation_result),
                     "evaluation": evaluation_result,
                 }, ensure_ascii=False) + "\n"
             yield json.dumps({"type": "complete"}) + "\n"

@@ -164,6 +164,46 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             r"\[E=mc^2\]", r"\[\frac{1}{2}\]",
         ])
 
+    async def test_tables_are_rendered_with_the_parent_font(self) -> None:
+        await self.load_page([
+            {
+                "type": "result",
+                "source": {
+                    "sid": 1, "category": "uploaded", "filename": "data.png",
+                    "type": "tables",
+                    "table_html": "<table><tr><th>Group</th><th>Count</th></tr>"
+                                  "<tr><td>Control</td><td>12</td></tr></table>",
+                },
+                "evaluation": {
+                    "image_analysis": {
+                        "classification": "table", "math_expressions": [],
+                        "description": "A data table.",
+                    },
+                    "evaluations": {
+                        "materials_and_methods": {
+                            "rating": "weakly", "explanation": "", "supported_elements": [],
+                            "limitations": [], "suggested_improvements": [],
+                        },
+                        "results": {
+                            "rating": "highly", "explanation": "", "supported_elements": [],
+                            "limitations": [], "suggested_improvements": [],
+                        },
+                    },
+                },
+            },
+            {"type": "complete"},
+        ])
+        self.assertEqual(await self.page.locator(".graphic-table th").all_text_contents(),
+                         ["Group", "Count"])
+        self.assertEqual(await self.page.locator(".graphic-table td").all_text_contents(),
+                         ["Control", "12"])
+        self.assertEqual(await self.page.locator(".graphic-evaluation img").count(), 0)
+        self.assertEqual(await self.page.locator(".graphic-table table").evaluate("""table =>
+            getComputedStyle(table).font
+        """), await self.page.locator(".graphic-evaluation").evaluate("""parent =>
+            getComputedStyle(parent).font
+        """))
+
     async def test_already_evaluated_graphics_redirect_to_layout(self) -> None:
         await self.load_page([
             {"type": "start", "total": 2, "uploaded": 1, "extracted": 1},

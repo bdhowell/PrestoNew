@@ -3,7 +3,6 @@
 }
 
 #graphic-evaluations {
-    font-size: 2.0rem;
     display: grid;
     gap: 1.5rem;
 }
@@ -35,7 +34,27 @@
     object-fit: contain;
 }
 
+.graphic-table {
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.graphic-table table {
+    min-width: 100%;
+    border-collapse: collapse;
+    font: inherit;
+}
+
+.graphic-table th,
+.graphic-table td {
+    padding: 0.35em 0.5em;
+    border: 1px solid currentColor;
+    text-align: left;
+    vertical-align: top;
+}
+
 .graphic-math {
+    font-size: 2.0rem;
     overflow-x: auto;
 }
 

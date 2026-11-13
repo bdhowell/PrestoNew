@@ -73,11 +73,17 @@
                 const isSuitable = suitable(item.evaluation);
                 const card = element("article", "", "graphic-evaluation");
                 card.append(element("h3", item.source.filename));
-                const image = document.createElement("img");
-                image.src = `/content/${item.source.sid}/image`;
-                image.alt = item.evaluation.image_analysis.description || item.source.filename;
-                image.loading = "lazy";
-                card.append(image);
+                if (item.source.type === "tables" && item.source.table_html) {
+                    const table = element("div", "", "graphic-table");
+                    table.innerHTML = item.source.table_html;
+                    card.append(table);
+                } else {
+                    const image = document.createElement("img");
+                    image.src = `/content/${item.source.sid}/image`;
+                    image.alt = item.evaluation.image_analysis.description || item.source.filename;
+                    image.loading = "lazy";
+                    card.append(image);
+                }
                 card.append(element(
                     "p",
                     `Classification: ${item.evaluation.image_analysis.classification}`,
