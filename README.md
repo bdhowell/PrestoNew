@@ -87,7 +87,8 @@ retry; saved assessments are reused on each attempt.
 Classified charts are normalized and stored as PNG images. For a classified
 math-expression image, each extracted LaTeX expression is stored in `source.text`
 on its own child source record, while the original image remains available.
-Extracted and saved formulas are rendered with MathJax in source listings and
+Extracted and saved formulas are rendered with MathJax in source listings, the
+Source graphics panel during section review, and
 poster content; editing and saving poster sections preserves the original LaTeX.
 
 The current draft's stored PNG thumbnail appears in both List and Large

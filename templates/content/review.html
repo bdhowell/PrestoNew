@@ -41,7 +41,15 @@
                     <figure>
                         <button type="button" class="review-graphic" data-sid="{{ graphic.sid }}"
                                 data-type="{{ graphic.type }}" aria-pressed="false">
+                            {% if graphic.type == "math" %}
+                                {% for expression in graphic.math_expressions %}
+                                <span class="review-graphic-math">\[{{ expression }}\]</span>
+                                {% else %}
+                                <span class="review-graphic-math">No LaTeX is available for this source.</span>
+                                {% endfor %}
+                            {% else %}
                             <img src="/content/{{ graphic.sid }}/image" alt="{{ graphic.filename }}" loading="lazy">
+                            {% endif %}
                         </button>
                         <figcaption>{{ graphic.filename }}</figcaption>
                     </figure>

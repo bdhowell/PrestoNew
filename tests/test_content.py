@@ -695,12 +695,12 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
             (
                 21, "chart.png", "image/png", "image", "A chart", None,
                 None, None, None, None, None, None, None, None, None, None,
-                datetime(2026, 11, 10, tzinfo=timezone.utc),
+                datetime(2026, 11, 10, tzinfo=timezone.utc), None, [],
             ),
             (
                 22, "paper figure.jpg", "image/jpeg", "image", None, 1,
                 None, None, None, None, None, None, None, None, None, None,
-                datetime(2026, 11, 10, tzinfo=timezone.utc),
+                datetime(2026, 11, 10, tzinfo=timezone.utc), None, [],
             ),
         ]
         with patch.object(store, "_connect", AsyncMock(return_value=connection)):
@@ -727,7 +727,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("s.kind <> 'thumbnail'", statement)
         self.assertIn("coalesce(s.filename, parent.filename, 'Untitled source')", statement)
         self.assertIn("ORDER BY (s.parent IS NOT NULL), s.sid, a.section", statement)
-        self.assertEqual(params, (7, 11))
+        self.assertEqual(params, (f"{content.EVALUATED_MATH_FILENAME_PREFIX}%", 7, 11))
 
     async def test_graphic_sources_include_only_current_assessments(self) -> None:
         store = content.SourceStore()
@@ -739,7 +739,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
             return (
                 21, "chart.png", "image/png", "chart", "A chart", None,
                 section, "highly", "Supports results.", {"relevance": "Relevant"},
-                ["Data"], ["None"], ["Add a key"], created, updated, updated, updated,
+                ["Data"], ["None"], ["Add a key"], created, updated, updated, updated, None, [],
             )
 
         cursor.fetchall.return_value = [
@@ -761,6 +761,34 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                 "suggested_improvements": ["Add a key"],
             },
         })
+
+    async def test_graphic_sources_use_evaluated_or_extracted_latex(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        updated = datetime(2026, 11, 10, tzinfo=timezone.utc)
+
+        def row(sid: int, kind: str, text: str | None, expressions: list[str]) -> tuple:
+            return (
+                sid, "formula.png", "image/png", kind, None, None,
+                None, None, None, None, None, None, None, None, None, None,
+                updated, text, expressions,
+            )
+
+        connection.execute.return_value.fetchall.return_value = [
+            row(1, "math expression", "old", [r"E=mc^2", r"\frac{1}{2}"]),
+            row(2, "math expression", r"x^2", []),
+            row(3, "math expression", "   ", []),
+            row(4, "image", "not a formula", []),
+        ]
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            graphics = await store.graphic_sources(7, 11)
+
+        self.assertEqual([graphic.math_expressions for graphic in graphics], [
+            [r"E=mc^2", r"\frac{1}{2}"], [r"x^2"], [], [],
+        ])
+        statement, _ = connection.execute.await_args.args
+        self.assertIn("formula.pid = s.pid AND formula.parent = s.sid", statement)
+        self.assertIn("ORDER BY formula.sid", statement)
 
     def test_graphic_types_follow_source_classification_and_image_format(self) -> None:
         for values, expected in (
@@ -1811,6 +1839,8 @@ class ContentDatabaseTests(unittest.TestCase):
                     ],
                 )
                 self.assertTrue(all(Path(uri).is_file() for *_, uri in expressions))
+                graphics = asyncio.run(self.store.graphic_sources(7, pid))
+                self.assertEqual(graphics[0].math_expressions, [r"E=mc^2", r"\frac{1}{2}"])
             self.assertEqual(asyncio.run(self.store.evaluation_sources(8, pid)), [])
             self.assertTrue(asyncio.run(self.store.save_section(7, pid, "results", "Updated results")))
             self.assertIsNone(asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation)

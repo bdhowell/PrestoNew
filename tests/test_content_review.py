@@ -72,6 +72,23 @@ class ReviewRouteTests(unittest.TestCase):
         self.sources.graphic_sources.assert_awaited_once_with(7, 11)
         self.sources.evaluation_sources.assert_not_awaited()
 
+    def test_review_renders_math_as_escaped_latex_instead_of_image(self) -> None:
+        self.sources.graphic_sources.return_value = [
+            content.GraphicSource(21, "formula.png", type="math", math_expressions=[
+                r"\frac{1}{2}", r"x < y",
+            ]),
+            content.GraphicSource(22, "missing.png", type="math"),
+            content.GraphicSource(23, "chart.png"),
+        ]
+        response = self.client.get("/content/review")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(r"\[\frac{1}{2}\]", response.text)
+        self.assertIn(r"\[x &lt; y\]", response.text)
+        self.assertIn("No LaTeX is available for this source.", response.text)
+        self.assertNotIn('src="/content/21/image"', response.text)
+        self.assertNotIn('src="/content/22/image"', response.text)
+        self.assertIn('src="/content/23/image"', response.text)
+
     def test_graphics_storage_failure_is_reported(self) -> None:
         self.sources.graphic_sources.side_effect = psycopg.OperationalError("down")
         with self.assertLogs("routers.content", "ERROR"):
@@ -115,6 +132,73 @@ class ReviewRenderedBrowserTests(unittest.IsolatedAsyncioTestCase):
         test_content.ContentRouteTests.setUp(self)
         self.posters.content.return_value = ([("results", "<p>Results</p>")], [])
         self.sources.graphic_sources.return_value = []
+
+    async def test_math_graphics_are_typeset_when_panel_is_shown(self) -> None:
+        self.posters.content.return_value = ([("introduction", "Introduction")], [])
+        self.sources.graphic_sources.return_value = [
+            content.GraphicSource(21, "formula.png", type="math", math_expressions=[
+                r"E=mc^2", r"\frac{1}{2}",
+            ]),
+            content.GraphicSource(22, "missing.png", type="math"),
+        ]
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            self.addAsyncCleanup(browser.close)
+            page = await browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+
+            async def serve(route):
+                if route.request.url.startswith("http://testserver/"):
+                    response = self.client.get(route.request.url)
+                    await route.fulfill(
+                        status=response.status_code, body=response.content,
+                        content_type=response.headers.get("content-type", "text/plain"),
+                    )
+                elif "tex-chtml.js" in route.request.url:
+                    await route.fulfill(content_type="text/javascript", body="""
+                        MathJax.startup.defaultReady = () => {
+                            MathJax.startup.promise = Promise.resolve();
+                            MathJax.typesetClear = () => {};
+                            MathJax.typesetPromise = async elements => {
+                                for (const root of elements) {
+                                    for (const wrapper of root.querySelectorAll('[data-mathjax-tex]')) {
+                                        const rendered = document.createElement('mjx-container');
+                                        rendered.textContent = wrapper.dataset.mathjaxTex;
+                                        wrapper.replaceChildren(rendered);
+                                    }
+                                }
+                            };
+                        };
+                        MathJax.startup.ready();
+                    """)
+                else:
+                    await route.abort()
+
+            await page.route("**/*", serve)
+            await page.goto("http://testserver/content/review")
+            await page.get_by_role("link", name="Introduction").click()
+            formula = page.locator(".review-graphic[data-sid='21']")
+            await formula.locator("mjx-container").first.wait_for()
+            self.assertEqual(await formula.locator("mjx-container").all_text_contents(), [
+                r"\[E=mc^2\]", r"\[\frac{1}{2}\]",
+            ])
+            self.assertEqual(await formula.locator(".review-graphic-math").evaluate_all("""elements =>
+                elements.map(element => ({
+                    background: getComputedStyle(element).backgroundColor,
+                    color: getComputedStyle(element.querySelector('mjx-container')).color,
+                }))
+            """), [
+                {"background": "rgb(255, 255, 255)", "color": "rgb(0, 0, 0)"},
+                {"background": "rgb(255, 255, 255)", "color": "rgb(0, 0, 0)"},
+            ])
+            self.assertEqual(await formula.locator("img").count(), 0)
+            self.assertIn("No LaTeX is available", await page.locator(
+                ".review-graphic[data-sid='22']",
+            ).inner_text())
+            await formula.click()
+            self.assertEqual(await formula.get_attribute("aria-pressed"), "true")
+            self.assertEqual(errors, [])
 
     async def test_loading_review_clears_previous_chat_and_displays_greeting(self) -> None:
         async with async_playwright() as playwright:

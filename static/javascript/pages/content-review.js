@@ -190,6 +190,9 @@
         graphicsPanel.append(...figures.filter(item => !visibleSet.has(item.figure))
             .sort((first, second) => originalFigureOrder.get(first.figure) - originalFigureOrder.get(second.figure))
             .map(item => item.figure));
+        if (visible.some(item => item.button.dataset.type === "math")) {
+            window.mathJaxSource?.typeset(graphicsPanel);
+        }
         showAssessment(visible[0]?.sid ?? null);
         if (assessmentVisible && !visible.length) {
             appendText(assessmentContent, "p", "No matching graphics are available for assessment.");

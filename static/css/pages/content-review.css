@@ -224,6 +224,14 @@
   height: auto;
 }
 
+#review-graphics .review-graphic-math {
+  display: block;
+  overflow-x: auto;
+  background-color: #fff;
+  color: #000;
+  font: 1rem system-ui, sans-serif;
+}
+
 #review-graphics figcaption {
   overflow-wrap: anywhere;
 }

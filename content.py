@@ -179,6 +179,7 @@ class GraphicSource:
     parent: int | None = None
     type: str = "png"
     assessments: dict[str, dict[str, object]] = field(default_factory=dict)
+    math_expressions: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -709,7 +710,12 @@ class SourceStore(PosterStore):
                 "(SELECT max(root.updated) FROM source root WHERE root.pid = s.pid "
                 "AND root.parent IS NULL AND root.kind <> 'thumbnail'), "
                 "(SELECT section.updated FROM section "
-                "WHERE section.pid = s.pid AND section.which::text = a.section::text), s.updated "
+                "WHERE section.pid = s.pid AND section.which::text = a.section::text), s.updated, "
+                "s.text, ARRAY(SELECT formula.text FROM source formula "
+                "WHERE formula.pid = s.pid AND formula.parent = s.sid "
+                "AND formula.kind = 'math expression' AND formula.filename LIKE %s "
+                "AND formula.text IS NOT NULL AND btrim(formula.text) <> '' "
+                "ORDER BY formula.sid) "
                 "FROM source s JOIN poster p USING (pid) "
                 "LEFT JOIN source parent ON parent.sid = s.parent "
                 "LEFT JOIN assessment a ON a.sid = s.sid "
@@ -718,7 +724,8 @@ class SourceStore(PosterStore):
                 "AND s.height IS NOT NULL AND s.storage_uri IS NOT NULL "
                 "AND s.mimetype IN ('image/svg+xml', 'image/png', 'image/jpeg', 'image/gif') "
                 "AND s.kind <> 'thumbnail' "
-                "ORDER BY (s.parent IS NOT NULL), s.sid, a.section", (uid, pid),
+                "ORDER BY (s.parent IS NOT NULL), s.sid, a.section",
+                (f"{EVALUATED_MATH_FILENAME_PREFIX}%", uid, pid),
             )
             rows = await cursor.fetchall()
 
@@ -754,8 +761,10 @@ class SourceStore(PosterStore):
                     "limitations": item[11] or [],
                     "suggested_improvements": item[12] or [],
                 }
+            expressions = row[18] or ([row[17]] if row[17] and row[17].strip() else [])
             graphics.append(GraphicSource(
                 sid, filename, row[2], row[3], row[4], row[5], source_type, assessments,
+                expressions if source_type == "math" else [],
             ))
         return graphics
 
