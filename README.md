@@ -90,6 +90,8 @@ on its own child source record, while the original image remains available.
 Extracted and saved formulas are rendered with MathJax in source listings, the
 Source graphics panel during section review, and
 poster content; editing and saving poster sections preserves the original LaTeX.
+Overflowing math graphics smoothly return to their top-left scroll position
+after five seconds without further scrolling.
 
 The current draft's stored PNG thumbnail appears in both List and Large
 thumbnails views. Opening the poster list refreshes it when the poster or its

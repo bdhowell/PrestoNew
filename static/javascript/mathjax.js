@@ -1,6 +1,24 @@
 (() => {
     "use strict";
 
+    const scrollTimers = new WeakMap();
+    document.addEventListener("scroll", event => {
+        const element = event.target;
+        if (!(element instanceof Element)
+            || !element.matches(".graphic-math, .review-graphic-math, mjx-container")) return;
+
+        clearTimeout(scrollTimers.get(element));
+        scrollTimers.delete(element);
+        if (element.scrollLeft === 0 && element.scrollTop === 0) return;
+
+        scrollTimers.set(element, setTimeout(() => {
+            scrollTimers.delete(element);
+            if (element.isConnected) {
+                element.scrollTo({left: 0, top: 0, behavior: "smooth"});
+            }
+        }, 5000));
+    }, {capture: true, passive: true});
+
     function replaceMath(root, replace) {
         for (const wrapper of root.querySelectorAll("[data-mathjax-tex]")) {
             replace(wrapper, wrapper.dataset.mathjaxTex);
