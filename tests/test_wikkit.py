@@ -318,6 +318,140 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.evaluate("numberToWords(3)"), "three")
         self.assertEqual(self.errors, [])
 
+    async def test_chatbot_resizes_from_every_edge_and_corner(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        chatbot = self.page.locator("#chatbot")
+        await expect(chatbot).to_be_visible()
+        await expect(chatbot.locator(".chatbot-resize")).to_have_count(8)
+        for direction in ("n", "e", "s", "w", "ne", "se", "sw", "nw"):
+            with self.subTest(direction=direction):
+                await chatbot.evaluate("""element => Object.assign(element.style, {
+                    left: '300px', top: '200px', width: '400px', height: '320px',
+                    right: 'auto', bottom: 'auto',
+                })""")
+                handle = chatbot.locator(f'[data-resize="{direction}"]')
+                box = await handle.bounding_box()
+                self.assertIsNotNone(box)
+                x = box["x"] + box["width"] / 2
+                y = box["y"] + box["height"] / 2
+                dx = -40 if "w" in direction else 40 if "e" in direction else 0
+                dy = -30 if "n" in direction else 30 if "s" in direction else 0
+                await self.page.mouse.move(x, y)
+                await self.page.mouse.down()
+                await self.page.mouse.move(x + dx, y + dy, steps=4)
+                await self.page.mouse.up()
+                expected = {
+                    "x": 300 + min(dx, 0), "y": 200 + min(dy, 0),
+                    "width": 400 + abs(dx), "height": 320 + abs(dy),
+                }
+                actual = await chatbot.bounding_box()
+                for key, value in expected.items():
+                    self.assertAlmostEqual(actual[key], value, delta=1)
+                await self.page.mouse.move(x + dx + 20, y + dy + 20)
+                self.assertEqual(await chatbot.bounding_box(), actual)
+                saved = await self.page.evaluate(
+                    "JSON.parse(sessionStorage.getItem('wikkit.chatbot')).geometry",
+                )
+                for key, value in (("left", actual["x"]), ("top", actual["y"]),
+                                   ("width", actual["width"]), ("height", actual["height"])):
+                    self.assertAlmostEqual(saved[key], value, delta=1)
+
+        await self.page.reload()
+        await expect(chatbot).to_be_visible()
+        await expect(chatbot.locator(".chatbot-resize")).to_have_count(8)
+        restored = await chatbot.bounding_box()
+        self.assertEqual(restored, actual)
+        header = await chatbot.locator(".chatbot-handle").bounding_box()
+        await self.page.mouse.move(header["x"] + 40, header["y"] + 20)
+        await self.page.mouse.down()
+        await self.page.mouse.move(header["x"] + 70, header["y"] + 40)
+        await self.page.mouse.up()
+        moved = await chatbot.bounding_box()
+        self.assertAlmostEqual(moved["x"], restored["x"] + 30, delta=1)
+        self.assertAlmostEqual(moved["y"], restored["y"] + 20, delta=1)
+        self.assertEqual(moved["width"], restored["width"])
+        self.assertEqual(moved["height"], restored["height"])
+        self.assertEqual(self.errors, [])
+
+    async def test_chatbot_resize_limits_keep_opposite_edges_fixed(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        chatbot = self.page.locator("#chatbot")
+        await expect(chatbot).to_be_visible()
+        await expect(chatbot.locator(".chatbot-resize")).to_have_count(8)
+        for direction in ("nw", "se"):
+            for grow in (False, True):
+                with self.subTest(direction=direction, grow=grow):
+                    await chatbot.evaluate("""element => Object.assign(element.style, {
+                        left: '300px', top: '200px', width: '400px', height: '320px',
+                        right: 'auto', bottom: 'auto',
+                    })""")
+                    handle = await chatbot.locator(f'[data-resize="{direction}"]').bounding_box()
+                    x = handle["x"] + handle["width"] / 2
+                    y = handle["y"] + handle["height"] / 2
+                    delta = 2000 if (direction == "se") == grow else -2000
+                    await self.page.mouse.move(x, y)
+                    await self.page.mouse.down()
+                    await self.page.mouse.move(x + delta, y + delta)
+                    await self.page.mouse.up()
+                    box = await chatbot.bounding_box()
+                    viewport = self.page.viewport_size
+                    self.assertGreaterEqual(box["x"], 0)
+                    self.assertGreaterEqual(box["y"], 0)
+                    self.assertLessEqual(box["x"] + box["width"], viewport["width"])
+                    self.assertLessEqual(box["y"] + box["height"], viewport["height"])
+                    if not grow:
+                        self.assertEqual(box["width"], 224)
+                        self.assertEqual(box["height"], 192)
+                    elif direction == "nw":
+                        self.assertEqual(box["x"], 0)
+                        self.assertEqual(box["y"], 0)
+                    else:
+                        self.assertEqual(box["x"] + box["width"], viewport["width"])
+                        self.assertEqual(box["y"] + box["height"], viewport["height"])
+                    if direction == "nw":
+                        self.assertEqual(box["x"] + box["width"], 700)
+                        self.assertEqual(box["y"] + box["height"], 520)
+                    else:
+                        self.assertEqual(box["x"], 300)
+                        self.assertEqual(box["y"], 200)
+        self.assertEqual(self.errors, [])
+
+    async def test_chatbot_resize_default_position_and_small_viewport(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        chatbot = self.page.locator("#chatbot")
+        await expect(chatbot).to_be_visible()
+        original = await chatbot.bounding_box()
+        handle = await chatbot.locator('[data-resize="nw"]').bounding_box()
+        x = handle["x"] + handle["width"] / 2
+        y = handle["y"] + handle["height"] / 2
+        await self.page.mouse.move(x, y)
+        await self.page.mouse.down()
+        await self.page.mouse.move(x - 30, y - 20)
+        await self.page.mouse.up()
+        resized = await chatbot.bounding_box()
+        self.assertAlmostEqual(resized["width"], original["width"] + 30, delta=1)
+        self.assertAlmostEqual(resized["height"], original["height"] + 20, delta=1)
+        self.assertAlmostEqual(
+            resized["x"] + resized["width"], original["x"] + original["width"], delta=1,
+        )
+        self.assertAlmostEqual(
+            resized["y"] + resized["height"], original["y"] + original["height"], delta=1,
+        )
+
+        await self.page.set_viewport_size({"width": 200, "height": 160})
+        await self.page.reload()
+        await expect(chatbot).to_be_visible()
+        await expect(chatbot.locator(".chatbot-resize")).to_have_count(8)
+        handle = await chatbot.locator('[data-resize="se"]').bounding_box()
+        await self.page.mouse.move(handle["x"] + 5, handle["y"] + 5)
+        await self.page.mouse.down()
+        await self.page.mouse.move(20, 20)
+        await self.page.mouse.up()
+        self.assertEqual(
+            await chatbot.bounding_box(), {"x": 0, "y": 0, "width": 200, "height": 160},
+        )
+        self.assertEqual(self.errors, [])
+
     async def test_signout_waits_for_login_button_without_a_socket(self) -> None:
         client = TestClient(app)
         self.addCleanup(client.close)

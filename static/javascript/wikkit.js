@@ -102,6 +102,7 @@
         if (document.body.dataset.clearChat === "true") {
             chatbot.querySelector("#chatlog").replaceChildren();
         }
+        addResizeHandles(chatbot);
         document.body.appendChild(chatbot);
         function keepInView() {
             const rect = chatbot.getBoundingClientRect();
@@ -115,6 +116,75 @@
         keepInView();
         window.addEventListener("resize", keepInView);
         return chatbot;
+    }
+
+    function addResizeHandles(chatbot) {
+        // Saved content may already contain handles, but their listeners are not serialized.
+        chatbot.querySelectorAll(".chatbot-resize").forEach((handle) => handle.remove());
+        let resizePointer = null;
+        for (const direction of ["n", "e", "s", "w", "ne", "se", "sw", "nw"]) {
+            const handle = document.createElement("span");
+            handle.className = "chatbot-resize";
+            handle.dataset.resize = direction;
+            handle.setAttribute("aria-hidden", "true");
+            handle.addEventListener("pointerdown", (event) => {
+                if (event.button !== 0 || resizePointer !== null) return;
+                resizePointer = event.pointerId;
+                const rect = chatbot.getBoundingClientRect();
+                const startX = event.clientX;
+                const startY = event.clientY;
+                Object.assign(chatbot.style, {
+                    left: `${rect.left}px`, top: `${rect.top}px`,
+                    width: `${rect.width}px`, height: `${rect.height}px`,
+                    right: "auto", bottom: "auto",
+                });
+                const move = (moveEvent) => {
+                    if (moveEvent.pointerId !== resizePointer) return;
+                    const dx = moveEvent.clientX - startX;
+                    const dy = moveEvent.clientY - startY;
+                    if (direction.includes("e") || direction.includes("w")) {
+                        const west = direction.includes("w");
+                        const width = Math.max(0, Math.min(
+                            rect.width + (west ? -dx : dx),
+                            west ? rect.right : innerWidth - rect.left,
+                        ));
+                        chatbot.style.width = `${width}px`;
+                        if (west) {
+                            chatbot.style.left = `${rect.right - chatbot.getBoundingClientRect().width}px`;
+                        }
+                    }
+                    if (direction.includes("n") || direction.includes("s")) {
+                        const north = direction.includes("n");
+                        const height = Math.max(0, Math.min(
+                            rect.height + (north ? -dy : dy),
+                            north ? rect.bottom : innerHeight - rect.top,
+                        ));
+                        chatbot.style.height = `${height}px`;
+                        if (north) {
+                            chatbot.style.top = `${rect.bottom - chatbot.getBoundingClientRect().height}px`;
+                        }
+                    }
+                };
+                const finish = (finishEvent) => {
+                    if (finishEvent.pointerId !== resizePointer) return;
+                    resizePointer = null;
+                    handle.removeEventListener("pointermove", move);
+                    handle.removeEventListener("pointerup", finish);
+                    handle.removeEventListener("pointercancel", finish);
+                    handle.removeEventListener("lostpointercapture", finish);
+                    if (handle.hasPointerCapture(event.pointerId)) {
+                        handle.releasePointerCapture(event.pointerId);
+                    }
+                };
+                handle.setPointerCapture(event.pointerId);
+                handle.addEventListener("pointermove", move);
+                handle.addEventListener("pointerup", finish);
+                handle.addEventListener("pointercancel", finish);
+                handle.addEventListener("lostpointercapture", finish);
+                event.preventDefault();
+            });
+            chatbot.appendChild(handle);
+        }
     }
 
     function persistChatbot(chatbot) {
