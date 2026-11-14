@@ -1,0 +1,178 @@
+(() => {
+    "use strict";
+
+    const scrollTimers = new WeakMap();
+    const scrollAnimations = new WeakMap();
+    const mathGraphics = ".graphic-math, .review-graphic-math, mjx-container";
+
+    function scheduleScrollReturn(element) {
+        clearTimeout(scrollTimers.get(element));
+        scrollTimers.delete(element);
+        if (element.scrollLeft === 0 && element.scrollTop === 0) return;
+
+        scrollTimers.set(element, setTimeout(() => {
+            scrollTimers.delete(element);
+            if (!element.isConnected) return;
+            const left = element.scrollLeft;
+            const top = element.scrollTop;
+            const started = performance.now();
+            const animation = {left, top, frame: 0};
+            scrollAnimations.set(element, animation);
+            function step(now) {
+                if (!element.isConnected) {
+                    scrollAnimations.delete(element);
+                    return;
+                }
+                // jQuery's swing curve, with a 600ms duration (400ms / (2/3)).
+                const progress = Math.min((now - started) / 600, 1);
+                const remaining = (1 + Math.cos(Math.PI * progress)) / 2;
+                element.scrollTo({
+                    left: progress === 1 ? 0 : left * remaining,
+                    top: progress === 1 ? 0 : top * remaining,
+                    behavior: "instant",
+                });
+                animation.left = element.scrollLeft;
+                animation.top = element.scrollTop;
+                if (progress < 1) {
+                    animation.frame = requestAnimationFrame(step);
+                } else {
+                    scrollAnimations.delete(element);
+                }
+            }
+            animation.frame = requestAnimationFrame(step);
+        }, 5000));
+    }
+
+    function stopScrollReturn(element) {
+        const animation = scrollAnimations.get(element);
+        if (animation) {
+            cancelAnimationFrame(animation.frame);
+            scrollAnimations.delete(element);
+        }
+    }
+
+    document.addEventListener("scroll", event => {
+        const element = event.target;
+        if (!(element instanceof Element) || !element.matches(mathGraphics)) return;
+        const animation = scrollAnimations.get(element);
+        if (animation && element.scrollLeft === animation.left && element.scrollTop === animation.top) return;
+        stopScrollReturn(element);
+        scheduleScrollReturn(element);
+    }, {capture: true, passive: true});
+
+    for (const event of ["wheel", "pointerdown", "touchstart", "keydown"]) {
+        document.addEventListener(event, event => {
+            const element = event.target instanceof Element ? event.target.closest(mathGraphics) : null;
+            if (!element || !scrollAnimations.has(element)) return;
+            stopScrollReturn(element);
+            scheduleScrollReturn(element);
+        }, {capture: true, passive: true});
+    }
+
+    function replaceMath(root, replace) {
+        for (const wrapper of root.querySelectorAll("[data-mathjax-tex]")) {
+            replace(wrapper, wrapper.dataset.mathjaxTex);
+        }
+    }
+
+    function prepareMath(element) {
+        if (element.matches("script, style, pre, code, textarea, [data-mathjax-tex]")) return;
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+                if (!node.parentElement
+                    || node.parentElement.closest("script, style, pre, code, textarea, [data-mathjax-tex]")) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                return /\\\[.+?\\\]|\\\(.+?\\\)/s.test(node.textContent)
+                    ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+            },
+        });
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+
+        for (const node of nodes) {
+            const expression = /\\\[.+?\\\]|\\\(.+?\\\)/gs;
+            const fragment = document.createDocumentFragment();
+            let offset = 0;
+            for (const match of node.textContent.matchAll(expression)) {
+                fragment.append(document.createTextNode(node.textContent.slice(offset, match.index)));
+                const wrapper = document.createElement("span");
+                wrapper.dataset.mathjaxTex = match[0];
+                wrapper.style.display = "contents";
+                wrapper.textContent = match[0];
+                fragment.append(wrapper);
+                offset = match.index + match[0].length;
+            }
+            fragment.append(document.createTextNode(node.textContent.slice(offset)));
+            node.replaceWith(fragment);
+        }
+    }
+
+    let typesetting = Promise.resolve();
+
+    window.mathJaxSource = {
+        prepare: prepareMath,
+        serialize(element) {
+            const copy = element.cloneNode(true);
+            replaceMath(copy, (wrapper, tex) => {
+                wrapper.replaceWith(copy.ownerDocument.createTextNode(tex));
+            });
+            return copy.innerHTML;
+        },
+        restore(element) {
+            replaceMath(element, (wrapper, tex) => {
+                wrapper.replaceWith(element.ownerDocument.createTextNode(tex));
+            });
+        },
+        typeset(element) {
+            const render = () => {
+                if (!window.MathJax?.typesetPromise) return;
+                typesetting = typesetting.then(() => window.MathJax.startup?.promise).then(() => {
+                    window.MathJax.typesetClear([element]);
+                    window.mathJaxSource.restore(element);
+                    prepareMath(element);
+                    return window.MathJax.typesetPromise([element]);
+                }).catch(error => {
+                    console.error("Could not render LaTeX with MathJax", error);
+                });
+            };
+            if (window.MathJax?.typesetPromise) {
+                render();
+            } else {
+                document.addEventListener("mathjax-ready", render, {once: true});
+            }
+        },
+    };
+
+    window.MathJax = {
+        tex: {
+            inlineMath: [["\\(", "\\)"]],
+            displayMath: [["\\[", "\\]"]],
+        },
+        startup: {
+            typeset: false,
+            ready() {
+                window.MathJax.startup.defaultReady();
+                window.MathJax.startup.promise.then(() => {
+                    const typesetPage = () => {
+                        typesetting = typesetting.then(() => {
+                            prepareMath(document.body);
+                            return window.MathJax.typesetPromise([document.body]);
+                        }).then(() => {
+                            document.dispatchEvent(new Event("mathjax-ready"));
+                        }).catch(error => {
+                            console.error("Could not render page mathematics with MathJax", error);
+                        });
+                    };
+                    if (document.readyState === "loading") {
+                        document.addEventListener("DOMContentLoaded", typesetPage, {once: true});
+                    } else {
+                        typesetPage();
+                    }
+                }).catch(error => {
+                    console.error("Could not initialize MathJax", error);
+                });
+            },
+        },
+    };
+})();

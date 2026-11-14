@@ -51,7 +51,12 @@
             if (item.description) {
                 const description = document.createElement("p");
                 description.className = "source-description";
-                description.textContent = item.description.split(/\r?\n/, 1)[0];
+                if (item.kind === "math expression") {
+                    description.textContent = `\\[${item.description}\\]`;
+                    window.mathJaxSource.typeset(description);
+                } else {
+                    description.textContent = item.description.split(/\r?\n/, 1)[0];
+                }
                 name.appendChild(description);
             }
             row.insertCell().textContent = item.mimetype;

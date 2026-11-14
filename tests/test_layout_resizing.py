@@ -241,16 +241,27 @@ class SizingBrowserTests(unittest.IsolatedAsyncioTestCase):
                 await self.page.locator("[data-resize='left'] .resize-toggle").click(position={"x": 1, "y": 1})
                 self.assertFalse(await self.page.locator("#resize-left").is_visible())
 
-    async def test_only_one_affordance_is_active_at_a_time(self) -> None:
+    async def test_all_resize_handles_toggle_together(self) -> None:
         await self.load()
         before = await self.geometry()
-        for name in ("left", "right", "bottom", "pane3-0", "pane3-1", "introduction", "left"):
+        handle_count = await self.page.locator(".resize-handle").count()
+        names = ("left", "right", "bottom", "pane3-0", "pane3-1", "introduction")
+        for name in names:
             with self.subTest(handle=name):
-                await self.page.locator(f"[data-resize='{name}'] .resize-toggle").click()
-                self.assertEqual(await self.page.locator(".resize-handle:not([hidden])").count(), 1)
-                self.assertEqual(await self.page.locator(".resize-toggle[aria-expanded='true']").count(), 1)
+                await self.page.locator(f"[data-resize='{name}'] .resize-toggle").click(
+                    position={"x": 1, "y": 1},
+                )
+                self.assertEqual(await self.page.locator(".resize-handle:not([hidden])").count(), handle_count)
+                self.assertEqual(await self.page.locator(".resize-toggle[aria-expanded='true']").count(),
+                                 handle_count)
                 self.assertTrue(await self.page.locator(f"#resize-{name}").is_visible())
                 self.assertEqual(await self.geometry(), before)
+                await self.page.locator(f"[data-resize='{name}'] .resize-toggle").click(
+                    position={"x": 1, "y": 1},
+                )
+                self.assertEqual(await self.page.locator(".resize-handle:not([hidden])").count(), 0)
+                self.assertEqual(await self.page.locator(".resize-toggle[aria-expanded='true']").count(), 0)
+        await self.page.locator("[data-resize='left'] .resize-toggle").click()
         await self.page.locator("#resize-left").click()
         self.assertEqual(await self.page.locator(".resize-handle:not([hidden])").count(), 0)
         self.assertEqual(await self.page.locator(".resize-toggle[aria-expanded='true']").count(), 0)

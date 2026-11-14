@@ -318,7 +318,7 @@ async def evaluate_page(request: Request) -> Response:
         )
     message = (
         f"<p>Okay, {name}, I&rsquo;m reviewing the {' and '.join(parts)}.</p>"
-        "<p>Give me a few more moments to evaluate them.</p>"
+        f"<p>Please give me a few minutes to evaluate them&mdash;I&rsquo;m estimating {num2words.num2words(len(graphics) * 1/3)} minutes.</p>"
         if parts else None
     )
     return render_page(
@@ -358,10 +358,56 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
         )
         for graphic in graphics
     } if snapshot is not None else {}
+
+    def has_classification(graphic: content.GraphicEvaluationSource) -> bool:
+        evaluation = graphic.evaluation
+        if not isinstance(evaluation, dict):
+            return False
+        image_analysis = evaluation.get("image_analysis")
+        classification = (
+            image_analysis.get("classification")
+            if isinstance(image_analysis, dict) else None
+        )
+        math_expressions = (
+            image_analysis.get("math_expressions")
+            if isinstance(image_analysis, dict) else None
+        )
+        return (
+            isinstance(classification, str)
+            and classification in content.IMAGE_CLASSIFICATIONS
+            and isinstance(math_expressions, list)
+            and all(isinstance(expression, str) and expression.strip() for expression in math_expressions)
+            and (classification == "math expression" or not math_expressions)
+        )
+
+    def graphic_filename(
+        graphic: content.GraphicEvaluationSource, evaluation: dict[str, object] | None,
+    ) -> str:
+        image_analysis = evaluation.get("image_analysis") if evaluation else None
+        if isinstance(image_analysis, dict) and image_analysis.get("classification") == "chart":
+            return Path(graphic.filename).with_suffix(".png").name
+        return graphic.filename
+
+    def is_current(graphic: content.GraphicEvaluationSource) -> bool:
+        return (
+            graphic.evaluation is not None
+            and has_classification(graphic)
+        )
+
+    def graphic_source_payload(
+        graphic: content.GraphicEvaluationSource, evaluation: dict[str, object] | None,
+    ) -> dict[str, object]:
+        return {
+            "sid": graphic.sid,
+            "filename": graphic_filename(graphic, evaluation),
+            "category": graphic.category,
+            "type": graphic.type,
+            "table_html": graphic.table_html,
+        }
+
     pending = [
         graphic for graphic in graphics
-        if graphic.evaluation is None
-        or graphic.evaluation_hash != expected_hashes[graphic.sid]
+        if not is_current(graphic)
     ]
     try:
         client = openai.OpenAI() if pending else None
@@ -381,24 +427,20 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
             if not graphics:
                 yield json.dumps({"type": "empty"}) + "\n"
                 return
+            if not pending:
+                yield json.dumps({"type": "already-evaluated"}) + "\n"
+                return
 
             for graphic in graphics:
-                if (
-                    graphic.evaluation is not None
-                    and graphic.evaluation_hash == expected_hashes[graphic.sid]
-                ):
+                if is_current(graphic):
                     yield json.dumps({
                         "type": "result",
-                        "source": {
-                            "sid": graphic.sid,
-                            "filename": graphic.filename,
-                            "category": graphic.category,
-                        },
+                        "source": graphic_source_payload(graphic, graphic.evaluation),
                         "evaluation": graphic.evaluation,
                     }, ensure_ascii=False) + "\n"
 
             for index, graphic in enumerate(graphics, start=1):
-                if graphic.evaluation is not None:
+                if graphic not in pending:
                     continue
                 yield json.dumps({
                     "type": "progress",
@@ -431,11 +473,7 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                     )
                 yield json.dumps({
                     "type": "result",
-                    "source": {
-                        "sid": graphic.sid,
-                        "filename": graphic.filename,
-                        "category": graphic.category,
-                    },
+                    "source": graphic_source_payload(graphic, evaluation_result),
                     "evaluation": evaluation_result,
                 }, ensure_ascii=False) + "\n"
             yield json.dumps({"type": "complete"}) + "\n"
@@ -478,22 +516,26 @@ async def review_page(request: Request) -> Response:
     try:
         uid, pid = await selected_draft(request)
         saved, _ = await posters.store().content(uid, pid)
+        graphics = await content.store().graphic_sources(uid, pid)
         await common.resume(request)
     except STORAGE_ERRORS:
-        logger.exception("Could not load poster sections for review")
-        raise HTTPException(503, "Your sections could not be loaded. Please try again.") from None
+        logger.exception("Could not load poster sections and graphics for review")
+        raise HTTPException(503, "Your sections and graphics could not be loaded. Please try again.") from None
     values = dict(saved)
     response = render_page(
         request, "content/review.html", "content-review",
         "<p>Here is my draft of each of the sections of your poster. "
         "Please take a look at each section and give me feedback or make adjustments as needed. "
         "When you give me feedback on a particular section, please be sure to include "
-        "the section name so I know which part you are referring to.</p>",
+        "the section name or click on the section so I know which section you are referring to.</p>",
+        clear_chat=True,
         username=(getattr(request.state, "user", None) or {}).get(
             "user-name", identity.DEFAULT_NAME,
         ),
         pid=pid,
         next_page="/layout/edit",
+        graphics=graphics,
+        graphics_data=[asdict(graphic) for graphic in graphics],
         sections=[
             (which, label, Markup(elucidation.clean_html(values.get(which, ""))))
             for which, label in REVIEW_SECTIONS

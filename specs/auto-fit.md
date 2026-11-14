@@ -160,7 +160,7 @@ f"""
 
 After elucidation succeeds, route the user to `/content/evaluate`. Evaluate owner-scoped PNG and JPEG source graphics with `evaluation.evaluate_image`, including uploaded root graphics and extracted child graphics. Serve a selected source through `/content/{sid}/image` only after checking ownership.
 
-Persist each structured evaluation in `source.evaluation` (JSONB), keyed by its source record, with `source.evaluation_hash` guarding against stale source text, section content, or image data during a long-running evaluation. Clear saved evaluations when poster section content changes. Apply `schema/source-evaluation.sql` to existing databases.
+Persist each image evaluation in the `assessment` rows for its Materials and Methods and Results sections. Use the source and section update timestamps to detect stale assessments; keep the image classification, description, and any extracted math expressions in the existing source metadata and child source records. Apply `schema/source-analysis-cleanup.sql` to existing databases to remove obsolete source-analysis columns.
 
 Wikkit reports per-image progress, then displays uploaded and extracted graphics in separate groups. A graphic is suitable when either its Materials and Methods or Results rating is `significantly`, `highly`, or `definitively`; otherwise it is not suitable. If no eligible graphics exist, Wikkit explains that and redirects to `/conferences/query`.
 
@@ -434,6 +434,14 @@ Show each of the sections in a scrollable list for easy navigation and review.
 Give the user the ability to navigate through sections and make adjustments as needed.
 Borrow the text editing interface to support dynamic updates and user interactions for each section.
 Clicking in a section will allow you to edit its content directly.
+
+Sections and the selected draft's uploaded and extracted source graphics appear
+side by side in independently scrollable panes. A narrow vertical divider resizes
+the panes by dragging or with the Left/Right arrow keys (Shift for larger steps).
+Home and End select the 20% and 80% section-width limits. When there are no source
+graphics, the graphics pane displays an explicit empty message.
+Loading these previews uses source identifiers and filenames only, not the
+optional graphic evaluation columns or evaluation results.
 
 After elucidation the review page loads the selected draft's saved sections and
 autosaves edits. Continue waits for outstanding saves before opening

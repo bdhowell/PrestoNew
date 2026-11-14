@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import psycopg
 from playwright.async_api import async_playwright
 
+import content
 import elucidation
 import posters
 from routers import content as routes
@@ -24,10 +25,12 @@ class ReviewRouteTests(unittest.TestCase):
             ("introduction", '<h2>Introduction</h2><p>Safe <strong>text</strong></p><script>bad()</script>'),
         ], [])
         self.posters.set_resumption.return_value = True
+        self.sources.graphic_sources.return_value = []
 
     def test_review_renders_safe_sections_and_resumption(self) -> None:
         response = self.client.get("/content/review")
         self.assertEqual(response.status_code, 200)
+        self.assertIn('data-clear-chat="true"', response.text)
         self.assertEqual(response.headers["cache-control"], "private, no-store")
         self.assertIn('data-section="introduction"', response.text)
         self.assertIn('data-section="abstract"', response.text)
@@ -45,8 +48,60 @@ class ReviewRouteTests(unittest.TestCase):
         self.assertIn('id="revision-dialog"', response.text)
         self.assertIn('id="revision-accept"', response.text)
         self.assertIn('id="revision-reject"', response.text)
+        self.assertIn('id="review-panes"', response.text)
+        self.assertIn('id="review-divider" role="separator"', response.text)
+        self.assertIn('id="review-graphics"', response.text)
+        self.assertIn("No source graphics are available for this poster.", response.text)
         self.posters.content.assert_awaited_once_with(7, 11)
+        self.sources.graphic_sources.assert_awaited_once_with(7, 11)
+        self.sources.evaluation_sources.assert_not_awaited()
         self.posters.set_resumption.assert_awaited_once_with(7, 11, "http://testserver/content/review?xyzzy=arpa")
+
+    def test_review_renders_uploaded_and_extracted_source_graphics(self) -> None:
+        self.sources.graphic_sources.return_value = [
+            content.GraphicSource(21, '<chart & "data">.png'),
+            content.GraphicSource(22, "paper figure.jpg"),
+            content.GraphicSource(
+                23, "table.png", type="tables",
+                table_html="<table><tr><th>Group</th></tr><tr><td>Control</td></tr></table>",
+            ),
+        ]
+        response = self.client.get("/content/review")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('src="/content/21/image"', response.text)
+        self.assertIn('src="/content/22/image"', response.text)
+        self.assertIn("<th>Group</th>", response.text)
+        self.assertIn("<td>Control</td>", response.text)
+        self.assertNotIn('src="/content/23/image"', response.text)
+        self.assertIn('alt="&lt;chart &amp; &#34;data&#34;&gt;.png"', response.text)
+        self.assertIn("<figcaption>paper figure.jpg</figcaption>", response.text)
+        self.assertNotIn("No source graphics are available", response.text)
+        self.sources.graphic_sources.assert_awaited_once_with(7, 11)
+        self.sources.evaluation_sources.assert_not_awaited()
+
+    def test_review_renders_math_as_escaped_latex_instead_of_image(self) -> None:
+        self.sources.graphic_sources.return_value = [
+            content.GraphicSource(21, "formula.png", type="math", math_expressions=[
+                r"\frac{1}{2}", r"x < y",
+            ]),
+            content.GraphicSource(22, "missing.png", type="math"),
+            content.GraphicSource(23, "chart.png"),
+        ]
+        response = self.client.get("/content/review")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(r"\[\frac{1}{2}\]", response.text)
+        self.assertIn(r"\[x &lt; y\]", response.text)
+        self.assertIn("No LaTeX is available for this source.", response.text)
+        self.assertNotIn('src="/content/21/image"', response.text)
+        self.assertNotIn('src="/content/22/image"', response.text)
+        self.assertIn('src="/content/23/image"', response.text)
+
+    def test_graphics_storage_failure_is_reported(self) -> None:
+        self.sources.graphic_sources.side_effect = psycopg.OperationalError("down")
+        with self.assertLogs("routers.content", "ERROR"):
+            response = self.client.get("/content/review")
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Your sections and graphics could not be loaded.", response.text)
 
     def test_review_continues_to_edit_when_dimensions_are_missing(self) -> None:
         self.posters.get.return_value = replace(DRAFT, width=None, height=None)
@@ -77,6 +132,298 @@ class ReviewRouteTests(unittest.TestCase):
         self.posters.set_resumption.assert_awaited_once_with(
             7, 11, "http://testserver/content/review?tag=a%2Fb&tag=two&xyzzy=arpa",
         )
+
+
+class ReviewRenderedBrowserTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        test_content.ContentRouteTests.setUp(self)
+        self.posters.content.return_value = ([("results", "<p>Results</p>")], [])
+        self.sources.graphic_sources.return_value = []
+
+    async def test_math_graphics_are_typeset_when_panel_is_shown(self) -> None:
+        self.posters.content.return_value = ([("introduction", "Introduction")], [])
+        self.sources.graphic_sources.return_value = [
+            content.GraphicSource(21, "formula.png", type="math", math_expressions=[
+                r"E=mc^2", r"\frac{1}{2}",
+            ]),
+            content.GraphicSource(22, "missing.png", type="math"),
+        ]
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            self.addAsyncCleanup(browser.close)
+            page = await browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+
+            async def serve(route):
+                if route.request.url.startswith("http://testserver/"):
+                    response = self.client.get(route.request.url)
+                    await route.fulfill(
+                        status=response.status_code, body=response.content,
+                        content_type=response.headers.get("content-type", "text/plain"),
+                    )
+                elif "tex-chtml.js" in route.request.url:
+                    await route.fulfill(content_type="text/javascript", body="""
+                        MathJax.startup.defaultReady = () => {
+                            MathJax.startup.promise = Promise.resolve();
+                            MathJax.typesetClear = () => {};
+                            MathJax.typesetPromise = async elements => {
+                                for (const root of elements) {
+                                    for (const wrapper of root.querySelectorAll('[data-mathjax-tex]')) {
+                                        const rendered = document.createElement('mjx-container');
+                                        rendered.textContent = wrapper.dataset.mathjaxTex;
+                                        wrapper.replaceChildren(rendered);
+                                    }
+                                }
+                            };
+                        };
+                        MathJax.startup.ready();
+                    """)
+                else:
+                    await route.abort()
+
+            await page.route("**/*", serve)
+            await page.goto("http://testserver/content/review")
+            await page.get_by_role("link", name="Introduction").click()
+            formula = page.locator(".review-graphic[data-sid='21']")
+            await formula.locator("mjx-container").first.wait_for()
+            self.assertEqual(await formula.locator("mjx-container").all_text_contents(), [
+                r"\[E=mc^2\]", r"\[\frac{1}{2}\]",
+            ])
+            self.assertEqual(await formula.locator(".review-graphic-math").evaluate_all("""elements =>
+                elements.map(element => ({
+                    background: getComputedStyle(element).backgroundColor,
+                    color: getComputedStyle(element.querySelector('mjx-container')).color,
+                }))
+            """), [
+                {"background": "rgb(255, 255, 255)", "color": "rgb(0, 0, 0)"},
+                {"background": "rgb(255, 255, 255)", "color": "rgb(0, 0, 0)"},
+            ])
+            self.assertEqual(await formula.locator("img").count(), 0)
+            self.assertIn("No LaTeX is available", await page.locator(
+                ".review-graphic[data-sid='22']",
+            ).inner_text())
+            await formula.click()
+            self.assertEqual(await formula.get_attribute("aria-pressed"), "true")
+            self.assertEqual(errors, [])
+
+    async def test_table_graphics_are_visible_on_the_review_pane(self) -> None:
+        self.sources.graphic_sources.return_value = [
+            content.GraphicSource(
+                23, "table.png", type="tables",
+                table_html="<table><tr><th>Group</th></tr><tr><td>Control</td></tr></table>",
+            ),
+        ]
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            self.addAsyncCleanup(browser.close)
+            page = await browser.new_page()
+
+            async def serve(route):
+                if route.request.url.startswith("http://testserver/"):
+                    response = self.client.get(route.request.url)
+                    await route.fulfill(
+                        status=response.status_code, body=response.content,
+                        content_type=response.headers.get("content-type", "text/plain"),
+                    )
+                else:
+                    await route.abort()
+
+            await page.route("**/*", serve)
+            await page.goto("http://testserver/content/review")
+            await page.get_by_role("link", name="Results").click()
+            table = page.locator(".review-graphic-table table")
+            await table.wait_for(state="visible")
+            self.assertEqual(await table.locator("th").inner_text(), "Group")
+            self.assertEqual(await table.locator("td").inner_text(), "Control")
+            self.assertEqual(await table.evaluate(
+                "table => getComputedStyle(table).font",
+            ), await page.locator(".review-graphic").evaluate(
+                "parent => getComputedStyle(parent).font",
+            ))
+            appearance = await page.locator(".review-graphic-table").evaluate("""element => ({
+                background: getComputedStyle(element).backgroundColor,
+                color: getComputedStyle(element).color,
+                bounds: element.getBoundingClientRect().toJSON(),
+            })""")
+            self.assertEqual(appearance["background"], "rgb(255, 255, 255)")
+            self.assertEqual(appearance["color"], "rgb(0, 0, 0)")
+            self.assertGreater(appearance["bounds"]["height"], 0)
+
+    async def test_loading_review_clears_previous_chat_and_displays_greeting(self) -> None:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            self.addAsyncCleanup(browser.close)
+            page = await browser.new_page()
+
+            async def serve(route):
+                if route.request.url.startswith("http://testserver/"):
+                    response = self.client.get(route.request.url)
+                    await route.fulfill(
+                        status=response.status_code, body=response.content,
+                        content_type=response.headers.get("content-type", "text/plain"),
+                    )
+                else:
+                    await route.abort()
+
+            await page.route("**/*", serve)
+            await page.goto("http://testserver/content/review")
+            await page.add_init_script("""(() => {
+                const saved = JSON.parse(sessionStorage.getItem('wikkit.chatbot'));
+                const content = document.createElement('template');
+                content.innerHTML = saved.content;
+                content.content.querySelector('#chatlog').innerHTML = '<p>Previous chat message</p>';
+                saved.content = content.innerHTML;
+                sessionStorage.setItem('wikkit.chatbot', JSON.stringify(saved));
+            })()""")
+            await page.reload()
+            await page.locator("#chatlog").get_by_text(
+                "Here is my draft of each of the sections of your poster.", exact=False,
+            ).wait_for()
+            self.assertNotIn("Previous chat message", await page.locator("#chatlog").inner_text())
+            await page.wait_for_function(
+                "!JSON.parse(sessionStorage.getItem('wikkit.chatbot')).content.includes('Previous chat message')"
+            )
+
+    async def test_divider_resizes_on_rendered_page_with_all_assets(self) -> None:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            self.addAsyncCleanup(browser.close)
+            page = await browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+
+            async def serve(route):
+                if route.request.url.startswith("http://testserver/"):
+                    response = self.client.get(route.request.url)
+                    await route.fulfill(
+                        status=response.status_code, body=response.content,
+                        content_type=response.headers.get("content-type", "text/plain"),
+                    )
+                else:
+                    await route.abort()
+
+            await page.route("**/*", serve)
+            await page.goto("http://testserver/content/review")
+            divider = page.locator("#review-divider")
+            handle = await divider.bounding_box()
+            sections = page.locator("#review-sections")
+            before = await sections.bounding_box()
+            await page.mouse.move(handle["x"] + handle["width"] / 2, handle["y"] + 50)
+            await page.mouse.down()
+            await page.mouse.move(handle["x"] + 100, handle["y"] + 50, steps=5)
+            await page.mouse.up()
+            after = await sections.bounding_box()
+            self.assertEqual(errors, [])
+            self.assertGreater(after["width"], before["width"] + 50)
+
+    async def test_graphics_follow_section_types_and_show_selected_assessment(self) -> None:
+        self.posters.content.return_value = ([
+            ("title", "Title"),
+            ("abstract", "Abstract"),
+            ("introduction", "Introduction"),
+            ("materials and methods", "Methods"),
+            ("results", "Results"),
+            ("conclusion", "Conclusion"),
+        ], [])
+
+        def graphic(
+            sid: int, filename: str, kind: str, description: str,
+            methods_rating: str | None, results_rating: str | None,
+        ) -> content.GraphicSource:
+            assessments = {}
+            for section, rating in (
+                ("materials and methods", methods_rating), ("results", results_rating),
+            ):
+                if rating:
+                    assessments[section] = {
+                        "rating": rating,
+                        "explanation": f"{section} explanation for {filename}.",
+                        "criteria": {}, "supported_elements": [],
+                        "limitations": [], "suggested_improvements": [],
+                    }
+            return content.GraphicSource(
+                sid, filename, "image/png", kind, f"{filename} description",
+                None, kind, assessments,
+            )
+
+        self.sources.graphic_sources.return_value = [
+            graphic(1, "low.png", "png", "low", "somewhat", "weakly"),
+            graphic(2, "formula.png", "math", "formula", "highly", "highly"),
+            graphic(3, "table.png", "tables", "table", "highly", "highly"),
+            graphic(4, "diagram.svg", "svg", "diagram", "highly", "highly"),
+            graphic(5, "high.png", "png", "high", "highly", "significantly"),
+            graphic(6, "animation.gif", "gif", "animation", "none", "none"),
+        ]
+        self.sources.graphic_source.return_value = (b"", "image/png")
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            self.addAsyncCleanup(browser.close)
+            page = await browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+
+            async def serve(route):
+                if route.request.url.startswith("http://testserver/"):
+                    response = self.client.get(route.request.url)
+                    await route.fulfill(
+                        status=response.status_code, body=response.content,
+                        content_type=response.headers.get("content-type", "text/plain"),
+                    )
+                else:
+                    await route.abort()
+
+            await page.route("**/*", serve)
+            await page.goto("http://testserver/content/review")
+            graphics = page.locator("#review-graphics")
+            assessment = page.locator("#review-assessment")
+            self.assertTrue(await graphics.evaluate("panel => panel.hidden"))
+            self.assertTrue(await assessment.evaluate("panel => panel.hidden"))
+
+            await page.get_by_role("link", name="Introduction").click()
+            self.assertFalse(await graphics.evaluate("panel => panel.hidden"))
+            self.assertTrue(await assessment.evaluate("panel => panel.hidden"))
+            self.assertEqual(
+                await page.locator("#review-graphics figure:not([hidden]) .review-graphic")
+                .evaluate_all("buttons => buttons.map(button => button.dataset.type)"),
+                ["math"],
+            )
+
+            await page.get_by_role("link", name="Methods").click()
+            self.assertFalse(await assessment.evaluate("panel => panel.hidden"))
+            self.assertEqual(
+                await page.locator("#review-graphics figure:not([hidden]) .review-graphic")
+                .evaluate_all("buttons => buttons.map(button => button.dataset.type)"),
+                ["svg", "png", "png", "gif", "tables", "math"],
+            )
+            self.assertEqual(
+                await page.locator("#review-graphics figure:not([hidden]) .review-graphic")
+                .evaluate_all("buttons => buttons.filter(button => button.dataset.type === 'png')"
+                              ".map(button => button.closest('figure').querySelector('figcaption').textContent)"),
+                ["high.png", "low.png"],
+            )
+            self.assertIn("diagram.svg description", await assessment.inner_text())
+            self.assertIn("materials and methods explanation for diagram.svg.", await assessment.inner_text())
+            self.assertEqual(
+                await page.locator("#review-assessment-content").evaluate(
+                    """content => [...content.querySelectorAll('h3, p')]
+                        .map(element => getComputedStyle(element).color)""",
+                ),
+                ["rgb(255, 255, 255)"] * 5,
+            )
+
+            await page.get_by_role("link", name="Results").click()
+            self.assertIn("Results Assessment", await assessment.inner_text())
+            self.assertIn("results explanation for diagram.svg.", await assessment.inner_text())
+            await page.locator("#review-graphics .review-graphic[data-sid='5']").click()
+            selected = page.locator("#review-graphics .review-graphic.is-selected")
+            self.assertEqual(await selected.get_attribute("data-sid"), "5")
+            self.assertIn("results explanation for high.png.", await assessment.inner_text())
+            self.assertEqual(errors, [])
+
+            await page.get_by_role("link", name="Abstract").click()
+            self.assertTrue(await graphics.evaluate("panel => panel.hidden"))
+            self.assertTrue(await assessment.evaluate("panel => panel.hidden"))
 
 
 class ReviewWorkflowTests(unittest.IsolatedAsyncioTestCase):
@@ -179,11 +526,37 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
                     <div id="review" data-pid="11" data-username="Ada" data-next-page="/layout/edit">
                     <nav aria-label="Poster sections"><ul><li><a href="#review-1">Results</a></li></ul></nav>
                     <div class="review-main">
+                    <div id="review-panes">
                     <div id="review-sections">
                     <section id="review-1"><h2>Results</h2>
-                    <div class="content" contenteditable="true" data-section="results"><p>Original</p></div>
+                    <div class="content" contenteditable="true" data-section="results"
+                         data-category="results"><p>Original</p></div>
                     </section>
                     </div>
+                    <div id="review-divider" role="separator" tabindex="0" aria-orientation="vertical"
+                         aria-label="Resize sections and source graphics" aria-controls="review-sections review-graphics"
+                         aria-valuemin="20" aria-valuemax="80" aria-valuenow="50"
+                         aria-valuetext="Sections 50%, source graphics 50%"></div>
+                    <div id="review-graphic-panes">
+                    <section id="review-graphics" tabindex="0" aria-labelledby="review-graphics-heading" hidden>
+                    <h2 id="review-graphics-heading">Source graphics</h2>
+                    <p data-graphics-empty>No source graphics are available for this poster.</p>
+                    <figure><button class="review-graphic" data-sid="21" data-type="png" aria-pressed="false">
+                    <img alt="Source chart" width="600" height="400"
+                        src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='400'%3E%3C/svg%3E">
+                    </button><figcaption>chart.png</figcaption></figure>
+                    </section>
+                    <section id="review-assessment" aria-labelledby="review-assessment-heading" hidden>
+                    <h2 id="review-assessment-heading">Graphic Assessment</h2>
+                    <div id="review-assessment-content"></div></section>
+                    </div>
+                    </div>
+                    </div></div>
+                    <script id="review-graphics-data" type="application/json">
+                    [{"sid":21,"description":"Source chart description","assessments":{}}]
+                    </script>
+                    <div class="review-actions">
+                    <div class="editor-controls-container">
                     <div id="editor-controls">
                     <button id="bold" aria-label="Bold"><i class="fa-solid fa-bold"></i></button>
                     <button id="italic">Italic</button>
@@ -192,9 +565,9 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
                     <button id="superscript">Sup</button><button id="subscript">Sub</button>
                     <button id="ullist">Bullets</button><button id="ollist">Numbered</button>
                     <button id="cut">Cut</button><button id="copy">Copy</button><button id="paste">Paste</button>
-                    </div>
+                    </div></div>
                     <output id="content-save-status"></output>
-                    <button id="review-continue">Continue</button></div></div>
+                    <button id="review-continue">Continue</button></div>
                     <dialog id="revision-dialog">
                     <p id="revision-section"></p><div id="revision-original"></div>
                     <div id="revision-proposed"></div><p id="revision-status"></p>
@@ -213,6 +586,83 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/pages/content-review.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-editor.js"))
 
+    async def pane_bounds(self):
+        return await self.page.evaluate("""() => {
+            const rect = id => {
+                const {left, right, top, bottom, width} = document.getElementById(id).getBoundingClientRect();
+                return {left, right, top, bottom, width};
+            };
+            return {
+                sections: rect('review-sections'), divider: rect('review-divider'),
+                graphics: rect('review-graphic-panes'), panes: rect('review-panes'),
+            };
+        }""")
+
+    async def test_panes_are_side_by_side_and_graphics_fit_at_narrow_widths(self) -> None:
+        for width in (1280, 600, 375):
+            with self.subTest(width=width):
+                await self.page.set_viewport_size({"width": width, "height": 800})
+                bounds = await self.pane_bounds()
+                self.assertAlmostEqual(bounds["sections"]["right"], bounds["divider"]["left"], delta=1)
+                self.assertAlmostEqual(bounds["divider"]["right"], bounds["graphics"]["left"], delta=1)
+                self.assertEqual(bounds["divider"]["width"], 10)
+                self.assertEqual(bounds["sections"]["top"], bounds["graphics"]["top"])
+                self.assertEqual(bounds["sections"]["bottom"], bounds["graphics"]["bottom"])
+                dimensions = await self.page.locator("#review-graphics").evaluate(
+                    """pane => ({
+                        scrollWidth: pane.scrollWidth,
+                        clientWidth: pane.clientWidth,
+                        figureWidth: pane.querySelector('figure').getBoundingClientRect().width,
+                        buttonWidth: pane.querySelector('button').getBoundingClientRect().width,
+                        imageWidth: pane.querySelector('img').getBoundingClientRect().width,
+                    })""",
+                )
+                self.assertEqual(dimensions["scrollWidth"], dimensions["clientWidth"], dimensions)
+
+    async def test_divider_resizes_with_pointer_and_clamps_both_panes(self) -> None:
+        before = await self.pane_bounds()
+        handle = before["divider"]
+        await self.page.mouse.move(handle["left"] + handle["width"] / 2, handle["top"] + 50)
+        await self.page.mouse.down()
+        await self.page.mouse.move(handle["left"] + 100, handle["top"] + 50, steps=5)
+        after = await self.pane_bounds()
+        self.assertGreater(after["sections"]["width"], before["sections"]["width"])
+        self.assertLess(after["graphics"]["width"], before["graphics"]["width"])
+        await self.page.mouse.move(before["panes"]["right"] + 20, handle["top"] + 50)
+        self.assertEqual(await self.page.locator("#review-divider").get_attribute("aria-valuenow"), "80")
+        await self.page.mouse.move(before["panes"]["left"] - 20, handle["top"] + 50)
+        self.assertEqual(await self.page.locator("#review-divider").get_attribute("aria-valuenow"), "20")
+        await self.page.mouse.up()
+        await self.page.mouse.move(handle["left"], handle["top"] + 50)
+        self.assertEqual(await self.page.locator("#review-divider").get_attribute("aria-valuenow"), "20")
+        self.assertEqual(self.requests, [])
+
+    async def test_divider_keyboard_controls_and_resize_proportions(self) -> None:
+        divider = self.page.locator("#review-divider")
+        await divider.focus()
+        for key, expected in (("ArrowRight", 51), ("Shift+ArrowLeft", 41), ("Home", 20),
+                              ("ArrowLeft", 20), ("End", 80), ("ArrowRight", 80)):
+            await divider.press(key)
+            self.assertEqual(await divider.get_attribute("aria-valuenow"), str(expected))
+        self.assertEqual(await divider.get_attribute("aria-valuetext"), "Sections 80%, source graphics 20%")
+        await self.page.set_viewport_size({"width": 600, "height": 800})
+        bounds = await self.pane_bounds()
+        self.assertAlmostEqual(bounds["sections"]["width"] / bounds["graphics"]["width"], 4, delta=0.02)
+
+    async def test_panes_scroll_independently(self) -> None:
+        await self.page.evaluate("""() => {
+            for (const id of ['review-sections', 'review-graphics']) {
+                const filler = document.createElement('div');
+                filler.style.height = '1500px';
+                document.getElementById(id).append(filler);
+            }
+            document.getElementById('review-sections').scrollTo({top: 100, behavior: 'instant'});
+        }""")
+        self.assertEqual(await self.page.locator("#review-graphics").evaluate("pane => pane.scrollTop"), 0)
+        await self.page.locator("#review-graphics").evaluate("pane => { pane.scrollTop = 200; }")
+        self.assertEqual(await self.page.locator("#review-sections").evaluate("pane => pane.scrollTop"), 100)
+        self.assertEqual(await self.page.locator("#review-graphics").evaluate("pane => pane.scrollTop"), 200)
+
     async def test_section_links_and_toolbar_match_review_styles(self) -> None:
         styles = await self.page.evaluate("""() => {
             const link = getComputedStyle(document.querySelector('#review nav a'));
@@ -229,7 +679,7 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
             };
         }""")
         self.assertEqual(styles, {
-            "color": "rgb(0, 0, 205)",
+            "color": "rgb(244, 211, 94)",
             "weight": "700",
             "decoration": "none",
             "bullets": "none",
@@ -237,6 +687,57 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
             "buttonBackground": "rgb(68, 58, 128)",
             "buttonBorder": "rgb(142, 133, 194)",
         })
+
+    async def test_section_link_scrolls_smoothly_into_view(self) -> None:
+        await self.page.evaluate("""() => {
+            const pane = document.getElementById('review-sections');
+            pane.insertAdjacentHTML('beforeend',
+                '<div style="height: 1500px"></div><section id="review-2"><h2>Methods</h2></section>'
+                + '<div style="height: 1000px"></div>');
+            document.querySelector('#review nav ul').insertAdjacentHTML('beforeend',
+                '<li><a href="#review-2">Methods</a></li>');
+            window.sectionScrollPositions = [];
+            window.sectionScrollEnded = false;
+            pane.addEventListener('scroll', () => window.sectionScrollPositions.push(pane.scrollTop));
+            pane.addEventListener('scrollend', () => { window.sectionScrollEnded = true; });
+        }""")
+        await self.page.locator('#review nav a[href="#review-2"]').click()
+        await self.page.wait_for_function("window.sectionScrollEnded")
+        result = await self.page.evaluate("""() => {
+            const pane = document.getElementById('review-sections');
+            const section = document.getElementById('review-2');
+            return {
+                hash: location.hash,
+                positions: window.sectionScrollPositions,
+                pane: pane.getBoundingClientRect().toJSON(),
+                section: section.getBoundingClientRect().toJSON(),
+            };
+        }""")
+        self.assertEqual(result["hash"], "#review-2")
+        self.assertGreater(len(set(result["positions"])), 1)
+        self.assertGreaterEqual(result["section"]["top"], result["pane"]["top"])
+        self.assertLessEqual(result["section"]["bottom"], result["pane"]["bottom"])
+
+    async def test_section_scrolling_respects_reduced_motion(self) -> None:
+        await self.page.emulate_media(reduced_motion="reduce")
+        await self.page.evaluate("""() => {
+            document.getElementById('review-sections').insertAdjacentHTML('beforeend',
+                '<div style="height: 1500px"></div><section id="review-2"><h2>Methods</h2></section>'
+                + '<div style="height: 1000px"></div>');
+            document.querySelector('#review nav ul').insertAdjacentHTML('beforeend',
+                '<li><a href="#review-2">Methods</a></li>');
+        }""")
+        behavior = await self.page.locator("#review-sections").evaluate(
+            "pane => getComputedStyle(pane).scrollBehavior",
+        )
+        self.assertEqual(behavior, "auto")
+        await self.page.locator('#review nav a[href="#review-2"]').click()
+        await self.page.wait_for_function("""() => {
+            const pane = document.getElementById('review-sections').getBoundingClientRect();
+            const section = document.getElementById('review-2').getBoundingClientRect();
+            return section.top >= pane.top && section.bottom <= pane.bottom;
+        }""")
+        self.assertEqual(await self.page.evaluate("location.hash"), "#review-2")
 
     async def test_clicked_section_link_is_highlighted(self) -> None:
         link = self.page.locator("#review nav a")
@@ -256,6 +757,38 @@ class ReviewBrowserTests(unittest.IsolatedAsyncioTestCase):
             "outlineColor": "rgb(0, 0, 0)",
             "heading": "rgb(244, 211, 94)",
         })
+
+    async def test_section_interaction_highlights_corresponding_link(self) -> None:
+        await self.page.evaluate("""() => {
+            document.querySelector('#review nav ul').insertAdjacentHTML('beforeend',
+                '<li><a href="#review-2">Methods</a></li>');
+            document.getElementById('review-sections').insertAdjacentHTML('beforeend',
+                '<section id="review-2"><h2>Methods</h2>'
+                + '<div class="content" contenteditable="true"><p>Methods text</p></div></section>');
+        }""")
+        first = self.page.locator('#review nav a[href="#review-1"]')
+        second = self.page.locator('#review nav a[href="#review-2"]')
+        first_heading = self.page.locator("#review-1 > h2")
+        second_heading = self.page.locator("#review-2 > h2")
+        await first.click()
+        self.assertEqual(await first_heading.evaluate("heading => getComputedStyle(heading).color"), "rgb(244, 211, 94)")
+        await self.page.locator("#review-2 .content p").click()
+        self.assertIsNone(await first.get_attribute("aria-current"))
+        self.assertEqual(await second.get_attribute("aria-current"), "location")
+        self.assertEqual(await second.evaluate("link => getComputedStyle(link).color"), "rgb(244, 211, 94)")
+        self.assertEqual(await first_heading.evaluate("heading => getComputedStyle(heading).color"), "rgb(191, 191, 191)")
+        self.assertEqual(await second_heading.evaluate("heading => getComputedStyle(heading).color"), "rgb(244, 211, 94)")
+        self.assertEqual(await self.page.evaluate("location.hash"), "#review-1")
+
+        await self.page.locator("#review-1 .content").focus()
+        self.assertEqual(await first.get_attribute("aria-current"), "location")
+        self.assertIsNone(await second.get_attribute("aria-current"))
+        self.assertEqual(await first_heading.evaluate("heading => getComputedStyle(heading).color"), "rgb(244, 211, 94)")
+        self.assertEqual(await second_heading.evaluate("heading => getComputedStyle(heading).color"), "rgb(191, 191, 191)")
+        await self.page.locator("#review-2 h2").click()
+        self.assertEqual(await second.get_attribute("aria-current"), "location")
+        self.assertEqual(await second_heading.evaluate("heading => getComputedStyle(heading).color"), "rgb(244, 211, 94)")
+        self.assertEqual(await self.page.locator('#review nav [aria-current="location"]').count(), 1)
 
     async def test_failed_save_is_announced_and_next_edit_saves(self) -> None:
         editor = self.page.locator(".content")

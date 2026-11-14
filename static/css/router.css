@@ -14,7 +14,6 @@
     max-width: 100vw;
     max-height: 100vh;
     overflow: hidden;
-    resize: both;
     border: 2px solid #c9a227;
     border-radius: 8px;
     background: rgb(24 20 48 / 94%);
@@ -63,6 +62,63 @@
 
 #chatbot.dragging .chatbot-handle {
     cursor: grabbing;
+}
+
+#chatbot .chatbot-resize {
+    position: absolute;
+    z-index: 1;
+    touch-action: none;
+    user-select: none;
+}
+
+#chatbot .chatbot-resize[data-resize="n"],
+#chatbot .chatbot-resize[data-resize="s"] {
+    right: 10px;
+    left: 10px;
+    height: 6px;
+    cursor: ns-resize;
+}
+
+#chatbot .chatbot-resize[data-resize="e"],
+#chatbot .chatbot-resize[data-resize="w"] {
+    top: 10px;
+    bottom: 10px;
+    width: 6px;
+    cursor: ew-resize;
+}
+
+#chatbot .chatbot-resize[data-resize="ne"],
+#chatbot .chatbot-resize[data-resize="se"],
+#chatbot .chatbot-resize[data-resize="sw"],
+#chatbot .chatbot-resize[data-resize="nw"] {
+    width: 10px;
+    height: 10px;
+}
+
+#chatbot .chatbot-resize[data-resize="ne"],
+#chatbot .chatbot-resize[data-resize="sw"] {
+    cursor: nesw-resize;
+}
+
+#chatbot .chatbot-resize[data-resize="nw"],
+#chatbot .chatbot-resize[data-resize="se"] {
+    cursor: nwse-resize;
+}
+
+#chatbot .chatbot-resize[data-resize*="n"] {
+    top: 0;
+}
+
+#chatbot .chatbot-resize[data-resize*="s"] {
+    bottom: 0;
+}
+
+#chatbot .chatbot-resize[data-resize*="e"] {
+    right: 0;
+}
+
+#chatbot .chatbot-resize[data-resize*="w"] {
+    left: 0;
 }
 
 #chatlog {

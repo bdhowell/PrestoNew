@@ -1,6 +1,3 @@
-
-
-
 EVALUATION_PROMPT = """
 # Evaluate the associated image in relation to the source text.
 

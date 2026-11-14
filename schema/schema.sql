@@ -136,11 +136,13 @@ CREATE INDEX idx_show_approved ON show (approved) WHERE approved IS NULL;
 CREATE TABLE source (
     sid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
-    kind        TEXT NOT NULL CHECK (kind IN ('text', 'svg','mixed','image','math','chart','table','logo','moreinfo', 'qrcode','thumbnail')),
+    kind        TEXT NOT NULL CHECK (kind IN (
+        'text', 'svg', 'mixed', 'image', 'math', 'math expression', 'chart', 'table',
+        'diagram', 'logo', 'moreinfo', 'qrcode', 'thumbnail'
+    )),
     parent      INTEGER REFERENCES source(sid) ON DELETE CASCADE,
     text        TEXT,
     description TEXT,
-    summary     TEXT,
     extracted   BOOLEAN NOT NULL DEFAULT TRUE,
     size        INTEGER NOT NULL,
     height      INTEGER,
@@ -153,8 +155,6 @@ CREATE TABLE source (
     added       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     usable      BOOLEAN NOT NULL DEFAULT TRUE,
-    evaluation  JSONB,
-    evaluation_hash TEXT,
     search_vector tsvector,
     embedding   vector(1536)
 );
@@ -180,15 +180,21 @@ CREATE TYPE section_which AS ENUM(
 CREATE TABLE assessment (
     aid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
-    cid         INTEGER NOT NULL REFERENCES conference(cid) ON DELETE CASCADE,
+    cid         INTEGER REFERENCES conference(cid) ON DELETE CASCADE,
+    sid         INTEGER REFERENCES source(sid) ON DELETE CASCADE,
     section     section_which NOT NULL,
     rating      TEXT NOT NULL CHECK (rating IN ('none', 'weakly', 'somewhat', 'significantly', 'highly', 'definitively')),
     explanation TEXT NOT NULL,
+    criteria               JSONB,
+    supported_elements     TEXT[],
+    limitations            TEXT[],
+    suggested_improvements TEXT[],
     created     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_assessment_pid ON assessment (pid);
 CREATE INDEX idx_assessment_cid ON assessment (cid);
+CREATE UNIQUE INDEX idx_assessment_sid_section ON assessment (sid, section);
 
 CREATE TABLE authors (
     aid         SERIAL PRIMARY KEY,

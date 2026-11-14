@@ -1,6 +1,7 @@
 {% extends "page.html" %}
 
 {% block title %}Source catalog - {{ app_name() }}{% endblock %}
+{% block scripts %}{% include "mathjax.html" %}{% endblock %}
 
 {% block content %}
 <h1>Poster source catalog</h1>
@@ -42,7 +43,13 @@
                 <div>Source {{ item.sid }} &middot; {{ item.kind }} &middot; {{ item.mimetype }}</div>
                 <div>{% if item.parent is not none %}Extracted from source {{ item.parent }}{% else %}Original / standalone source{% endif %}</div>
                 {% if not item.extracted %}<div>Extraction pending</div>{% endif %}
-                {% if item.description %}<p>{{ item.description }}</p>{% endif %}
+                {% if item.description %}
+                    {% if item.kind == 'math expression' %}
+                    <p class="source-math">\[{{ item.description }}\]</p>
+                    {% else %}
+                    <p>{{ item.description }}</p>
+                    {% endif %}
+                {% endif %}
             </td>
             <td>
                 {% if graphical and item.width is not none and item.height is not none and item.width > 0 and item.height > 0 %}

@@ -851,3 +851,7 @@ input[name="height"] {
     font: inherit;
     cursor: pointer;
 }
+
+.graphic-math {
+    font-size: 2.0rem;
+}

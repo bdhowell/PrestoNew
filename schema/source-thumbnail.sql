@@ -2,8 +2,8 @@ ALTER TABLE source ADD COLUMN IF NOT EXISTS updated TIMESTAMPTZ NOT NULL DEFAULT
 
 ALTER TABLE source DROP CONSTRAINT IF EXISTS source_kind_check;
 ALTER TABLE source ADD CONSTRAINT source_kind_check CHECK (
-    kind IN ('text', 'svg', 'mixed', 'image', 'math', 'chart', 'table', 'logo',
-             'moreinfo', 'qrcode', 'thumbnail')
+    kind IN ('text', 'svg', 'mixed', 'image', 'math', 'math expression', 'chart',
+             'table', 'diagram', 'logo', 'moreinfo', 'qrcode', 'thumbnail')
 );
 
 DROP INDEX IF EXISTS idx_source_pid_kind_unique;

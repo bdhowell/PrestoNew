@@ -6,6 +6,7 @@
     <link rel="stylesheet" href="/static/css/themes.css">
     <link rel="stylesheet" href="/static/css/fonts.css">
     <link rel="stylesheet" href="/static/css/pages/poster-document.css">
+    {% include "mathjax.html" %}
 </head>
 <body>
 <article class="poster-document {{ theme }} {{ fonts }} {{ layout }}" style="width: {{ width }}px; height: {{ height }}px; --poster-font-scale: {{ poster.font_scale }}; --sections-font-scale: {{ poster.font_sizes.sections }}; --title-font-scale: {{ poster.font_sizes.title }}; --authors-font-scale: {{ poster.font_sizes.authors }}" data-width="{{ width }}" data-height="{{ height }}">

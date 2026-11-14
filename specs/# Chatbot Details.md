@@ -264,6 +264,11 @@ The next page creates a new chatbot and websocket, restores the saved state,
 and reattaches control handlers. Browser back/forward cache restores reload the
 page to establish a fresh connection.
 
+The chatbot can be moved by dragging its header and resized from all four edges
+and all four corners using a mouse, pen, or touch pointer. Resizing keeps the
+opposite edge fixed, respects the minimum dimensions, and stays within the viewport.
+Resize handles are recreated when saved content is restored.
+
 
 # Chatbot memory:
 - Stores user responses and context for ongoing interactions.

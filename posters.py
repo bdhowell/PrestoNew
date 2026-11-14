@@ -484,10 +484,6 @@ class PosterStore:
                 "UPDATE poster SET updated = now(), embedding = NULL "
                 "WHERE uid = %s AND pid = %s", (uid, pid),
             )
-            await connection.execute(
-                "UPDATE source SET evaluation = NULL, evaluation_hash = NULL WHERE pid = %s",
-                (pid,),
-            )
         self.invalidate(uid, pid)
         return True
 
@@ -515,10 +511,6 @@ class PosterStore:
             await connection.execute(
                 "UPDATE poster SET updated = now(), embedding = NULL WHERE uid = %s AND pid = %s",
                 (uid, pid),
-            )
-            await connection.execute(
-                "UPDATE source SET evaluation = NULL, evaluation_hash = NULL WHERE pid = %s",
-                (pid,),
             )
         self.invalidate(uid, pid)
         return True

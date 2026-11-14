@@ -63,13 +63,36 @@ psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/schema.sql
 The schema objects must be owned by the role in `DATABASE_URL`. The schema is
 for initializing the maintained local database, not for upgrading older schemas.
 
-For an existing database, apply each feature migration explicitly. Graphic
-evaluation and poster thumbnail sources require:
+For an existing database, apply each feature migration explicitly. Remove
+obsolete source-analysis columns and install the poster thumbnail and image
+assessment features with:
 
 ```sh
-psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-evaluation.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-analysis-cleanup.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-thumbnail.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/image-assessment.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-image-classification.sql
 ```
+
+The graphics evaluation page skips to `/layout/edit` when every graphic has
+current assessments for its Materials and Methods and Results sections.
+Otherwise, it evaluates pending graphics and offers the section review page
+when finished. `/content/evaluate` is its own resumption page: returning after
+an interruption reuses current assessments and finishes the remaining graphics.
+Each image evaluation is recorded in `assessment` for its Materials and Methods
+and Results sections, including criteria, supported elements, limitations, and
+suggested improvements, linked to the image source; the conference is optional.
+Interrupted connections are retried automatically twice before offering a manual
+retry; saved assessments are reused on each attempt.
+Classified charts are normalized and stored as PNG images. For a classified
+math-expression image, each extracted LaTeX expression is stored in `source.text`
+on its own child source record, while the original image remains available.
+Extracted and saved formulas are rendered with MathJax in source listings, the
+Source graphics panel during section review, and
+poster content; editing and saving poster sections preserves the original LaTeX.
+Overflowing math graphics smoothly return to their top-left scroll position
+after five seconds without further scrolling. The return uses a 600ms animation
+with jQuery-style swing easing; interacting with the graphic interrupts it.
 
 The current draft's stored PNG thumbnail appears in both List and Large
 thumbnails views. Opening the poster list refreshes it when the poster or its
@@ -127,7 +150,9 @@ PostgreSQL or accepting an unverified session.
 `SESSION_MAX_AGE` (seconds, default 600) is an inactivity timeout: normal HTTP
 requests renew it. `/system/timecheck` validates the HttpOnly session cookie and
 returns `remaining_seconds`, `expires_at` (Unix seconds), and the display `name`
-without renewing or creating a session. Missing/expired sessions redirect to
+without renewing or creating a session by default. A timecheck marked with
+`X-Session-Activity: 1` renews a live session after mouse movement, clicking,
+touching, or a key press. Missing/expired sessions redirect to
 `/account/signout`. Both `/account/signout` forms show Wikkit's personalized
 expiry notice, clear session cookies, and do not start a new session.
 Wikkit waits locally for the `login` button, which opens `/account/signin` just
