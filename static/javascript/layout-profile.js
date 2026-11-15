@@ -100,7 +100,7 @@
         menu.setAttribute("aria-label", `${labels[section.id] || section.id} actions`);
 
         for (const [action, label, available] of [
-            ["auto-fit", "Auto-fit (not available yet)", false],
+            ["auto-fit", "Auto-fit", Boolean(editor && window.autoFitPoster)],
             ["resize-graphics", "Resize graphics (not available yet)", false],
             ["adjust-text", "Adjust text content", Boolean(editor)],
         ]) {
@@ -120,6 +120,8 @@
             if (button.dataset.contextAction === "adjust-text" && editor?.isConnected) {
                 editor.scrollIntoView({block: "nearest"});
                 editor.focus({preventScroll: true});
+            } else if (button.dataset.contextAction === "auto-fit") {
+                window.autoFitPoster([editor.dataset.section]);
             }
         });
         document.body.append(menu);

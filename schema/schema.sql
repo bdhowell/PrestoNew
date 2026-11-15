@@ -233,6 +233,17 @@ CREATE TABLE summarization (
 
 CREATE UNIQUE INDEX idx_summarization_pid_which_words ON summarization (pid, which, words);
 
+CREATE TABLE sizings (
+    pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    section     section_which NOT NULL,
+    length      INTEGER NOT NULL CHECK (length > 0),
+    text        TEXT NOT NULL,
+    source_text TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    version     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (pid, section, source_hash, length)
+);
+
 CREATE TABLE keyterm (
     cid         INTEGER REFERENCES conference(cid) ON DELETE CASCADE,
     pid         INTEGER REFERENCES poster(pid) ON DELETE CASCADE,

@@ -300,7 +300,7 @@
                         const part = parts[index];
                         if (!finish && part.pause && words > 0) {
                             const delay = configuration.CHAT_WORD_INTERVAL + Math.floor(
-                                Math.random() * (2 * configuration.CHAT_WORD_DEVIATION + 1)
+                                Math.random() * (1 + configuration.CHAT_WORD_DEVIATION)
                             ) - configuration.CHAT_WORD_DEVIATION;
                             if (delay > 0) {
                                 timer = setTimeout(() => {

@@ -129,7 +129,7 @@ class LayoutRouteTests(unittest.TestCase):
             json={"section": "materials and methods", "content": "<p>Updated</p>"},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True})
+        self.assertEqual(response.json(), {"ok": True, "content": "<p>Updated</p>"})
         self.store.save_section.assert_awaited_once_with(
             7, 11, "materials and methods", "<p>Updated</p>",
         )
@@ -199,6 +199,17 @@ class LayoutRouteTests(unittest.TestCase):
         document = html.fromstring(self.client.get("/layout/edit").text)
         for tag in ("b", "i", "code", "u", "strike", "sup", "sub", "ul", "ol"):
             self.assertEqual(len(document.xpath(f'//*[@id="results"]//{tag}')), 1)
+
+    def test_section_save_returns_the_sanitized_content(self) -> None:
+        self.store.save_section.return_value = True
+        response = self.client.post(
+            "/layout/content", json={"section": "results", "content": "<div>Edited</div>"},
+        )
+        self.assertEqual(response.json(), {"ok": True, "content": "&lt;div&gt;Edited&lt;/div&gt;"})
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+        self.store.save_section.assert_awaited_once_with(
+            7, 11, "results", "&lt;div&gt;Edited&lt;/div&gt;",
+        )
 
     def test_headers_include_measured_widths_for_every_template(self) -> None:
         for template in posters.TEMPLATES:

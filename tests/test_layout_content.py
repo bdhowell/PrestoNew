@@ -938,7 +938,7 @@ class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
             window.savedRequests = [];
             window.fetch = async (url, options) => {
                 window.savedRequests.push(JSON.parse(options.body));
-                return {ok: true, json: async () => ({ok: true})};
+                return {ok: true, json: async () => ({ok: true, content: JSON.parse(options.body).content})};
             };
         }""")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-content.js"))
