@@ -98,6 +98,14 @@ class UpscaleTests(unittest.TestCase):
         self.assertEqual(result.method, "esrgan-general")
         self.assertEqual(len(result.warnings), 1)
 
+    def test_default_method_is_swin2sr(self) -> None:
+        with patch.dict(os.environ), patch.object(
+                upscaler, "_super_resolve", side_effect=lambda name, image, size: image.resize(size)) as resolve:
+            os.environ.pop("UPSCALE_METHOD", None)
+            result = upscaler.upscale(png(diagram()), scale=2, check=False)
+        self.assertEqual(resolve.call_args.args[0], "swin2sr")
+        self.assertEqual(result.method, "swin2sr")
+
     def test_ocr_words_ignore_single_characters_and_low_scores(self) -> None:
         engine = lambda image: SimpleNamespace(txts=("Add & Norm", "Q", "Feed"), scores=(0.99, 0.99, 0.5))
         with patch.object(upscaler, "_ocr_engine", return_value=engine):

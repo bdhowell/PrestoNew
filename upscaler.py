@@ -292,7 +292,8 @@ def upscale(
     method: str | None = None, check: bool = True, strict: bool = False,
 ) -> Upscaled:
     """Upscale PNG/JPEG bytes by `scale`, or to print `print_width_in` inches at `dpi`."""
-    method = method or _setting("UPSCALE_METHOD", "esrgan-general")
+    # swin2sr was the most faithful in testing; the ESRGAN models add halos and alter fine lines.
+    method = method or _setting("UPSCALE_METHOD", "swin2sr")
     if method not in METHODS:
         raise ValueError(f"Unknown method {method!r}; expected one of {', '.join(METHODS)}.")
     if (scale is None) == (print_width_in is None):
