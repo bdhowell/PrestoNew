@@ -1,5 +1,6 @@
 """Browser-measured typography for poster headers."""
 
+import math
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -7,6 +8,7 @@ from lxml import etree, html as dom
 from playwright.async_api import Page, Route, async_playwright
 
 ROOT = Path(__file__).resolve().parent
+STATIC_ROOT = ROOT / "static"
 BALANCE_SCRIPT = (ROOT / "static/javascript/layout-balance.js").read_text()
 THUMBNAIL_WIDTH = 640
 THUMBNAIL_HEIGHT = 640
@@ -166,3 +168,120 @@ async def poster_thumbnail(rendered: str) -> bytes:
             return await page.locator("#thumbnail-frame").screenshot(type="png", animations="disabled")
         finally:
             await browser.close()
+
+
+async def poster_pdf(rendered: str, *, logo: str | None = None) -> bytes:
+    """Render the owner's saved poster layout as a single print-ready PDF page."""
+    document = dom.document_fromstring(rendered)
+    canvas = document.get_element_by_id("poster-canvas") if document.getroottree().find(".//div[@id='poster-canvas']") is not None else None
+    print_render = canvas is not None
+    if print_render:
+        width, height = _editor_canvas_size(canvas)
+        container = canvas
+        while container.getparent() is not None and container.get("id") != "poster-container":
+            container = container.getparent()
+        if container.get("id") != "poster-container":
+            raise ValueError("Poster layout has no printable container")
+        stage = canvas.getparent()
+        if stage is None:
+            raise ValueError("Poster layout has no printable stage")
+        for sibling in list(document.find("body")):
+            if sibling is not container:
+                sibling.getparent().remove(sibling)
+        for sibling in list(container):
+            if sibling is not stage:
+                sibling.getparent().remove(sibling)
+        for sibling in list(stage):
+            if sibling is not canvas:
+                sibling.getparent().remove(sibling)
+        document.find("body").set("data-print-render", "true")
+        container.attrib["style"] = f"display:block;width:{width}px;height:{height}px;overflow:hidden"
+        stage.attrib["style"] = f"position:relative;width:{width}px;height:{height}px;margin:0;overflow:hidden"
+        canvas.attrib["style"] = (
+            f"{canvas.get('style', '')};width:{width}px;height:{height}px;transform:none"
+        )
+        if logo is not None:
+            for image in canvas.xpath('.//img[starts-with(@src, "/layout/logo")]'):
+                image.set("src", logo)
+
+    for link in document.xpath("//link[@rel='stylesheet']"):
+        href = link.get("href", "")
+        if not href.startswith("/static/"):
+            link.getparent().remove(link)
+            continue
+        path = (ROOT / href.lstrip("/")).resolve()
+        if not path.is_relative_to(STATIC_ROOT) or path.suffix != ".css":
+            raise ValueError("Invalid poster stylesheet")
+        style = etree.Element("style")
+        style.text = path.read_text()
+        link.getparent().replace(link, style)
+
+    if print_render:
+        for script in document.xpath("//script"):
+            src = script.get("src", "")
+            if src == "/static/javascript/mathjax.js":
+                script.text = (ROOT / "static/javascript/mathjax.js").read_text()
+                del script.attrib["src"]
+            elif src != "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js":
+                script.getparent().remove(script)
+        geometry_script = etree.Element("script")
+        geometry_script.text = (ROOT / "static/javascript/layout-geometry.js").read_text()
+        document.find("body").append(geometry_script)
+    else:
+        posters = document.xpath(
+            ".//article[contains(concat(' ', normalize-space(@class), ' '), ' poster-document ')]"
+        )
+        if not posters:
+            raise ValueError("Poster document has no printable canvas")
+        try:
+            width, height = float(posters[0].get("data-width", "")), float(posters[0].get("data-height", ""))
+        except ValueError:
+            raise ValueError("Poster document has invalid print dimensions") from None
+    if not all(math.isfinite(value) and value > 0 for value in (width, height)):
+        raise ValueError("Poster document has invalid print dimensions")
+
+    head = document.find("head")
+    if head is None:
+        raise ValueError("Poster document has no head")
+    page_style = etree.SubElement(head, "style")
+    page_style.text = (
+        f"@page {{ size: {width}px {height}px; margin: 0; }} "
+        f"html, body {{ width: {width}px; height: {height}px; margin: 0; }}"
+        + (
+            " body { display: block; overflow: hidden; background: #fff; } "
+            "#poster-container { flex: none; }"
+            if print_render else ""
+        )
+    )
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        try:
+            page = await browser.new_page(
+                viewport={"width": round(width), "height": round(height)},
+                device_scale_factor=1,
+            )
+            await page.set_content(dom.tostring(document, encoding="unicode"), wait_until="load")
+            if print_render:
+                await page.evaluate("() => window.posterGeometryReady")
+            await page.evaluate("""async () => {
+                await document.fonts.ready;
+                if (window.MathJax?.startup?.promise) await window.MathJax.startup.promise;
+            }""")
+            return await page.pdf(
+                prefer_css_page_size=True, print_background=True,
+                margin={"top": 0, "right": 0, "bottom": 0, "left": 0},
+            )
+        finally:
+            await browser.close()
+
+
+def _editor_canvas_size(canvas: etree._Element) -> tuple[float, float]:
+    style = canvas.get("style", "")
+    dimensions = {}
+    for name in ("width", "height"):
+        match = re.search(rf"(?:^|;)\s*{name}\s*:\s*([0-9]+(?:\.[0-9]+)?)px", style)
+        if match is None:
+            raise ValueError(f"Poster canvas has no valid {name}")
+        dimensions[name] = float(match.group(1))
+    return dimensions["width"], dimensions["height"]

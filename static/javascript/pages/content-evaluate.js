@@ -135,7 +135,8 @@
                 'It&rsquo;s worth the wait, I promise. I&rsquo;m on graphic',
             ][Math.floor(Math.random() * 7)];
             await window.wikkit.say(
-                `<p>${response} ${event.current_word} of ${event.total_word}.</p>`,
+                `<p>${response} ${event.current_word} of ${event.total_word}.</p>` +
+                `<p>I&rsquo;m estimating ${Math.round((event.total - event.current) / 20)} minutes left.</p>`
             );
         } else if (event.type === "result") {
             results.set(event.source.sid, event);

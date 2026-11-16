@@ -63,3 +63,4 @@ SYSTEM_PURGE_ENABLED=true # allow /system/purge endpoint to be used locally only
 
 AUTOFIT_MINIMUM_WORD_PERCENTAGE=15
 
+POSTER_PRICE=29.95

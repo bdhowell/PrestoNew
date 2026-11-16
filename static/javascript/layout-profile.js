@@ -94,15 +94,16 @@
     function openContextMenu(section, x, y) {
         closeContextMenu();
         const editor = section.querySelector(".content[contenteditable='true']");
+        const manual = section.hasAttribute("data-manual-adjustment");
         const menu = document.createElement("div");
         menu.id = "layout-context-menu";
         menu.setAttribute("role", "menu");
         menu.setAttribute("aria-label", `${labels[section.id] || section.id} actions`);
 
         for (const [action, label, available] of [
-            ["auto-fit", "Auto-fit", Boolean(editor && window.autoFitPoster)],
-            ["resize-graphics", "Resize graphics (not available yet)", false],
-            ["adjust-text", "Adjust text content", Boolean(editor)],
+            ["auto-fit", "Auto-fit", manual || Boolean(editor && window.autoFitPoster)],
+            ["resize-graphics", manual ? "Resize graphics" : "Resize graphics (not available yet)", manual],
+            ["adjust-text", "Adjust text content", manual || Boolean(editor)],
         ]) {
             const button = document.createElement("button");
             button.type = "button";
@@ -117,6 +118,10 @@
             const button = event.target.closest("button[data-context-action]");
             if (!button || button.disabled) return;
             closeContextMenu();
+            if (manual) {
+                window.explainManualPosterAdjustment(section);
+                return;
+            }
             if (button.dataset.contextAction === "adjust-text" && editor?.isConnected) {
                 editor.scrollIntoView({block: "nearest"});
                 editor.focus({preventScroll: true});
@@ -199,6 +204,8 @@
 
     async function profile(currentRevision) {
         try {
+            await window.waitFitCancellation?.();
+            if (currentRevision !== revision) return;
             const response = await fetch(`/magic/${pid}/profile`, {
                 credentials: "same-origin",
                 cache: "no-store",
@@ -212,7 +219,10 @@
             if (!response.ok) {
                 throw new Error(result.detail || "Your layout could not be profiled.");
             }
-            if (currentRevision === revision) applyProfile(result);
+            if (currentRevision === revision) {
+                applyProfile(result);
+                await window.queueFitProfile?.(result);
+            }
         } catch (error) {
             console.error("Could not profile the edited poster layout", error);
             if (currentRevision === revision) {
@@ -261,7 +271,8 @@
     window.addEventListener("resize", closeContextMenu);
     document.getElementById("poster-container")?.addEventListener("scroll", closeContextMenu);
 
-    function scheduleProfile() {
+    function scheduleProfile(event) {
+        window.cancelFitQueue?.({preserveApplied: Boolean(event?.detail?.preserveFitRequests)});
         const currentRevision = ++revision;
         clearTimeout(timer);
         timer = setTimeout(() => profile(currentRevision), interval);
@@ -284,6 +295,7 @@
             ? event.target.closest("[contenteditable='true'], [contenteditable='plaintext-only']") : null;
         const section = editor?.closest(".section");
         if (!section) return;
+        window.cancelFitQueue?.();
         editedSections.add(section);
         ++revision;
         clearTimeout(timer);

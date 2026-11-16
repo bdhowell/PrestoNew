@@ -323,7 +323,7 @@ input[name="height"] {
 }
 
 #layout {
-    font-size: calc(1em * var(--sections-font-scale, 1));
+    font-size: calc(0.6em * var(--sections-font-scale, 1));
     margin-right: var(--gutter);
     margin-left: var(--gutter);
     margin-bottom: var(--gutter);
@@ -483,7 +483,7 @@ input[name="height"] {
 
 .header {
     font-family: var(--heading-font-face);
-    font-size: 2.1em;
+    font-size: 1.5em;
     display: flex;
     align-items: center;
     width: 100%;

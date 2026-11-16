@@ -15,6 +15,60 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(browser.close)
         self.page = await browser.new_page()
 
+    async def test_manual_sections_warn_but_all_wikkit_actions_apologize(self) -> None:
+        sections = {
+            "citations": ("literature cited", "Literature Cited"),
+            "acknowledgements": ("acknowledgements", "Acknowledgements"),
+            "information": ("additional information", "Additional Information"),
+        }
+        await self.page.set_content("""
+            <div id="layout" data-pid="11" data-profile-validation-interval="0"></div>
+            <output id="content-save-status"></output>
+        """)
+        for name, (canonical, label) in sections.items():
+            await self.page.locator("#layout").evaluate("""(layout, data) => {
+                const section = document.createElement("div");
+                section.id = data.name;
+                section.className = "section";
+                section.dataset.manualAdjustment = `I'm sorry, <Ada>, you have to adjust ${data.label} yourself.`;
+                const editor = document.createElement("div");
+                editor.className = "content";
+                editor.contentEditable = "true";
+                editor.dataset.section = data.canonical;
+                editor.textContent = "Original";
+                section.append(editor);
+                layout.append(section);
+            }""", {"name": name, "canonical": canonical, "label": label})
+        await self.page.evaluate("""names => {
+            window.requests = [];
+            window.feedback = [];
+            window.wikkit = {say: message => feedback.push(message)};
+            window.fetch = async url => {
+                requests.push(url);
+                return {ok: true, json: async () => ({
+                    sections: Object.fromEntries(names.map(name => [name, {}])),
+                    overflowing_sections: names,
+                    underflowing_sections: [], oversized_graphics: [],
+                })};
+            };
+        }""", list(sections))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-content.js"))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
+        await self.page.wait_for_function("feedback.length === 1")
+        for name, (canonical, label) in sections.items():
+            self.assertIn("layout-profile-attention", await self.page.locator(f"#{name}").get_attribute("class"))
+            for action in ("Auto-fit", "Resize graphics", "Adjust text content"):
+                with self.subTest(section=name, action=action):
+                    await self.page.locator(f"#{name}").dispatch_event("contextmenu", {
+                        "bubbles": True, "cancelable": True, "button": 2,
+                    })
+                    await self.page.get_by_role("menuitem", name=action, exact=True).click(timeout=1000)
+                    self.assertEqual(await self.page.evaluate("feedback.at(-1)"),
+                                     f"<p>I'm sorry, &lt;Ada&gt;, you have to adjust {label} yourself.</p>")
+            await self.page.evaluate("name => window.autoFitPoster([name])", canonical)
+            self.assertEqual(await self.page.locator(f"#{name} .content").text_content(), "Original")
+        self.assertEqual(await self.page.evaluate("requests"), ["/magic/11/profile"])
+
     async def test_saved_content_is_profiled_after_a_quiet_period(self) -> None:
         await self.page.set_content("""
             <div id="poster-content">
@@ -54,6 +108,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         }""")
         await self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-content.js"))
+        await self.page.evaluate("window.queueFitProfile = undefined")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
         await self.page.wait_for_function("feedback.length === 1")
         self.assertEqual(await self.page.evaluate("requests"), ["/magic/11/profile"])
@@ -342,6 +397,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
             };
         }""")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-content.js"))
+        await self.page.evaluate("window.queueFitProfile = undefined")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
         await self.page.wait_for_function("feedback.length === 1")
         await self.page.locator(".content").evaluate("""element => {

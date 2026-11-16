@@ -1,20 +1,27 @@
 """Account registration, confirmation, sign-in/out, password recovery, and deletion."""
 
 import asyncio
+import hashlib
+import base64
 import html
 import logging
 import os
 import re
+import uuid
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import psycopg
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from playwright.async_api import Error as PlaywrightError
 
 import identity
+import layout as layout_routes
 import mailer
 import posters
+import poster_rendering
 import users
 from routers.wikkit import navigation_url, read_json, render_page
 from sessions import LOCAL_SESSION_COOKIE_NAME, SESSION_COOKIE_NAME
@@ -160,6 +167,139 @@ def _require_sign_in(request: Request) -> RedirectResponse | None:
 async def account(request: Request) -> RedirectResponse:
     return RedirectResponse(
         "/account/update" if _signed_in(request) else "/account/signin", status_code=303
+    )
+
+
+def _poster_price() -> Decimal:
+    try:
+        price = Decimal(os.environ["POSTER_PRICE"])
+    except (KeyError, InvalidOperation):
+        logger.exception("POSTER_PRICE is missing or invalid")
+        raise HTTPException(503, "Poster pricing is unavailable. Please try again later.") from None
+    if not price.is_finite() or price < 0 or price > Decimal("99999999.99"):
+        logger.error("POSTER_PRICE must be a non-negative amount with at most two decimal places")
+        raise HTTPException(503, "Poster pricing is unavailable. Please try again later.")
+    try:
+        rounded = price.quantize(Decimal("0.01"))
+    except InvalidOperation:
+        logger.error("POSTER_PRICE must be a non-negative amount with at most two decimal places")
+        raise HTTPException(503, "Poster pricing is unavailable. Please try again later.") from None
+    if rounded != price:
+        logger.error("POSTER_PRICE must be a non-negative amount with at most two decimal places")
+        raise HTTPException(503, "Poster pricing is unavailable. Please try again later.")
+    return price
+
+
+@router.get("/purchase", response_class=HTMLResponse)
+async def purchase_page(request: Request) -> Response:
+    if (redirect := _require_sign_in(request)) is not None:
+        return redirect
+    session = identity.session(request)
+    pid = session.get("poster_id") if session is not None else None
+    if type(pid) is not int or pid <= 0:
+        raise HTTPException(409, "Please open a poster before purchasing it.")
+    try:
+        poster = await posters.store().get(request.state.user_id, pid)
+    except psycopg.Error:
+        logger.exception("Could not load poster %s for purchase", pid)
+        raise HTTPException(503, "Your poster could not be loaded. Please try again.") from None
+    if poster is None:
+        raise HTTPException(404, "Poster not found")
+    if poster.purchased:
+        return RedirectResponse("/account/download", status_code=303)
+    price = _poster_price()
+    says = f"""
+<p>
+This is the purchase page for your poster, {identity.display_name(request)}.
+Online payment will be available here in a future release.
+</p>
+"""
+    return render_page(
+        request, "account/purchase.html", "account-purchase", says,
+        poster=poster, price=f"${price:,.2f}",
+    )
+
+
+@router.post("/purchase")
+async def purchase_poster(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    if not _signed_in(request):
+        return _reply(
+            False, '<p>Please <a href="/account/signin">sign in</a> first.</p>', status_code=401
+        )
+    pid = data.get("pid")
+    if type(pid) is not int or pid <= 0:
+        raise HTTPException(422, "A valid poster ID is required.")
+    session = identity.session(request)
+    if session is None:
+        raise HTTPException(503, "Purchasing a poster requires server-side sessions.")
+    uid = request.state.user_id
+    store = posters.store()
+    try:
+        poster = await store.get(uid, pid)
+        if poster is None:
+            raise HTTPException(404, "Poster not found")
+        if not poster.purchased and not await store.purchase(
+            uid, pid, _poster_price(), f"placeholder-{uuid.uuid4()}",
+        ):
+            raise HTTPException(404, "Poster not found")
+    except psycopg.Error:
+        logger.exception("Could not record purchase for poster %s", pid)
+        raise HTTPException(503, "Your poster could not be purchased. Please try again.") from None
+    session["poster_id"] = pid
+    return _reply(True, redirect="/account/download")
+
+
+@router.get("/download")
+async def download_poster(request: Request, pid: int | None = None) -> Response:
+    if (redirect := _require_sign_in(request)) is not None:
+        return redirect
+    session = identity.session(request)
+    selected_pid = pid if pid is not None else (
+        session.get("poster_id") if session is not None else None
+    )
+    if type(selected_pid) is not int or selected_pid <= 0:
+        raise HTTPException(409, "Please open a purchased poster before downloading it.")
+    uid = request.state.user_id
+    try:
+        poster = await posters.store().get(uid, selected_pid)
+        if poster is None:
+            raise HTTPException(404, "Poster not found")
+        if not poster.purchased:
+            raise HTTPException(409, "This poster has not been purchased.")
+        if poster.width is None or poster.height is None:
+            raise HTTPException(409, "Poster dimensions have not been set.")
+        rendered = await layout_routes.layout(
+            poster.template if poster.template in posters.TEMPLATES else "arena",
+            selected_pid, uid=uid, request=request,
+        )
+        logo_type = {
+            "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+            "svg": "image/svg+xml", "image/png": "image/png",
+            "image/jpeg": "image/jpeg", "image/svg+xml": "image/svg+xml",
+        }.get(poster.logotype or "")
+        logo = (
+            f"data:{logo_type};base64,{base64.b64encode(poster.logo).decode('ascii')}"
+            if poster.logo and logo_type else None
+        )
+        if poster.logo and logo is None:
+            raise ValueError(f"Poster {selected_pid} has an unsupported logo type")
+        pdf = await poster_rendering.poster_pdf(rendered, logo=logo)
+        digest = hashlib.sha256(pdf).hexdigest()
+        if not await posters.store().record_download(uid, selected_pid, digest):
+            raise HTTPException(409, "This poster is no longer available for download.")
+    except (psycopg.Error, PlaywrightError, OSError, ValueError):
+        logger.exception("Could not render or record download for poster %s", selected_pid)
+        raise HTTPException(503, "Your poster could not be downloaded. Please try again.") from None
+    if session is not None:
+        session["poster_id"] = selected_pid
+    return Response(
+        pdf, media_type="application/pdf",
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": f'attachment; filename="poster-{selected_pid}.pdf"',
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

@@ -23,6 +23,19 @@ class ProfileMeasurementsTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.browser.close)
         self.page = await self.browser.new_page()
 
+    async def test_manual_adjustment_sections_are_still_checked_for_overflow(self) -> None:
+        await self.page.set_content("""
+            <style>
+                .section {width:100px;height:100px;overflow:hidden}
+                .content {height:200px}
+            </style>
+            <div class="section" id="citations"><div class="content">References</div></div>
+            <div class="section" id="acknowledgements"><div class="content">Thanks</div></div>
+            <div class="section" id="information"><div class="content">Details</div></div>
+        """)
+        result = await magic._profile_page(self.page)
+        self.assertEqual(result["overflowing_sections"], ["citations", "acknowledgements", "information"])
+
     async def test_section_scroll_metrics_include_text_and_graphics_separately(self) -> None:
         await self.page.set_content("""
             <style>

@@ -100,6 +100,23 @@ class LayoutRouteTests(unittest.TestCase):
             "425",
         )
 
+    def test_manual_sections_expose_personalized_adjustment_message(self) -> None:
+        document = html.fromstring(self.client.get("/layout/layout").text)
+        for name, label in (
+            ("citations", "Literature Cited"),
+            ("acknowledgements", "Acknowledgements"),
+            ("information", "Additional Information"),
+        ):
+            with self.subTest(section=name):
+                section = document.get_element_by_id(name)
+                self.assertEqual(
+                    section.get("data-manual-adjustment"),
+                    f"I\u2019m sorry, Ada, you have to adjust {label} yourself.",
+                )
+                self.assertEqual(section.xpath('.//*[@contenteditable="true"]/@data-section'),
+                                 [routes.ALIASES.get(name, name)])
+        self.assertIsNone(document.get_element_by_id("results").get("data-manual-adjustment"))
+
     def test_profile_validation_interval_rejects_invalid_values(self) -> None:
         for value in ("invalid", "-1", "2147483648"):
             with self.subTest(value=value), patch.dict(

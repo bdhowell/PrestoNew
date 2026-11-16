@@ -63,6 +63,7 @@
 
     target.addEventListener("change", update);
     slider.addEventListener("input", () => {
+        window.cancelFitQueue?.();
         const name = target.value;
         const value = Number(slider.value) / 100;
         sizing[name] = value;

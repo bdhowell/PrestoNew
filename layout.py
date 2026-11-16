@@ -41,6 +41,16 @@ SECTION_WHICH = frozenset({
     "conclusion", "future plans", "literature cited", "additional information",
     "acknowledgements",
 })
+MANUAL_ADJUSTMENT_SECTIONS = {
+    "literature cited": "Literature Cited",
+    "acknowledgements": "Acknowledgements",
+    "additional information": "Additional Information",
+}
+
+
+def manual_adjustment_message(which: str) -> str:
+    label = MANUAL_ADJUSTMENT_SECTIONS[which]
+    return f"I&rsquo;m sorry, {{{{user.username}}}}, you have to adjust {label} yourself."
 
 
 def uid_for(request: Request) -> int:
@@ -120,6 +130,10 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
     dimension_rules = await rules_for(uid, pid)
     raw = templates.env.get_template(f"layouts/{template}.html").render(
         request=request, poster=poster, layout_template=template,
+        user_name=(
+            (getattr(request.state, "user", None) or {}).get("user-name")
+            or identity.DEFAULT_NAME
+        ),
         theme=posters.theme_classes(poster.theme, poster.theme_settings),
         fonts=poster.fonts if poster.fonts in posters.installed_fonts() else "",
         themes=posters.installed_themes(),
@@ -164,6 +178,13 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
                     parent, "div", id=item,
                     attrib={"class": "section vertical" if vertical else "section"},
                 )
+                which = ALIASES.get(item, item)
+                if which in MANUAL_ADJUSTMENT_SECTIONS:
+                    section.set("data-manual-adjustment", html.unescape(
+                        manual_adjustment_message(which).replace(
+                            "{{user.username}}", identity.display_name(request),
+                        )
+                    ))
                 heading = etree.SubElement(section, "div", attrib={"class": "header"})
                 heading.text = {
                     "methods": "Materials and Methods",

@@ -8,6 +8,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -377,6 +378,48 @@ class PosterStore:
         )
         row = await cursor.fetchone()
         return row[0] if row else None
+
+    async def purchase(self, uid: int, pid: int, amount: Decimal, transid: str) -> bool:
+        """Record one purchase, serializing concurrent attempts for the poster."""
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT pid FROM poster WHERE uid = %s AND pid = %s FOR UPDATE",
+                (uid, pid),
+            )
+            if await cursor.fetchone() is None:
+                return False
+            cursor = await connection.execute(
+                "SELECT 1 FROM purchase WHERE uid = %s AND pid = %s",
+                (uid, pid),
+            )
+            if await cursor.fetchone() is None:
+                await connection.execute(
+                    "INSERT INTO purchase (pid, uid, amount, transid, created) "
+                    "VALUES (%s, %s, %s, %s, now())",
+                    (pid, uid, amount, transid),
+                )
+        self.invalidate(uid, pid)
+        return True
+
+    async def record_download(self, uid: int, pid: int, digest: str) -> bool:
+        """Record a download only while its poster is owned and purchased."""
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "UPDATE poster p SET downloads = downloads + 1 "
+                "WHERE p.uid = %s AND p.pid = %s AND EXISTS "
+                "(SELECT 1 FROM purchase b WHERE b.pid = p.pid) RETURNING p.pid",
+                (uid, pid),
+            )
+            if await cursor.fetchone() is None:
+                return False
+            await connection.execute(
+                "INSERT INTO download (pid, uid, hash, created) "
+                "VALUES (%s, %s, %s, now())",
+                (pid, uid, digest),
+            )
+        return True
 
     async def new_or_existing(self, uid: int) -> tuple[int, bool]:
         """Lock the owner so concurrent New Poster clicks cannot create two drafts."""

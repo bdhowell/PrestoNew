@@ -620,7 +620,7 @@ After a section has or sections have been resized or updated, such as by the use
 
 When over a section that is overflowing or underflowing or has other problems, have Wikkit suggest that the user try right (cmnd-) clicking on the section to access context-specific actions, such as resizing graphics or adjusting text content. When the user makes a right mouse-down over a problem area, change the cursor to 'wand-cursor.png' to indicate that context-specific actions are available and show a context menu with the relevant options: auto-fit, resize graphics, adjust text content, etc.
 
-The layout editor currently exposes this menu only on profiled problem sections. Adjust text content focuses the section editor; auto-fit saves pending edits and fits only the selected section, while graphic resizing is not yet available. The menu also opens on a Command-click or Control-click and closes on Escape or an outside click.
+The layout editor currently exposes this menu only on profiled problem sections. Adjust text content focuses the section editor; auto-fit saves pending edits and fits only the selected section, while graphic resizing is not yet available. Literature Cited, Acknowledgements, and Additional Information are still tested for overflow but are excluded from auto-fit queues. For these three sections, all three menu actions instead have Wikkit say, "I'm sorry, {identity.username}, you have to adjust {section.name} yourself." Authors can still edit their text manually. The menu also opens on a Command-click or Control-click and closes on Escape or an outside click.
 
 Each applied profile outlines the sections mentioned in Wikkit's current
 suggestions or warnings and their oversized graphics. Outlines are reconciled

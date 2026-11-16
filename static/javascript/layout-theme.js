@@ -61,6 +61,7 @@
             colored_section_headers: sectionHeaders.checked,
         };
         savingTheme = true;
+        window.cancelFitQueue?.();
         themeOptions.disabled = themeCancel.disabled = themeApply.disabled = true;
         themeStatus.textContent = "Saving theme...";
         try {
@@ -131,6 +132,7 @@
             if (saving || !form.reportValidity()) return;
             const value = new FormData(form).get(setting);
             saving = true;
+            window.cancelFitQueue?.();
             options.disabled = cancel.disabled = apply.disabled = true;
             status.textContent = `Saving ${label}...`;
             try {

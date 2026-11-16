@@ -72,6 +72,7 @@
     }
 
     function changed() {
+        window.cancelFitQueue?.();
         apply();
         dirty = true;
         clearTimeout(timer);

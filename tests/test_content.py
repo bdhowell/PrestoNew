@@ -1488,6 +1488,91 @@ class ContentDatabaseTests(unittest.TestCase):
     def setUp(self) -> None:
         test_posters.PosterDatabaseTests.setUp(self)
 
+    def test_delete_cascades_auto_fit_history_for_both_poster_stores(self) -> None:
+        # Upgraded databases can have the sizings cascade before the fitting_runs cascade.
+        self.connection.execute("""
+            ALTER TABLE fitting_runs DROP CONSTRAINT fitting_runs_pid_fkey,
+                ADD CONSTRAINT fitting_runs_pid_fkey
+                    FOREIGN KEY (pid) REFERENCES poster(pid) ON DELETE CASCADE
+        """)
+        for store_type in (posters.PosterStore, content.SourceStore):
+            with self.subTest(store=store_type.__name__):
+                pid = test_posters.PosterDatabaseTests.create(self, "Delete fitted poster")
+                run_id = uuid.uuid4()
+                self.connection.execute(
+                    "INSERT INTO fitting_runs (run_id, pid, uid) VALUES (%s, %s, 7)",
+                    (run_id, pid),
+                )
+                sizing_id = self.connection.execute(
+                    "INSERT INTO sizings "
+                    "(pid, section, length, text, source_text, source_hash, run_id) "
+                    "VALUES (%s, 'results', 1, 'Revision', 'Original text', 'hash', %s) "
+                    "RETURNING sizing_id", (pid, run_id),
+                ).fetchone()[0]
+                self.connection.execute(
+                    "INSERT INTO fitting_applications "
+                    "(run_id, sizing_id, section, prior_text, applied_text) "
+                    "VALUES (%s, %s, 'results', 'Original text', 'Revision')",
+                    (run_id, sizing_id),
+                )
+                store = store_type("POSTERS_TEST_DATABASE_URL", self.schema)
+                self.assertFalse(asyncio.run(store.delete(8, pid)))
+                self.assertEqual(self.connection.execute(
+                    "SELECT count(*) FROM fitting_applications WHERE sizing_id = %s",
+                    (sizing_id,),
+                ).fetchone(), (1,))
+                self.assertTrue(asyncio.run(store.delete(7, pid)))
+                for table in ("fitting_runs", "sizings"):
+                    self.assertEqual(self.connection.execute(
+                        f"SELECT count(*) FROM {table} WHERE pid = %s", (pid,),
+                    ).fetchone(), (0,))
+                self.assertEqual(self.connection.execute(
+                    "SELECT count(*) FROM fitting_applications WHERE sizing_id = %s",
+                    (sizing_id,),
+                ).fetchone(), (0,))
+
+    def test_auto_fit_migration_repairs_existing_application_foreign_key(self) -> None:
+        self.connection.execute("""
+            ALTER TABLE fitting_applications
+                DROP CONSTRAINT fitting_applications_sizing_id_fkey,
+                ADD CONSTRAINT fitting_applications_sizing_id_fkey
+                    FOREIGN KEY (sizing_id) REFERENCES sizings(sizing_id)
+        """)
+        pid = test_posters.PosterDatabaseTests.create(self, "Keep fitted poster")
+        run_id = uuid.uuid4()
+        self.connection.execute(
+            "INSERT INTO fitting_runs (run_id, pid, uid) VALUES (%s, %s, 7)",
+            (run_id, pid),
+        )
+        sizing_id = self.connection.execute(
+            "INSERT INTO sizings "
+            "(pid, section, length, text, source_text, source_hash, run_id) "
+            "VALUES (%s, 'results', 1, 'Revision', 'Original text', 'hash', %s) "
+            "RETURNING sizing_id", (pid, run_id),
+        ).fetchone()[0]
+        self.connection.execute(
+            "INSERT INTO fitting_applications "
+            "(run_id, sizing_id, section, prior_text, applied_text) "
+            "VALUES (%s, %s, 'results', 'Original text', 'Revision')",
+            (run_id, sizing_id),
+        )
+        migration = (ROOT / "schema/auto-fit.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        self.assertEqual(self.connection.execute(
+            "SELECT count(*) FROM fitting_applications WHERE sizing_id = %s", (sizing_id,),
+        ).fetchone(), (1,))
+        self.connection.execute("DELETE FROM sizings WHERE sizing_id = %s", (sizing_id,))
+        self.assertEqual(self.connection.execute(
+            "SELECT count(*) FROM fitting_applications WHERE sizing_id = %s", (sizing_id,),
+        ).fetchone(), (0,))
+        self.assertIsNotNone(self.connection.execute(
+            "SELECT pid FROM poster WHERE pid = %s", (pid,),
+        ).fetchone())
+        self.assertIsNotNone(self.connection.execute(
+            "SELECT run_id FROM fitting_runs WHERE run_id = %s", (run_id,),
+        ).fetchone())
+
     def test_source_analysis_cleanup_migration_is_repeatable(self) -> None:
         self.connection.execute(
             "ALTER TABLE source ADD COLUMN summary TEXT, ADD COLUMN evaluation JSONB, "

@@ -77,17 +77,31 @@ psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/auto-fit.sql
 
 ### Poster auto-fit
 
-The editor's Auto-fit button fits overflowing sections; the section context menu
-fits only the selected section. Both use the owner-scoped JSON endpoint
-`POST /magic/{pid}/auto-fit` with optional canonical `sections` names.
-Purchased posters cannot be changed.
+After profiling, the editor queues overflowing editable sections one at a time
+and caches suggestions without changing the poster. The section context menu
+applies a ready suggestion or moves a pending section to the front of the queue.
+The Auto-fit button requests the queued suggestions. If a section has changed
+since its suggestion was made, the editor asks before overwriting it.
+Literature Cited, Acknowledgements, and Additional Information are still checked
+for overflow, but are never queued for auto-fit. Their Auto-fit, Resize graphics,
+and Adjust text content actions ask the author to adjust the section manually.
+After a suggestion is applied, that chosen revision is kept while remaining
+suggestions are canceled and the updated poster is profiled again.
+
+An edit cancels the active queue and clears pending work. Applications from that
+queue are undone newest-first before profiling and building a new queue. The
+editor asks separately before undoing an application whose section has since
+been edited. Declining preserves that section. Purchased posters cannot be changed.
 
 Auto-fit uses `gpt-4o-mini` for shortening and clarity evaluation
 (`OPENAI_API_KEY` required). It measures each candidate in Playwright and accepts
-only non-overflowing revisions with an `excellent` clarity rating and no more
+only non-overflowing revisions with a `good` or `excellent` clarity rating and no more
 than `AUTOFIT_MINIMUM_WORD_PERCENTAGE` percent unused vertical space (default 15,
 valid range 0-100). Each section has at most 12 fitting attempts; an impossible
 fit retains its prior text and Wikkit suggests alternatives.
+If a fitting revision receives a `fair` or `poor` clarity rating, auto-fit checks
+other fitting candidates and uses any remaining attempts to generate alternatives
+at the fitting target; it never accepts a revision below the clarity threshold.
 Word targets guide the model rather than determining acceptance: a slightly
 longer summary is still measured and clarity-checked. Output that does not
 shorten the source is retried with a smaller target within the same attempt
@@ -96,17 +110,26 @@ limit; empty or excessively large output and changed formulas remain errors.
 The repeatable [auto-fit migration](schema/auto-fit.sql) must be applied before
 deployment, using a database role that owns the table. It also upgrades an empty
 legacy `sizings` table; existing metadata-only rows must be backfilled or archived
-first. Grant the application's database role `SELECT`, `INSERT`, and `UPDATE` on
-`sizings` when the migration is applied by another role.
+first. Reapply it to existing auto-fit installations to make fitting applications
+cascade when their sizing is deleted, so auto-fit history cannot block poster
+deletion. When the migration is applied by another role, grant the application's
+database role `SELECT`, `INSERT`, and `UPDATE` on `sizings`, `fitting_runs`, and
+`fitting_applications`, and `USAGE` on the `sizings_sizing_id_seq` and
+`fitting_applications_application_id_seq` sequences.
 `sizings` stores accepted revision HTML, actual word counts,
-full-length source text, source hashes, and timestamped versions. Repeated
+full-length source text, source hashes, and timestamped versions. Each accepted
+adjustment has its own sizing ID, even when its source and length match an
+earlier adjustment. The endpoint returns these IDs and source hashes by section
+in `sizings`. Repeated
 auto-fit uses the preserved source, while edited text starts a new source lineage.
-Cached revisions are rendered and evaluated again before reuse. Revisions and
-history are committed together only if the saved poster, sections, and layout
-settings remain unchanged. The `poster-revisions` server-client command updates
-the editor without overwriting newer local edits. Pending editor changes are saved
-to the displayed poster before fitting; the save response identifies the
-sanitized content so the revision can be matched against the saved version.
+Cached revisions are rendered and evaluated again before reuse. A suggestion is
+stored only if the saved poster, sections, and layout settings remain unchanged
+and its queue has not been cancelled. The queue-aware JSON endpoints are
+`POST /magic/{pid}/auto-fit/start`, `POST /magic/{pid}/auto-fit` with `run_id`,
+`POST /magic/{pid}/auto-fit/apply`, and `POST /magic/{pid}/auto-fit/cancel`.
+The original auto-fit endpoint without `run_id` still applies revisions directly.
+Application and rollback compare saved section contents under a database lock.
+Pending editor changes are saved before rollback or application.
 
 The graphics evaluation page skips to `/layout/edit` when every graphic has
 current assessments for its Materials and Methods and Results sections.

@@ -120,9 +120,67 @@ class FittingTests(unittest.IsolatedAsyncioTestCase):
     async def test_poor_and_fair_ratings_are_rejected(self):
         for rating in ("poor", "fair"):
             result, _, _ = await self.fit(
-                [profile(results=section(height=90))] * 8, rating=rating,
+                [profile(results=section(height=90))] * (2 * magic.MAX_FIT_ATTEMPTS + 2),
+                rating=rating,
             )
             self.assertIsNone(result)
+
+    async def test_fair_fitting_summary_is_retried_with_a_new_summary(self):
+        source = " ".join(["original"] * 55)
+        candidates = [
+            " ".join([f"candidate{attempt}"] * count)
+            for attempt, count in enumerate([50, 20, 27, 30, 32, 50, 32])
+        ]
+
+        async def measure(page):
+            revision = magic._render_section.await_args.args[2]
+            count = magic._words(revision)
+            area = 67 if count == 20 else 80 if count in (27, 30) else 94 if count == 32 else 133
+            return profile(introduction=section(text_area=area, available_area=100))
+
+        with patch.object(magic, "_profile_page", AsyncMock(side_effect=measure)), \
+                patch.object(magic, "_shorten", AsyncMock(side_effect=candidates)) as shorten, \
+                patch.object(magic, "_clarity", AsyncMock(side_effect=["fair", "good"])) as clarity:
+            result = await magic._fit_section(self.page, "introduction", source, [], .15)
+
+        self.assertEqual(result, candidates[-1])
+        self.assertEqual(clarity.await_count, 2)
+        self.assertLessEqual(shorten.await_count, magic.MAX_FIT_ATTEMPTS)
+        self.assertEqual(magic._render_section.await_args.args[2], candidates[-1])
+
+    async def test_other_fitting_candidates_are_evaluated_when_largest_is_fair(self):
+        async def measure(page):
+            count = magic._words(magic._render_section.await_args.args[2])
+            return profile(results=section(text_area=count, available_area=100))
+
+        with patch.object(magic, "_profile_page", AsyncMock(side_effect=measure)), \
+                patch.object(magic, "_shorten", AsyncMock(
+                    side_effect=lambda source, name, words: " ".join(["word"] * words),
+                )), patch.object(magic, "_clarity", AsyncMock(side_effect=["fair", "good"])) as clarity:
+            result = await magic._fit_section(self.page, "results", self.source, [], .15)
+        self.assertEqual(magic._words(result), 98)
+        self.assertEqual(clarity.await_count, 2)
+
+    async def test_retries_reject_overflow_and_duplicate_unacceptable_summaries(self):
+        source = " ".join(["original"] * 8)
+        fitted = " ".join(["fitted"] * 4)
+        overflow = " ".join(["overflow"] * 6)
+        underflow = " ".join(["underflow"] * 2)
+        candidates = [fitted, overflow, overflow, underflow, overflow] + [fitted] * 7
+
+        async def measure(page):
+            revision = magic._render_section.await_args.args[2]
+            area = 90 if revision == fitted else 110 if revision == overflow else 70
+            return profile(results=section(text_area=area, available_area=100))
+
+        with patch.object(magic, "_profile_page", AsyncMock(side_effect=measure)), \
+                patch.object(magic, "_shorten", AsyncMock(side_effect=candidates)) as shorten, \
+                patch.object(magic, "_clarity", AsyncMock(return_value="fair")) as clarity:
+            with self.assertLogs("magic", "WARNING"):
+                result = await magic._fit_section(self.page, "results", source, [], .15)
+        self.assertIsNone(result)
+        self.assertEqual(shorten.await_count, magic.MAX_FIT_ATTEMPTS)
+        clarity.assert_awaited_once_with(source, fitted)
 
     async def test_impossible_fit_stops_and_does_not_evaluate(self):
         result, shorten, clarity = await self.fit(
@@ -184,7 +242,7 @@ class FittingTests(unittest.IsolatedAsyncioTestCase):
     async def test_final_render_must_still_fit_before_clarity_is_evaluated(self):
         trials = [profile(results=section(height=90))] * 7
         with patch.object(magic, "_profile_page", AsyncMock(side_effect=[
-            *trials, profile(results=section(overflow=7)),
+            *trials, *[profile(results=section(overflow=7))] * 7,
         ])), patch.object(magic, "_shorten", AsyncMock(
             side_effect=lambda source, name, words: "word " * words,
         )), patch.object(magic, "_clarity", AsyncMock()) as clarity:
@@ -251,6 +309,7 @@ class AutoFitTests(unittest.IsolatedAsyncioTestCase):
         self.store.get.return_value = DRAFT
         self.connection = self.store._connect.return_value
         self.connection.execute.return_value.fetchall.return_value = []
+        self.connection.execute.return_value.fetchone.return_value = (42,)
         self.saved = {"results": "<p>Original full text</p>", "introduction": "<p>Other text</p>"}
         self.snapshot = ("poster", "settings", self.saved)
         self.snapshots = AsyncMock(return_value=self.snapshot)
@@ -280,6 +339,10 @@ class AutoFitTests(unittest.IsolatedAsyncioTestCase):
         result = await magic.auto_fit(11, uid=7)
         self.assertEqual(result["command"]["does"], "poster-revisions")
         self.assertEqual(result["command"]["payload"]["revisions"], {"results": "<p>Short text</p>"})
+        self.assertEqual(result["sizings"], {"results": {
+            "sizing_id": 42,
+            "source_hash": hashlib.sha256(self.saved["results"].encode()).hexdigest(),
+        }})
         statements = self.connection.execute.await_args_list
         insertion = next(call for call in statements if "INSERT INTO sizings" in call.args[0])
         self.assertEqual(insertion.args[1], (
@@ -300,6 +363,25 @@ class AutoFitTests(unittest.IsolatedAsyncioTestCase):
             result = await magic.auto_fit(11, ["results"], uid=7)
         self.assertIn("already fit", result["say"])
         self.fit.assert_not_awaited()
+
+    async def test_manual_sections_are_profiled_but_never_auto_fitted(self):
+        names = {
+            "citations": "literature cited",
+            "acknowledgements": "acknowledgements",
+            "information": "additional information",
+        }
+        measured = profile(**{name: section(overflow=100) for name in names})
+        with patch.object(magic, "_profile_page", AsyncMock(return_value=measured)), \
+                patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
+            result = await magic.auto_fit(11, list(names.values()), uid=7)
+        self.fit.assert_not_awaited()
+        self.assertEqual(result["command"]["payload"]["revisions"], {})
+        self.assertEqual(result["sizings"], {})
+        for label in ("Literature Cited", "Acknowledgements", "Additional Information"):
+            self.assertIn(
+                f"I&rsquo;m sorry, {{{{user.username}}}}, you have to adjust {label} yourself.",
+                result["say"],
+            )
 
     async def test_repeated_fitting_uses_full_original_not_prior_summary(self):
         self.connection.execute.return_value.fetchall.return_value = [
@@ -394,6 +476,7 @@ class AutoFitBrowserTests(unittest.IsolatedAsyncioTestCase):
         browser = await playwright.chromium.launch()
         self.addAsyncCleanup(browser.close)
         self.page = await browser.new_page()
+        self.page.set_default_timeout(5000)
         await self.page.set_content("""
             <div id="poster-content">
                 <div id="layout" data-pid="11" data-profile-validation-interval="100">
@@ -426,10 +509,24 @@ class AutoFitBrowserTests(unittest.IsolatedAsyncioTestCase):
             };
             window.fetch = async (url, options) => {
                 requests.push({url, body: options?.body ? JSON.parse(options.body) : null});
+                if (url.endsWith("/start")) {
+                    return {ok: true, json: async () => ({ok:true, run_id:"run"})};
+                }
+                if (url.endsWith("/cancel")) {
+                    return {ok: true, json: async () => ({ok:true, conflicts:{},
+                        command:{payload:{pid:11, revisions:{}, expected:{}}}})};
+                }
+                if (url.endsWith("/apply")) {
+                    return {ok: true, json: async () => ({ok:true, command:autoFitResult.command})};
+                }
                 if (url.endsWith("/auto-fit")) {
                     if (window.holdFit) await new Promise(resolve => window.finishFit = resolve);
+                    const name = JSON.parse(options.body).sections[0];
                     return {ok: !window.fitFailure, json: async () => window.fitFailure
-                        ? {detail: "Model unavailable."} : autoFitResult};
+                        ? {detail: "Model unavailable."} : {
+                            ...autoFitResult, sizings:{[name]:{sizing_id:1, source_hash:"hash",
+                                expected_text:autoFitResult.command.payload.expected[name]}},
+                        }};
                 }
                 return {ok: true, json: async () => url === "/layout/content"
                     ? {ok: true, content: JSON.parse(options.body).content} : {
@@ -440,21 +537,24 @@ class AutoFitBrowserTests(unittest.IsolatedAsyncioTestCase):
         }""")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-content.js"))
 
-    async def test_toolbar_flushes_pending_edits_before_applying_and_persisting_revision(self):
+    async def test_toolbar_applies_a_suggestion_after_saving_pending_edits(self):
         await self.page.locator(".content").evaluate("""element => {
             element.innerHTML = "<p>Edited text</p>";
             window.autoFitResult.command.payload.expected.results = element.innerHTML;
             element.dispatchEvent(new Event("input", {bubbles:true}));
         }""")
+        await self.page.evaluate("window.queueFitProfile({overflowing_sections:['results']})")
         await self.page.locator("#auto-fit").click()
         await self.page.wait_for_function("document.querySelector('.content').textContent === 'Short text'")
         requests = await self.page.evaluate("requests")
-        self.assertEqual([request["url"] for request in requests], ["/layout/content", "/magic/11/auto-fit"])
+        self.assertEqual([request["url"] for request in requests[:4]], [
+            "/layout/content", "/magic/11/auto-fit/start", "/magic/11/auto-fit",
+            "/magic/11/auto-fit/apply",
+        ])
         self.assertEqual(requests[0]["body"]["content"], "<p>Edited text</p>")
         self.assertEqual(requests[0]["body"]["pid"], 11)
-        self.assertIsNone(requests[1]["body"]["sections"])
+        self.assertEqual(requests[2]["body"]["sections"], ["results"])
         self.assertEqual(await self.page.locator("#content-save-status").text_content(), "Auto-fitted text saved.")
-        self.assertEqual(await self.page.evaluate("messages"), ["<p>Saved.</p>"])
 
     async def test_context_menu_targets_only_selected_section(self):
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
@@ -465,7 +565,7 @@ class AutoFitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.get_by_role("menuitem", name="Auto-fit", exact=True).click()
         await self.page.wait_for_function("requests.some(request => request.url.endsWith('/auto-fit'))")
         request = await self.page.evaluate("requests.find(request => request.url.endsWith('/auto-fit'))")
-        self.assertEqual(request["body"], {"sections": ["results"]})
+        self.assertEqual(request["body"], {"run_id": "run", "sections": ["results"]})
         await self.page.wait_for_function("document.querySelector('.content').textContent === 'Short text'")
 
     async def test_context_menu_uses_canonical_section_name(self):
@@ -498,11 +598,12 @@ class AutoFitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.wait_for_function("document.querySelector('.content').textContent === 'Short methods'")
         request = await self.page.evaluate("requests.find(request => request.url.endsWith('/auto-fit'))")
         self.assertEqual(request["url"], "/magic/11/auto-fit")
-        self.assertEqual(request["body"], {"sections": ["materials and methods"]})
+        self.assertEqual(request["body"], {"run_id": "run", "sections": ["materials and methods"]})
 
     async def test_context_menu_applies_revision_after_save_sanitizes_editor_html(self):
         await self.page.evaluate("""() => {
             const element = document.querySelector(".content");
+            document.querySelector(".section").style.height = "1px";
             element.innerHTML = "<div>Edited text</div>";
             element.dispatchEvent(new Event("input", {bubbles:true}));
             autoFitResult.command.payload.expected.results = "&lt;div&gt;Edited text&lt;/div&gt;";
@@ -518,27 +619,24 @@ class AutoFitBrowserTests(unittest.IsolatedAsyncioTestCase):
             };
         }""")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
-        await self.page.wait_for_function(
-            "document.querySelector('#results').classList.contains('layout-profile-attention')",
-        )
+        await self.page.wait_for_function("requests.some(request => request.url === '/layout/content')")
+        await self.page.wait_for_function("requests.some(request => request.url.endsWith('/auto-fit'))")
         await self.page.locator("#results").dispatch_event("contextmenu", {
             "bubbles": True, "cancelable": True, "button": 2, "clientX": 40, "clientY": 40,
         })
         await self.page.get_by_role("menuitem", name="Auto-fit", exact=True).click()
-        await self.page.wait_for_function(
-            "document.querySelector('#content-save-status').textContent !== 'Wikkit is fitting your text...'"
-        )
+        await self.page.wait_for_function("document.querySelector('.content').textContent === 'Short text'")
         self.assertEqual(await self.page.locator(".content").inner_html(), "<p>Short text</p>")
         self.assertEqual(await self.page.locator("#content-save-status").text_content(), "Auto-fitted text saved.")
 
-    async def test_editor_is_locked_while_fitting_and_failure_restores_it(self):
+    async def test_editor_remains_editable_while_fitting_and_failure_is_reported(self):
         await self.page.evaluate("() => {window.holdFit = true; window.fitFailure = true}")
-        await self.page.locator("#auto-fit").click()
+        await self.page.evaluate("window.queueFitProfile({overflowing_sections:['results']})")
         await self.page.wait_for_function("typeof finishFit === 'function'")
-        self.assertTrue(await self.page.locator("#layout").evaluate("element => element.inert"))
-        self.assertTrue(await self.page.locator("#controls").evaluate("element => element.inert"))
+        self.assertFalse(await self.page.locator("#layout").evaluate("element => element.inert"))
+        self.assertFalse(await self.page.locator("#controls").evaluate("element => element.inert"))
         await self.page.evaluate("finishFit()")
-        await self.page.wait_for_function("!document.getElementById('layout').inert")
+        await self.page.wait_for_function("document.getElementById('content-save-status').textContent === 'Model unavailable.'")
         self.assertEqual(await self.page.locator(".content").inner_html(), "<p>Original text</p>")
         self.assertEqual(await self.page.locator("#content-save-status").text_content(), "Model unavailable.")
 
@@ -599,10 +697,14 @@ class AutoFitBrowserTests(unittest.IsolatedAsyncioTestCase):
             element.innerHTML = "<p>Unsaved edit</p>";
             element.dispatchEvent(new Event("input", {bubbles:true}));
         }""")
-        await self.page.locator("#auto-fit").click()
-        await self.page.wait_for_function(
-            "document.getElementById('content-save-status').textContent.includes('Save your text changes')",
-        )
+        error = await self.page.evaluate("""async () => {
+            try {
+                await window.queueFitProfile({overflowing_sections:["results"]});
+            } catch (error) {
+                return error.message;
+            }
+        }""")
+        self.assertIn("Save your text changes", error)
         self.assertEqual(await self.page.evaluate("requests.map(request => request.url)"), ["/layout/content"])
         self.assertEqual(await self.page.locator(".content").text_content(), "Unsaved edit")
         self.assertFalse(await self.page.locator("#layout").evaluate("element => element.inert"))
@@ -644,6 +746,218 @@ class AutoFitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(measured["overflow"])
         self.assertFalse(measured["text_overflow"])
         self.assertGreaterEqual(measured["text_layout_area"] / measured["available_text_area"], .85)
+
+
+class AutoFitQueueBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        playwright = await async_playwright().start()
+        self.addAsyncCleanup(playwright.stop)
+        browser = await playwright.chromium.launch()
+        self.addAsyncCleanup(browser.close)
+        self.page = await browser.new_page()
+        await self.page.set_content("""
+            <div id="layout" data-pid="11" data-profile-validation-interval="10">
+                <div id="results" class="section"><div class="content" contenteditable="true"
+                    data-section="results"><p>results original</p></div></div>
+                <div id="introduction" class="section"><div class="content" contenteditable="true"
+                    data-section="introduction"><p>introduction original</p></div></div>
+                <div id="methods" class="section"><div class="content" contenteditable="true"
+                    data-section="materials and methods"><p>materials and methods original</p></div></div>
+            </div><button id="auto-fit"></button><output id="content-save-status"></output>
+        """)
+        await self.page.evaluate("""() => {
+            window.requests = [];
+            window.messages = [];
+            window.wikkit = {say: value => messages.push(value)};
+            window.fetch = async (url, options) => {
+                const body = options?.body ? JSON.parse(options.body) : null;
+                requests.push({url, body});
+                if (url.endsWith("/profile")) {
+                    return {ok:true, json:async () => ({sections:{results:{}},
+                        overflowing_sections:window.profileOverflow ?? ["results"],
+                        underflowing_sections:[], oversized_graphics:[]})};
+                }
+                if (url === "/layout/content") {
+                    return {ok: true, json: async () => ({ok:true, content:body.content})};
+                }
+                if (url.endsWith("/start")) {
+                    return {ok:true, json:async () => ({ok:true, run_id:"run"})};
+                }
+                if (url.endsWith("/cancel")) {
+                    return {ok:true, json:async () => body.cancel_only ? {ok:true} : ({
+                        ok:true, conflicts:body.decisions ? {} : (window.rollbackConflicts || {}),
+                        command:{payload:{pid:11, revisions:{}, expected:{}}},
+                    })};
+                }
+                if (url.endsWith("/apply")) {
+                    const name = window.names[body.sizing_id];
+                    if (window.remoteText && body.expected !== window.remoteText) {
+                        return {ok:false, json:async () => ({detail:{
+                            message:"Section changed", current:window.remoteText,
+                        }})};
+                    }
+                    if (window.clearProfileAfterApply) {
+                        window.profileOverflow = (window.profileOverflow ?? ["results"])
+                            .filter(section => section !== name);
+                    }
+                    return {ok:true, json:async () => ({ok:true, command:{payload:{
+                        pid:11, expected:{[name]:body.expected}, revisions:{[name]:`<p>${name} fitted</p>`},
+                    }}})};
+                }
+                const name = body.sections[0];
+                if (name === "results" && window.holdFirst) {
+                    window.holdFirst = false;
+                    await new Promise((resolve, reject) => {
+                        window.releaseFirst = resolve;
+                        options.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+                    });
+                }
+                const id = {results:1, introduction:2, "materials and methods":3}[name];
+                window.names = {1:"results", 2:"introduction", 3:"materials and methods"};
+                return {ok:true, json:async () => ({
+                    ok:true, cribbed:[], sizings:{[name]:{sizing_id:id, source_hash:"hash",
+                        expected_text:`<p>${name} original</p>`}},
+                    command:{payload:{pid:11, revisions:{[name]:`<p>${name} fitted</p>`},
+                        expected:{[name]:`<p>${name} original</p>`}}},
+                })};
+            };
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-content.js"))
+
+    async def test_wand_prioritizes_pending_fit_and_only_requested_section_is_applied(self):
+        await self.page.evaluate("""() => {
+            window.holdFirst = true;
+            window.queueFitProfile({overflowing_sections:["results", "introduction", "methods"]});
+        }""")
+        await self.page.wait_for_function("typeof releaseFirst === 'function'")
+        await self.page.evaluate("window.autoFitPoster(['materials and methods'])")
+        await self.page.evaluate("releaseFirst()")
+        await self.page.wait_for_function(
+            "document.querySelector('#methods .content').textContent === 'materials and methods fitted'",
+        )
+        self.assertEqual(await self.page.evaluate(
+            "requests.filter(request => request.url.endsWith('/auto-fit')).map(request => request.body.sections[0])",
+        ), ["results", "materials and methods"])
+        self.assertEqual(await self.page.locator("#results .content").text_content(), "results original")
+        self.assertEqual(await self.page.locator("#introduction .content").text_content(), "introduction original")
+
+    async def test_cancellation_aborts_active_fit_and_discards_pending_entries(self):
+        await self.page.evaluate("""() => {
+            window.holdFirst = true;
+            window.queueFitProfile({overflowing_sections:["results", "introduction"]});
+        }""")
+        await self.page.wait_for_function("typeof releaseFirst === 'function'")
+        await self.page.evaluate("window.cancelFitQueue()")
+        requests = await self.page.evaluate("requests")
+        self.assertEqual([item["body"]["sections"][0] for item in requests
+                          if item["url"].endswith("/auto-fit")], ["results"])
+        self.assertEqual(len([item for item in requests if item["url"].endswith("/cancel")]), 2)
+        self.assertEqual(await self.page.locator("#results .content").text_content(), "results original")
+
+    async def test_wand_prompts_for_cross_tab_edit_before_overwriting(self):
+        await self.page.evaluate("""() => {
+            window.remoteText = "<p>Other tab's edit</p>";
+            window.confirmations = [];
+            window.confirm = text => { confirmations.push(text); return false; };
+            window.queueFitProfile({overflowing_sections:["results"]});
+        }""")
+        await self.page.wait_for_function(
+            "requests.some(request => request.url.endsWith('/auto-fit'))",
+        )
+        await self.page.evaluate("window.autoFitPoster(['results'])")
+        await self.page.wait_for_function("confirmations.length === 1")
+        self.assertEqual(await self.page.locator("#results .content").text_content(), "results original")
+        self.assertEqual(await self.page.evaluate(
+            "requests.filter(request => request.url.endsWith('/apply')).length",
+        ), 1)
+        await self.page.evaluate("""() => {
+            window.confirm = text => { confirmations.push(text); return true; };
+            window.autoFitPoster(['results']);
+        }""")
+        await self.page.wait_for_function(
+            "document.querySelector('#results .content').textContent === 'results fitted'",
+        )
+        self.assertEqual(await self.page.evaluate(
+            "requests.filter(request => request.url.endsWith('/apply')).at(-1).body.overwrite",
+        ), True)
+
+    async def test_edit_cancels_then_saves_and_reprofiles_before_rebuilding_queue(self):
+        await self.page.evaluate("window.holdFirst = true")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
+        await self.page.wait_for_function("typeof releaseFirst === 'function'")
+        await self.page.locator("#results .content").evaluate("""element => {
+            element.innerHTML = "<p>Newer edit</p>";
+            element.dispatchEvent(new Event("input", {bubbles:true}));
+        }""")
+        await self.page.wait_for_function(
+            "requests.filter(request => request.url.endsWith('/auto-fit')).length === 2",
+        )
+        requests = await self.page.evaluate("requests")
+        cancel = next(i for i, item in enumerate(requests)
+                      if item["url"].endswith("/cancel") and item["body"].get("cancel_only"))
+        save = next(i for i, item in enumerate(requests) if item["url"] == "/layout/content")
+        rollback = next(i for i, item in enumerate(requests)
+                        if item["url"].endswith("/cancel") and not item["body"].get("cancel_only"))
+        profiles = [i for i, item in enumerate(requests) if item["url"].endswith("/profile")]
+        self.assertLess(cancel, save)
+        self.assertLess(save, rollback)
+        self.assertLess(rollback, profiles[-1])
+        self.assertEqual(await self.page.locator("#results .content").text_content(), "Newer edit")
+
+    async def test_applying_suggestion_keeps_revision_and_reprofiles_remaining_work(self):
+        await self.page.evaluate("window.clearProfileAfterApply = true")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
+        await self.page.wait_for_function(
+            "requests.some(request => request.url.endsWith('/auto-fit'))",
+        )
+        await self.page.evaluate("window.autoFitPoster(['results'])")
+        await self.page.wait_for_function(
+            "requests.filter(request => request.url.endsWith('/profile')).length === 2",
+        )
+        self.assertEqual(await self.page.locator("#results .content").text_content(), "results fitted")
+        cancels = await self.page.evaluate(
+            "requests.filter(request => request.url.endsWith('/cancel')).map(request => request.body)",
+        )
+        self.assertEqual(len(cancels), 1)
+        self.assertTrue(cancels[0]["cancel_only"])
+
+    async def test_rollback_prompts_and_records_each_section_decision(self):
+        await self.page.evaluate("""() => {
+            window.rollbackConflicts = {results:"results edit", introduction:"introduction edit"};
+            window.prompts = [];
+            window.confirm = text => { prompts.push(text); return text.includes("introduction"); };
+            window.queueFitProfile({overflowing_sections:["results"]});
+        }""")
+        await self.page.wait_for_function(
+            "requests.some(request => request.url.endsWith('/auto-fit'))",
+        )
+        await self.page.evaluate("window.cancelFitQueue()")
+        decisions = await self.page.evaluate(
+            "requests.filter(request => request.url.endsWith('/cancel')).at(-1).body.decisions",
+        )
+        self.assertEqual(decisions, {
+            "results": {"expected": "results edit", "overwrite": False},
+            "introduction": {"expected": "introduction edit", "overwrite": True},
+        })
+        self.assertEqual(await self.page.evaluate("prompts.length"), 2)
+
+    async def test_toolbar_reprofiles_and_applies_remaining_requested_sections(self):
+        await self.page.evaluate("""() => {
+            window.profileOverflow = ["results", "introduction"];
+            window.clearProfileAfterApply = true;
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
+        await self.page.wait_for_function(
+            "requests.filter(request => request.url.endsWith('/auto-fit')).length === 2",
+        )
+        await self.page.locator("#auto-fit").click()
+        await self.page.wait_for_function(
+            "document.querySelector('#introduction .content').textContent === 'introduction fitted'",
+        )
+        self.assertEqual(await self.page.locator("#results .content").text_content(), "results fitted")
+        self.assertEqual(await self.page.evaluate(
+            "requests.filter(request => request.url.endsWith('/apply')).length",
+        ), 2)
 
 
 @unittest.skipUnless(os.environ.get("POSTERS_TEST_DATABASE_URL"), "Set POSTERS_TEST_DATABASE_URL for PostgreSQL tests")
@@ -705,8 +1019,209 @@ class AutoFitDatabaseTests(unittest.TestCase):
             mocked.start()
             self.addCleanup(mocked.stop)
 
+    def fit_client(self):
+        async def authenticated(connection: HTTPConnection):
+            connection.state.user_id = 7
+            connection.state.user = {"user-name": "Ada"}
+
+        app = FastAPI(dependencies=[Depends(authenticated)])
+        app.include_router(magic.router)
+        return TestClient(app)
+
+    def test_suggestion_is_cached_without_applying_and_rollback_preserves_declined_edits(self):
+        client = self.fit_client()
+        run = client.post("/magic/11/auto-fit/start", json={}).json()["run_id"]
+        result = client.post("/magic/11/auto-fit", json={
+            "run_id": run, "sections": ["results"],
+        })
+        self.assertEqual(result.status_code, 200, result.text)
+        sizing = result.json()["sizings"]["results"]["sizing_id"]
+        original = "Original full source text"
+        self.assertEqual(self.connection.execute(
+            "SELECT content FROM section WHERE which = 'results'",
+        ).fetchone(), (original,))
+        applied = client.post("/magic/11/auto-fit/apply", json={
+            "run_id": run, "sizing_id": sizing, "expected": original,
+        })
+        self.assertEqual(applied.status_code, 200, applied.text)
+        self.connection.execute("UPDATE section SET content = 'User edit' WHERE which = 'results'")
+        cancelled = client.post("/magic/11/auto-fit/cancel", json={"run_id": run})
+        self.assertEqual(cancelled.json()["conflicts"], {"results": "User edit"})
+        cancelled = client.post("/magic/11/auto-fit/cancel", json={
+            "run_id": run,
+            "decisions": {"results": {"expected": "User edit", "overwrite": False}},
+        })
+        self.assertEqual(cancelled.status_code, 200, cancelled.text)
+        self.assertEqual(self.connection.execute(
+            "SELECT content FROM section WHERE which = 'results'",
+        ).fetchone(), ("User edit",))
+        self.assertEqual(client.post("/magic/11/auto-fit/apply", json={
+            "run_id": run, "sizing_id": sizing, "expected": "User edit", "overwrite": True,
+        }).status_code, 409)
+
+    def test_cancel_rolls_back_applications_newest_first(self):
+        client = self.fit_client()
+        run = client.post("/magic/11/auto-fit/start", json={}).json()["run_id"]
+        first = client.post("/magic/11/auto-fit", json={
+            "run_id": run, "sections": ["results"],
+        }).json()["sizings"]["results"]["sizing_id"]
+        self.assertEqual(client.post("/magic/11/auto-fit/apply", json={
+            "run_id": run, "sizing_id": first, "expected": "Original full source text",
+        }).status_code, 200)
+        self.fit.return_value = "<p>Other revision</p>"
+        second = client.post("/magic/11/auto-fit", json={
+            "run_id": run, "sections": ["results"],
+        }).json()["sizings"]["results"]["sizing_id"]
+        self.assertEqual(client.post("/magic/11/auto-fit/apply", json={
+            "run_id": run, "sizing_id": second, "expected": "<p>Short revision</p>",
+        }).status_code, 200)
+        result = client.post("/magic/11/auto-fit/cancel", json={"run_id": run})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["command"]["payload"]["revisions"],
+                         {"results": "Original full source text"})
+        self.assertEqual(self.connection.execute(
+            "SELECT content FROM section WHERE which = 'results'",
+        ).fetchone(), ("Original full source text",))
+
+    def test_cancellation_stops_inflight_fit_without_persisting_suggestion(self):
+        run = uuid.uuid4()
+        self.connection.execute(
+            "INSERT INTO fitting_runs (run_id, pid, uid) VALUES (%s, 11, 7)", (run,),
+        )
+
+        async def exercise():
+            started = asyncio.Event()
+            stopped = asyncio.Event()
+
+            async def waiting_fit(*args):
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    stopped.set()
+
+            self.fit.side_effect = waiting_fit
+            task = asyncio.create_task(magic._cancellable_fit(11, ["results"], uid=7, run_id=run))
+            await asyncio.wait_for(started.wait(), 5)
+            self.connection.execute("UPDATE fitting_runs SET cancelled = true WHERE run_id = %s", (run,))
+            with self.assertRaises(HTTPException) as raised:
+                await asyncio.wait_for(task, 5)
+            self.assertEqual(raised.exception.status_code, 409)
+            self.assertTrue(stopped.is_set())
+
+        asyncio.run(exercise())
+        self.assertEqual(self.connection.execute("SELECT count(*) FROM sizings").fetchone(), (0,))
+
+    def test_apply_requires_section_conflict_confirmation_and_rollback_can_overwrite(self):
+        client = self.fit_client()
+        run = client.post("/magic/11/auto-fit/start", json={}).json()["run_id"]
+        response = client.post("/magic/11/auto-fit", json={
+            "run_id": run, "sections": ["results"],
+        })
+        sizing = response.json()["sizings"]["results"]["sizing_id"]
+        self.connection.execute("UPDATE section SET content = 'New edit' WHERE which = 'results'")
+        conflict = client.post("/magic/11/auto-fit/apply", json={
+            "run_id": run, "sizing_id": sizing, "expected": "Original full source text",
+        })
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(conflict.json()["detail"]["current"], "New edit")
+        self.assertEqual(client.post("/magic/11/auto-fit/apply", json={
+            "run_id": run, "sizing_id": sizing, "expected": "New edit",
+        }).status_code, 409)
+        self.assertEqual(client.post("/magic/11/auto-fit/apply", json={
+            "run_id": run, "sizing_id": sizing, "expected": "New edit", "overwrite": True,
+        }).status_code, 200)
+        self.connection.execute("UPDATE section SET content = 'Later edit' WHERE which = 'results'")
+        result = client.post("/magic/11/auto-fit/cancel", json={"run_id": run})
+        self.assertEqual(result.json()["conflicts"], {"results": "Later edit"})
+        result = client.post("/magic/11/auto-fit/cancel", json={
+            "run_id": run,
+            "decisions": {"results": {"expected": "Later edit", "overwrite": True}},
+        })
+        self.assertEqual(result.json()["command"]["payload"]["revisions"], {"results": "New edit"})
+        self.assertEqual(self.connection.execute(
+            "SELECT content FROM section WHERE which = 'results'",
+        ).fetchone(), ("New edit",))
+
+    def test_rollback_conflict_decisions_are_independent_per_section(self):
+        client = self.fit_client()
+        run = client.post("/magic/11/auto-fit/start", json={}).json()["run_id"]
+        for name, original in (("results", "Original full source text"),
+                               ("introduction", "Original introduction text")):
+            response = client.post("/magic/11/auto-fit", json={"run_id": run, "sections": [name]})
+            sizing = response.json()["sizings"][name]["sizing_id"]
+            result = client.post("/magic/11/auto-fit/apply", json={
+                "run_id": run, "sizing_id": sizing, "expected": original,
+            })
+            self.assertEqual(result.status_code, 200, result.text)
+        self.connection.execute("UPDATE section SET content = which::text || ' edit'")
+        result = client.post("/magic/11/auto-fit/cancel", json={"run_id": run})
+        self.assertEqual(result.json()["conflicts"], {
+            "results": "results edit", "introduction": "introduction edit",
+        })
+        result = client.post("/magic/11/auto-fit/cancel", json={"run_id": run, "decisions": {
+            "results": {"expected": "results edit", "overwrite": False},
+            "introduction": {"expected": "introduction edit", "overwrite": True},
+        }})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(dict(self.connection.execute(
+            "SELECT which::text, content FROM section",
+        ).fetchall()), {
+            "results": "results edit", "introduction": "Original introduction text",
+        })
+
+    def test_sizing_anchor_limits_rollback_to_later_adjustments(self):
+        client = self.fit_client()
+        run = client.post("/magic/11/auto-fit/start", json={}).json()["run_id"]
+        details = []
+        for name, original in (("results", "Original full source text"),
+                               ("introduction", "Original introduction text")):
+            response = client.post("/magic/11/auto-fit", json={"run_id": run, "sections": [name]})
+            sizing = response.json()["sizings"][name]
+            details.append(sizing)
+            self.assertEqual(client.post("/magic/11/auto-fit/apply", json={
+                "run_id": run, "sizing_id": sizing["sizing_id"], "expected": original,
+            }).status_code, 200)
+        result = client.post("/magic/11/auto-fit/cancel", json={
+            "run_id": run, "sizing_id": details[1]["sizing_id"],
+            "source_hash": details[1]["source_hash"],
+        })
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["command"]["payload"]["revisions"], {
+            "introduction": "Original introduction text",
+        })
+        self.assertEqual(dict(self.connection.execute(
+            "SELECT which::text, content FROM section",
+        ).fetchall()), {
+            "results": "<p>Short revision</p>", "introduction": "Original introduction text",
+        })
+
+    def test_rollback_detects_an_edit_between_two_applied_sizings(self):
+        client = self.fit_client()
+        run = client.post("/magic/11/auto-fit/start", json={}).json()["run_id"]
+        first = client.post("/magic/11/auto-fit", json={
+            "run_id": run, "sections": ["results"],
+        }).json()["sizings"]["results"]["sizing_id"]
+        self.assertEqual(client.post("/magic/11/auto-fit/apply", json={
+            "run_id": run, "sizing_id": first, "expected": "Original full source text",
+        }).status_code, 200)
+        self.connection.execute("UPDATE section SET content = 'Intervening edit' WHERE which = 'results'")
+        self.fit.return_value = "<p>New suggestion</p>"
+        second = client.post("/magic/11/auto-fit", json={
+            "run_id": run, "sections": ["results"],
+        }).json()["sizings"]["results"]["sizing_id"]
+        self.assertEqual(client.post("/magic/11/auto-fit/apply", json={
+            "run_id": run, "sizing_id": second, "expected": "Intervening edit",
+        }).status_code, 200)
+        result = client.post("/magic/11/auto-fit/cancel", json={"run_id": run})
+        self.assertEqual(result.json()["conflicts"], {"results": "<p>New suggestion</p>"})
+        self.assertEqual(self.connection.execute(
+            "SELECT content FROM section WHERE which = 'results'",
+        ).fetchone(), ("<p>New suggestion</p>",))
+
     def test_migration_upgrades_empty_legacy_table_and_is_repeatable(self):
         with self.connection.transaction():
+            self.connection.execute("DROP TABLE fitting_applications")
             self.connection.execute("DROP TABLE sizings")
             self.connection.execute("""
                 CREATE TABLE sizings (
@@ -730,6 +1245,7 @@ class AutoFitDatabaseTests(unittest.TestCase):
     def test_migration_rejects_legacy_rows_without_inventing_source_text(self):
         with self.assertRaisesRegex(psycopg.errors.RaiseException, "Backfill or archive"):
             with self.connection.transaction():
+                self.connection.execute("DROP TABLE fitting_applications")
                 self.connection.execute("DROP TABLE sizings")
                 self.connection.execute("""
                     CREATE TABLE sizings (
@@ -742,6 +1258,35 @@ class AutoFitDatabaseTests(unittest.TestCase):
                 self.connection.execute("INSERT INTO sizings VALUES (11, 'results', 10, now())")
                 self.connection.execute((ROOT / "schema/auto-fit.sql").read_bytes())
 
+    def test_migration_preserves_existing_cached_sizings_and_allows_duplicate_lengths(self):
+        with self.connection.transaction():
+            self.connection.execute("DROP TABLE fitting_applications")
+            self.connection.execute("DROP TABLE sizings")
+            self.connection.execute("""
+                CREATE TABLE sizings (
+                    pid INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+                    section section_which NOT NULL,
+                    length INTEGER NOT NULL CHECK (length > 0),
+                    text TEXT NOT NULL, source_text TEXT NOT NULL, source_hash TEXT NOT NULL,
+                    version TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (pid, section, source_hash, length)
+                )
+            """)
+            self.connection.execute("""
+                INSERT INTO sizings (pid, section, length, text, source_text, source_hash)
+                VALUES (11, 'results', 2, 'old', 'source', 'hash')
+            """)
+            migration = (ROOT / "schema/auto-fit.sql").read_bytes()
+            self.connection.execute(migration)
+            self.connection.execute(migration)
+            self.connection.execute("""
+                INSERT INTO sizings (pid, section, length, text, source_text, source_hash)
+                VALUES (11, 'results', 2, 'new', 'source', 'hash')
+            """)
+            self.assertEqual(self.connection.execute(
+                "SELECT count(*), count(DISTINCT sizing_id) FROM sizings",
+            ).fetchone(), (2, 2))
+
     def test_revision_and_original_survive_repeated_fitting_and_cascade_on_delete(self):
         asyncio.run(magic.auto_fit(11, ["results"], uid=7))
         self.assertEqual(self.connection.execute(
@@ -753,7 +1298,10 @@ class AutoFitDatabaseTests(unittest.TestCase):
         self.fit.return_value = "<p>Another revision</p>"
         asyncio.run(magic.auto_fit(11, ["results"], uid=7))
         self.assertEqual(self.fit.call_args.args[2], "Original full source text")
-        self.assertEqual(self.connection.execute("SELECT count(*) FROM sizings").fetchone(), (1,))
+        self.assertEqual(self.connection.execute("SELECT count(*) FROM sizings").fetchone(), (2,))
+        self.assertEqual(self.connection.execute(
+            "SELECT count(DISTINCT sizing_id), count(DISTINCT source_hash) FROM sizings",
+        ).fetchone(), (2, 1))
         self.connection.execute("DELETE FROM poster WHERE pid = 11")
         self.assertEqual(self.connection.execute("SELECT count(*) FROM sizings").fetchone(), (0,))
 

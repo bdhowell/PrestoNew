@@ -250,6 +250,7 @@ class PosterRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("data-fit", response.text)
         self.assertIn("data-full-size", response.text)
+        self.assertIn("/account/download?pid=11", response.text)
         self.assertNotIn("connect(", response.text)
         response = self.client.get("/posters/11/preview")
         self.assertEqual(response.status_code, 200)

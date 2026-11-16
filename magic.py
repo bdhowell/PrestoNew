@@ -1,5 +1,6 @@
 """Measure sections and graphics in an owner's saved poster layout."""
 
+import asyncio
 import logging
 import hashlib
 import html
@@ -7,6 +8,7 @@ import json
 import math
 import os
 import re
+import uuid
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -402,8 +404,8 @@ async def _fit_section(page: Page, name: str, source: str,
     if word_count < 2:
         return None
     low, high = 1, word_count - 1
-    best_revision = None
-    best_word_count = 0
+    fitting_candidates: dict[str, tuple[int, int]] = {}
+    attempts = 0
     console = Console()
     dom_name = next((alias for alias, canonical in layout.ALIASES.items()
                      if canonical == name and alias != "conclusions"), name)
@@ -411,6 +413,7 @@ async def _fit_section(page: Page, name: str, source: str,
     for _ in range(MAX_FIT_ATTEMPTS):
         if low > high:
             break
+        attempts += 1
         target = (low + high) // 2
         candidates = [text for text in cached if target <= _words(text) <= high]
         revision = min(candidates, key=_words) if candidates else await _shorten(source, name, target)
@@ -438,21 +441,46 @@ async def _fit_section(page: Page, name: str, source: str,
             low = target + 1
         else:
             print(f"Section {name} fits within the target range.")
-            if actual > best_word_count:
-                best_revision = revision
-                best_word_count = actual
+            fitting_candidates.setdefault(revision, (actual, target))
             low = target + 1
-    if best_revision is None:
+    if not fitting_candidates:
         return None
-    await _render_section(page, name, best_revision)
-    final = (await _profile_page(page))["sections"][dom_name]
-    if (final["text_overflow"] or final["text_layout_area"] > final["available_text_area"]
-            or final["text_layout_area"] < final["available_text_area"] * (1 - minimum)):
-        logger.warning("Auto-fit revision for %s no longer fits after final rendering", name)
-        return None
-    klarity = await _clarity(source, best_revision)
-    print(f"Clarity for section {name}: {klarity}")
-    return best_revision if klarity in ("good", "excellent") else None
+
+    ordered = sorted(fitting_candidates.items(), key=lambda item: item[1][0], reverse=True)
+    retry_target = ordered[0][1][1]
+    evaluated = set()
+    clarity_rejected = False
+
+    async def accept(revision: str) -> bool:
+        nonlocal clarity_rejected
+        await _render_section(page, name, revision)
+        final = (await _profile_page(page))["sections"][dom_name]
+        if (final["text_overflow"] or final["text_layout_area"] > final["available_text_area"]
+                or final["text_layout_area"] < final["available_text_area"] * (1 - minimum)):
+            logger.warning("Auto-fit revision for %s no longer fits after final rendering", name)
+            return False
+        if revision in evaluated:
+            return False
+        evaluated.add(revision)
+        clarity = await _clarity(source, revision)
+        print(f"Clarity for section {name}: {clarity}")
+        if clarity not in ("good", "excellent"):
+            clarity_rejected = True
+        return clarity in ("good", "excellent")
+
+    for revision, _ in ordered:
+        if await accept(revision):
+            return revision
+
+    while clarity_rejected and attempts < MAX_FIT_ATTEMPTS:
+        attempts += 1
+        revision = await _shorten(source, name, retry_target)
+        if _words(revision) >= word_count:
+            logger.warning("Auto-fit retry for %s did not shorten its source", name)
+            continue
+        if await accept(revision):
+            return revision
+    return None
 
 
 async def _fit_snapshot(
@@ -480,7 +508,22 @@ async def _fit_snapshot(
     return poster_state, settings, dict(await cursor.fetchall())
 
 
-async def auto_fit(pid: int, sections: list[str] | None = None, *, uid: int) -> dict:
+async def _active_fit_run(
+    connection: psycopg.AsyncConnection, uid: int, pid: int, run_id: uuid.UUID, *, lock: bool = False,
+) -> None:
+    cursor = await connection.execute(
+        "SELECT cancelled FROM fitting_runs WHERE run_id = %s AND uid = %s AND pid = %s"
+        + (" FOR UPDATE" if lock else ""),
+        (run_id, uid, pid),
+    )
+    row = await cursor.fetchone()
+    if row is None or row[0]:
+        raise HTTPException(409, "This auto-fit queue has been cancelled.")
+
+
+async def auto_fit(
+    pid: int, sections: list[str] | None = None, *, uid: int, run_id: uuid.UUID | None = None,
+) -> dict:
     """Fit saved draft sections, preserving originals and rejecting concurrent changes."""
     if type(pid) is not int or pid <= 0:
         raise HTTPException(422, "Choose a valid poster.")
@@ -498,6 +541,8 @@ async def auto_fit(pid: int, sections: list[str] | None = None, *, uid: int) -> 
     connection = await posters.store()._connect()
     async with connection:
         snapshot = await _fit_snapshot(connection, uid, pid)
+        if run_id is not None:
+            await _active_fit_run(connection, uid, pid, run_id)
         cursor = await connection.execute(
             "SELECT section::text, text, source_text, source_hash FROM sizings "
             "WHERE pid = %s ORDER BY version DESC", (pid,),
@@ -506,6 +551,7 @@ async def auto_fit(pid: int, sections: list[str] | None = None, *, uid: int) -> 
     saved = snapshot[2]
     revisions: dict[str, str] = {}
     originals: dict[str, str] = {}
+    sizings: dict[str, dict] = {}
     cribbed: list[str] = []
     messages: list[str] = []
     async with _poster_page(pid, uid=uid) as page:
@@ -523,6 +569,11 @@ async def auto_fit(pid: int, sections: list[str] | None = None, *, uid: int) -> 
         )
         adjustable = {layout.ALIASES.get(name, name) for name in adjustable}
         for name in selected:
+            if name in layout.MANUAL_ADJUSTMENT_SECTIONS:
+                if sections is not None:
+                    cribbed.append(name)
+                    messages.append(layout.manual_adjustment_message(name))
+                continue
             measurement = profile["sections"][available[name]]
             if not measurement["text_overflow"]:
                 continue
@@ -554,30 +605,50 @@ async def auto_fit(pid: int, sections: list[str] | None = None, *, uid: int) -> 
         async with connection:
             if await _fit_snapshot(connection, uid, pid, lock=True) != snapshot:
                 raise HTTPException(409, "Your poster changed during auto-fit. Please try again.")
+            if run_id is not None:
+                await _active_fit_run(connection, uid, pid, run_id, lock=True)
             for name, revision in revisions.items():
                 source = originals[name]
+                values = (pid, name, _words(revision), revision, source,
+                          hashlib.sha256(source.encode("utf-8")).hexdigest())
+                if run_id is None:
+                    cursor = await connection.execute(
+                        "INSERT INTO sizings (pid, section, length, text, source_text, source_hash) "
+                        "VALUES (%s, %s::section_which, %s, %s, %s, %s) RETURNING sizing_id",
+                        values,
+                    )
+                else:
+                    cursor = await connection.execute(
+                        "INSERT INTO sizings (pid, section, length, text, source_text, source_hash, "
+                        "run_id, expected_text) VALUES (%s, %s::section_which, %s, %s, %s, %s, %s, %s) "
+                        "RETURNING sizing_id",
+                        (*values, run_id, saved[name]),
+                    )
+                row = await cursor.fetchone()
+                sizings[name] = {
+                    "sizing_id": row[0],
+                    "source_hash": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                }
+                if run_id is not None:
+                    sizings[name]["expected_text"] = saved[name]
+                if run_id is None:
+                    await connection.execute(
+                        "UPDATE section SET content = %s, updated = now(), embedding = NULL "
+                        "WHERE pid = %s AND which = %s::section_which", (revision, pid, name),
+                    )
+            if run_id is None:
                 await connection.execute(
-                    "INSERT INTO sizings (pid, section, length, text, source_text, source_hash) "
-                    "VALUES (%s, %s::section_which, %s, %s, %s, %s) "
-                    "ON CONFLICT (pid, section, source_hash, length) DO UPDATE "
-                    "SET text = excluded.text, source_text = excluded.source_text, version = now()",
-                    (pid, name, _words(revision), revision, source,
-                     hashlib.sha256(source.encode("utf-8")).hexdigest()),
+                    "UPDATE poster SET updated = now(), embedding = NULL WHERE pid = %s", (pid,),
                 )
-                await connection.execute(
-                    "UPDATE section SET content = %s, updated = now(), embedding = NULL "
-                    "WHERE pid = %s AND which = %s::section_which", (revision, pid, name),
-                )
-            await connection.execute(
-                "UPDATE poster SET updated = now(), embedding = NULL WHERE pid = %s", (pid,),
-            )
-        posters.store().invalidate(uid, pid)
+        if run_id is None:
+            posters.store().invalidate(uid, pid)
     if not revisions and not cribbed:
         messages.append("Your selected sections already fit; no text was changed.")
     elif revisions:
-        messages.append("Your auto-fitted text is saved.")
+        messages.append("Your auto-fitted text is saved." if run_id is None
+                        else "Your auto-fit suggestion is ready.")
     return {
-        "ok": True, "cribbed": cribbed,
+        "ok": True, "cribbed": cribbed, "sizings": sizings,
         "say": "".join(f"<p>{message}</p>" for message in messages),
         "command": {"does": "poster-revisions", "payload": {
             "pid": pid, "revisions": revisions,
@@ -591,19 +662,236 @@ async def poster_auto_fit(request: Request, response: Response, pid: int) -> dic
     uid = layout.uid_for(request)
     data = await layout.read_json(request)
     sections = data.get("sections")
+    run_id = _run_id(data.get("run_id")) if "run_id" in data else None
     if sections is not None and (
         not isinstance(sections, list) or not sections or len(sections) > len(SECTIONS)
         or any(not isinstance(name, str) or name not in layout.SECTION_WHICH for name in sections)
     ):
         raise HTTPException(422, "Choose valid poster sections.")
     try:
-        result = await auto_fit(pid, sections, uid=uid)
+        if run_id is None:
+            result = await auto_fit(pid, sections, uid=uid)
+        else:
+            result = await _cancellable_fit(pid, sections, uid=uid, run_id=run_id)
     except (psycopg.Error, PlaywrightError, OSError, ValueError, openai.OpenAIError, AutoFitError):
         logger.exception("Could not auto-fit poster %s", pid)
         raise HTTPException(503, "Your poster could not be auto-fitted. Please try again.") from None
     result["say"] = result["say"].replace("{{user.username}}", identity.display_name(request))
     response.headers.update(layout.PRIVATE)
     return result
+
+
+async def _cancellable_fit(
+    pid: int, sections: list[str] | None, *, uid: int, run_id: uuid.UUID,
+) -> dict:
+    async def watch() -> None:
+        while True:
+            await asyncio.sleep(.25)
+            connection = await posters.store()._connect()
+            async with connection:
+                await _active_fit_run(connection, uid, pid, run_id)
+
+    fit = asyncio.create_task(auto_fit(pid, sections, uid=uid, run_id=run_id))
+    monitor = asyncio.create_task(watch())
+    try:
+        done, _ = await asyncio.wait((fit, monitor), return_when=asyncio.FIRST_COMPLETED)
+        if monitor in done:
+            await monitor
+        return await fit
+    finally:
+        for task in (fit, monitor):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(fit, monitor, return_exceptions=True)
+
+
+def _run_id(value: object) -> uuid.UUID:
+    if not isinstance(value, str):
+        raise HTTPException(422, "Choose a valid auto-fit queue.")
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(422, "Choose a valid auto-fit queue.") from None
+
+
+@router.post("/{pid}/auto-fit/start")
+async def start_fit_run(request: Request, response: Response, pid: int) -> dict:
+    uid = layout.uid_for(request)
+    poster = await posters.store().get(uid, pid)
+    if poster is None:
+        raise HTTPException(404, "Poster not found")
+    if poster.purchased:
+        raise HTTPException(409, "Purchased posters cannot be edited.")
+    run_id = uuid.uuid4()
+    try:
+        connection = await posters.store()._connect()
+        async with connection:
+            await _fit_snapshot(connection, uid, pid, lock=True)
+            await connection.execute(
+                "INSERT INTO fitting_runs (run_id, pid, uid) VALUES (%s, %s, %s)",
+                (run_id, pid, uid),
+            )
+    except psycopg.Error:
+        logger.exception("Could not start auto-fit queue for poster %s", pid)
+        raise HTTPException(503, "Your auto-fit queue could not be started.") from None
+    response.headers.update(layout.PRIVATE)
+    return {"ok": True, "run_id": str(run_id)}
+
+
+@router.post("/{pid}/auto-fit/apply")
+async def apply_fit_suggestion(request: Request, response: Response, pid: int) -> dict:
+    uid = layout.uid_for(request)
+    data = await layout.read_json(request)
+    run_id = _run_id(data.get("run_id"))
+    sizing_id = data.get("sizing_id")
+    expected = data.get("expected")
+    if (type(sizing_id) is not int or sizing_id <= 0 or not isinstance(expected, str)
+        or len(expected) > 100_000
+        or ("overwrite" in data and type(data["overwrite"]) is not bool)):
+        raise HTTPException(422, "Choose a valid auto-fit suggestion and current text.")
+    try:
+        connection = await posters.store()._connect()
+        async with connection:
+            snapshot = await _fit_snapshot(connection, uid, pid, lock=True)
+            await _active_fit_run(connection, uid, pid, run_id, lock=True)
+            cursor = await connection.execute(
+                "SELECT section::text, text, expected_text FROM sizings "
+                "WHERE sizing_id = %s AND run_id = %s AND pid = %s",
+                (sizing_id, run_id, pid),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise HTTPException(404, "Auto-fit suggestion not found.")
+            name, text, original = row
+            current = snapshot[2].get(name)
+            if current != expected:
+                raise HTTPException(409, {
+                    "message": "The section changed. Please review it and try again.",
+                    "current": current,
+                })
+            if current != original and data.get("overwrite") is not True:
+                raise HTTPException(409, "The section changed since this suggestion was created.")
+            await connection.execute(
+                "INSERT INTO fitting_applications (run_id, sizing_id, section, prior_text, applied_text) "
+                "VALUES (%s, %s, %s::section_which, %s, %s)",
+                (run_id, sizing_id, name, current, text),
+            )
+            await connection.execute(
+                "UPDATE section SET content = %s, updated = now(), embedding = NULL "
+                "WHERE pid = %s AND which = %s::section_which", (text, pid, name),
+            )
+            await connection.execute(
+                "UPDATE poster SET updated = now(), embedding = NULL WHERE pid = %s", (pid,),
+            )
+        posters.store().invalidate(uid, pid)
+    except psycopg.Error:
+        logger.exception("Could not apply auto-fit suggestion for poster %s", pid)
+        raise HTTPException(503, "Your auto-fit suggestion could not be applied.") from None
+    response.headers.update(layout.PRIVATE)
+    return {"ok": True, "command": {"does": "poster-revisions", "payload": {
+        "pid": pid, "revisions": {name: text}, "expected": {name: current},
+    }}}
+
+
+@router.post("/{pid}/auto-fit/cancel")
+async def cancel_fit_run(request: Request, response: Response, pid: int) -> dict:
+    uid = layout.uid_for(request)
+    data = await layout.read_json(request)
+    run_id = _run_id(data.get("run_id"))
+    decisions = data.get("decisions", {})
+    cancel_only = data.get("cancel_only", False)
+    sizing_id = data.get("sizing_id")
+    source_hash = data.get("source_hash")
+    if type(cancel_only) is not bool:
+        raise HTTPException(422, "Invalid auto-fit cancellation.")
+    if sizing_id is not None and (type(sizing_id) is not int or sizing_id <= 0):
+        raise HTTPException(422, "Choose a valid sizing.")
+    if source_hash is not None and (
+        sizing_id is None or not isinstance(source_hash, str)
+        or re.fullmatch(r"[0-9a-f]{64}", source_hash) is None
+    ):
+        raise HTTPException(422, "Choose a valid sizing source hash.")
+    if not isinstance(decisions, dict) or any(
+        name not in layout.SECTION_WHICH or not isinstance(choice, dict)
+        or not isinstance(choice.get("expected"), str) or type(choice.get("overwrite")) is not bool
+        for name, choice in decisions.items()
+    ):
+        raise HTTPException(422, "Invalid auto-fit rollback decisions.")
+    try:
+        connection = await posters.store()._connect()
+        async with connection:
+            snapshot = await _fit_snapshot(connection, uid, pid, lock=True)
+            cursor = await connection.execute(
+                "UPDATE fitting_runs SET cancelled = TRUE WHERE run_id = %s AND uid = %s "
+                "AND pid = %s RETURNING run_id", (run_id, uid, pid),
+            )
+            if await cursor.fetchone() is None:
+                raise HTTPException(404, "Auto-fit queue not found.")
+            if cancel_only:
+                response.headers.update(layout.PRIVATE)
+                return {"ok": True, "conflicts": {}}
+            if sizing_id is not None:
+                cursor = await connection.execute(
+                    "SELECT source_hash FROM sizings WHERE sizing_id = %s AND run_id = %s AND pid = %s",
+                    (sizing_id, run_id, pid),
+                )
+                anchor = await cursor.fetchone()
+                if anchor is None or (source_hash is not None and source_hash != anchor[0]):
+                    raise HTTPException(404, "Auto-fit sizing not found.")
+            cursor = await connection.execute(
+                "SELECT application_id, section::text, prior_text, applied_text "
+                "FROM fitting_applications WHERE run_id = %s AND NOT rolled_back "
+                + ("AND sizing_id >= %s " if sizing_id is not None else "")
+                + "ORDER BY application_id DESC",
+                (run_id, sizing_id) if sizing_id is not None else (run_id,),
+            )
+            applications = await cursor.fetchall()
+            current = snapshot[2]
+            simulated = dict(current)
+            conflicts = {}
+            for _, name, prior, text in applications:
+                if name not in simulated:
+                    raise HTTPException(409, "An auto-fitted section no longer exists.")
+                if simulated[name] != text:
+                    conflicts[name] = current[name]
+                simulated[name] = prior
+            for name, value in conflicts.items():
+                if name in decisions and decisions[name]["expected"] != value:
+                    raise HTTPException(409, "A section changed while confirming rollback.")
+            missing = {name: value for name, value in conflicts.items() if name not in decisions}
+            revisions = {}
+            expected = {}
+            if not missing:
+                for _, name, prior, _ in applications:
+                    if name in conflicts and not decisions[name]["overwrite"]:
+                        continue
+                    expected.setdefault(name, current[name])
+                    revisions[name] = prior
+                for name, text in revisions.items():
+                    await connection.execute(
+                        "UPDATE section SET content = %s, updated = now(), embedding = NULL "
+                        "WHERE pid = %s AND which = %s::section_which", (text, pid, name),
+                    )
+                await connection.execute(
+                    "UPDATE fitting_applications SET rolled_back = TRUE "
+                    "WHERE run_id = %s AND application_id = ANY(%s)",
+                    (run_id, [item[0] for item in applications]),
+                )
+                if revisions:
+                    await connection.execute(
+                        "UPDATE poster SET updated = now(), embedding = NULL WHERE pid = %s", (pid,),
+                    )
+        if revisions:
+            posters.store().invalidate(uid, pid)
+    except psycopg.Error:
+        logger.exception("Could not cancel auto-fit queue for poster %s", pid)
+        raise HTTPException(503, "Your auto-fit queue could not be cancelled.") from None
+    response.headers.update(layout.PRIVATE)
+    return {"ok": True, "conflicts": missing, "command": {
+        "does": "poster-revisions", "payload": {
+            "pid": pid, "revisions": revisions, "expected": expected,
+        },
+    }}
 
 
 @router.get("/{pid}/profile")

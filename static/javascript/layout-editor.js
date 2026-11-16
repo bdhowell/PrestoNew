@@ -9,6 +9,52 @@
         sources.addEventListener("click", () => window.location.assign("/content/review"));
     }
 
+    const print = document.getElementById("print");
+    if (print) {
+        let confirming = false;
+        print.addEventListener("click", async () => {
+            if (confirming) return;
+            confirming = true;
+            try {
+                const poster = document.getElementById("layout");
+                const name = (document.body.dataset.userName || "there").replace(
+                    /[&<>"']/g,
+                    character => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[character],
+                );
+                window.wikkit.say(
+                    `<p>${name}, are you ready to purchase your poster? ` +
+                    "After purchasing, you can download a printable PDF but you won't be able to make changes.</p>" +
+                    '<p class="centered"><button data-sends="ready">I\'m Ready to Print</button> ' +
+                    '<button data-sends="cancel">My Poster Isn\'t Finished</button></p>',
+                );
+                const response = await window.wikkit.requestResponse();
+                if (response === "ready") {
+                    if (typeof window.flushPosterContent !== "function") {
+                        throw new Error("Poster changes could not be saved. Please try again.");
+                    }
+                    await window.flushPosterContent();
+                    const result = await fetch("/account/purchase", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({pid: Number(poster?.dataset.pid)}),
+                    });
+                    const body = await result.json();
+                    if (!result.ok || body.ok !== true || body.redirect !== "/account/download") {
+                        throw new Error(body.detail || "Your poster could not be purchased. Please try again.");
+                    }
+                    window.location.assign(body.redirect);
+                    return;
+                }
+                window.wikkit.say("<p>All right. Keep working on your poster, and let me know when it&rsquo;s ready.</p>");
+            } catch (error) {
+                console.error("Could not complete poster purchase", error);
+                window.wikkit.say("<p>I couldn&rsquo;t complete that request. Please try again.</p>");
+            } finally {
+                confirming = false;
+            }
+        });
+    }
+
     const controlGroups = ["extended", "appearance"]
         .map(id => [document.getElementById(id), document.getElementById(`${id}-controls`)])
         .filter(([button, controls]) => button && controls);

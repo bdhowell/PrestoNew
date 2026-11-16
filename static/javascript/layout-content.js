@@ -5,7 +5,29 @@
     const layout = document.getElementById("layout");
     let statusVersion = 0;
     const states = new Map();
-    let fitting = false;
+    let generation = 0;
+    let currentRun = null;
+    let queue = [];
+    let active = null;
+    let controller = null;
+    let starting = null;
+    let cancellation = Promise.resolve();
+    const suggestions = new Map();
+    const requested = new Set();
+    const bulkRequested = new Set();
+
+    window.explainManualPosterAdjustment = function explainManualPosterAdjustment(section) {
+        const message = section?.dataset.manualAdjustment;
+        if (!message) return false;
+        const paragraph = document.createElement("p");
+        paragraph.textContent = message;
+        if (typeof window.wikkit?.say === "function") {
+            window.wikkit.say(paragraph.outerHTML);
+        } else if (status) {
+            status.textContent = message;
+        }
+        return true;
+    };
 
     function save(element, state) {
         if (state.saving || !state.dirty || !state.ready) {
@@ -47,6 +69,7 @@
             document.dispatchEvent(new Event("poster-layout-updated"));
         }).catch(error => {
             state.dirty = true;
+            if (state.version === version) state.ready = false;
             console.error(`Could not save poster section ${element.dataset.section}`, error);
             if (version === statusVersion) {
                 status.textContent = "Changes could not be saved. Please try again.";
@@ -99,6 +122,7 @@
             }
         }
     }
+    window.flushPosterContent = flush;
 
     function displayed(value) {
         const body = document.createElement("div");
@@ -107,7 +131,7 @@
         return body.innerHTML;
     }
 
-    async function applyRevisions(payload) {
+    async function applyRevisions(payload, notify = true) {
         const layout = document.getElementById("layout");
         if (!payload || payload.pid !== Number(layout?.dataset.pid)
             || !payload.revisions || typeof payload.revisions !== "object" || Array.isArray(payload.revisions)
@@ -137,58 +161,201 @@
             state.savedContent = null;
             await window.mathJaxSource?.typeset(element);
         }
-        if (updates.length) document.dispatchEvent(new Event("poster-layout-updated"));
+        if (updates.length && notify) document.dispatchEvent(new Event("poster-layout-updated"));
     }
 
     window.registerWikkitCommands?.({
         commands: {"poster-revisions": {does: applyRevisions}},
     });
 
-    window.autoFitPoster = async function autoFitPoster(sections = null) {
-        if (fitting) return;
-        const layout = document.getElementById("layout");
-        const controls = document.getElementById("controls");
-        fitting = true;
-        const inert = layout.inert;
-        const controlsInert = controls?.inert;
-        layout.inert = true;
-        if (controls) controls.inert = true;
-        try {
+    async function post(action, body, signal) {
+        const response = await fetch(`/magic/${layout.dataset.pid}/auto-fit${action}`, {
+            method: "POST", credentials: "same-origin",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(body), signal,
+        });
+        const result = await response.json();
+        if (!response.ok || result.ok !== true) {
+            const detail = result.detail;
+            const error = new Error(typeof detail === "string" ? detail
+                : detail?.message || "Your poster could not be auto-fitted.");
+            error.detail = detail;
+            throw error;
+        }
+        return result;
+    }
+
+    function report(error) {
+        console.error("Could not auto-fit poster", error);
+        status.textContent = error.message;
+        window.wikkit?.say("<p>I couldn&rsquo;t finish auto-fit. Please check the editor status and try again.</p>");
+    }
+
+    window.cancelFitQueue = function cancelFitQueue({preserveApplied = false} = {}) {
+        ++generation;
+        queue = [];
+        requested.clear();
+        if (!preserveApplied) bulkRequested.clear();
+        suggestions.clear();
+        controller?.abort();
+        const run = currentRun;
+        const pending = starting;
+        currentRun = null;
+        starting = null;
+        cancellation = cancellation.then(async () => {
+            const id = run || (pending && await pending);
+            if (!id) return;
+            await post("/cancel", {run_id: id, cancel_only: true});
+            if (preserveApplied) return;
             await flush();
-            status.textContent = "Wikkit is fitting your text...";
-            const response = await fetch(`/magic/${layout.dataset.pid}/auto-fit`, {
-                method: "POST",
-                credentials: "same-origin",
-                headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({sections}),
+            const local = new Map([...states].map(([element]) => [
+                element.dataset.section,
+                window.mathJaxSource?.serialize(element) ?? element.innerHTML,
+            ]));
+            let result = await post("/cancel", {run_id: id});
+            const decisions = {};
+            for (const [name, expected] of Object.entries(result.conflicts)) {
+                decisions[name] = {
+                    expected,
+                    overwrite: window.confirm(`The ${name} section has changed. Overwrite your edits to undo its auto-fit?`),
+                };
+            }
+            if (Object.keys(decisions).length) {
+                result = await post("/cancel", {run_id: id, decisions});
+            }
+            if (Object.keys(result.command.payload.revisions).length) {
+                for (const name of Object.keys(result.command.payload.revisions)) {
+                    result.command.payload.expected[name] = local.get(name);
+                }
+                await applyRevisions(result.command.payload, false);
+            }
+        });
+        cancellation.catch(report);
+        return cancellation;
+    };
+    window.waitFitCancellation = () => cancellation;
+
+    async function applySuggestion(name, result, epoch) {
+        await flush();
+        if (epoch !== generation) return;
+        const element = [...states.keys()].find(item => item.dataset.section === name);
+        const state = states.get(element);
+        if (!element || !state) throw new Error("The fitted section is no longer available.");
+        const local = window.mathJaxSource?.serialize(element) ?? element.innerHTML;
+        const original = result.command.payload.expected[name];
+        const current = local === state.savedLocal && state.savedContent !== null
+            ? state.savedContent
+            : displayed(local) === displayed(original) ? result.sizings[name].expected_text : local;
+        const changed = displayed(current) !== displayed(original);
+        if (changed && !window.confirm(`The ${name} section has changed. Overwrite your edits with the auto-fit suggestion?`)) return;
+        let saved;
+        try {
+            saved = await post("/apply", {
+                run_id: currentRun, sizing_id: result.sizings[name].sizing_id,
+                expected: current, overwrite: changed,
             });
-            const result = await response.json();
-            if (!response.ok || result.ok !== true) {
-                throw new Error(result.detail || "Your poster could not be auto-fitted.");
-            }
-            if (result.command?.does !== "poster-revisions") {
-                throw new Error("Auto-fit returned an invalid command. Reload to check your saved text.");
-            }
-            await applyRevisions(result.command.payload);
-            if (result.say) window.wikkit?.say(result.say);
-            status.textContent = result.cribbed?.length
-                ? "Some sections could not be shortened safely. See Wikkit's suggestions."
-                : Object.keys(result.command.payload.revisions).length
-                    ? "Auto-fitted text saved." : "Your selected sections already fit.";
         } catch (error) {
-            console.error("Could not auto-fit poster", error);
-            status.textContent = error.message;
-            window.wikkit?.say("<p>I couldn&rsquo;t finish auto-fit. Please check the editor status and try again.</p>");
-        } finally {
-            layout.inert = inert;
-            if (controls) controls.inert = controlsInert;
-            fitting = false;
+            const remote = error.detail?.current;
+            if (typeof remote !== "string") throw error;
+            if (!window.confirm(`The ${name} section has changed elsewhere. Overwrite those edits with the auto-fit suggestion?`)) return;
+            if (epoch !== generation) return;
+            saved = await post("/apply", {
+                run_id: currentRun, sizing_id: result.sizings[name].sizing_id,
+                expected: remote, overwrite: true,
+            });
+            saved.command.payload.expected[name] = local;
+        }
+        if (epoch !== generation) return;
+        await applyRevisions(saved.command.payload, false);
+        suggestions.delete(name);
+        bulkRequested.delete(name);
+        status.textContent = "Auto-fitted text saved.";
+        if (epoch !== generation) return;
+        await window.cancelFitQueue({preserveApplied: true});
+        document.dispatchEvent(new CustomEvent("poster-layout-updated", {
+            detail: {preserveFitRequests: true},
+        }));
+    }
+
+    async function processQueue(epoch) {
+        if (active) return;
+        while (epoch === generation && queue.length) {
+            const name = queue.shift();
+            active = name;
+            controller = new AbortController();
+            try {
+                const result = await post("", {run_id: currentRun, sections: [name]}, controller.signal);
+                if (epoch !== generation) break;
+                if (result.sizings?.[name]) {
+                    suggestions.set(name, result);
+                    if (requested.delete(name)) await applySuggestion(name, result, epoch);
+                } else if (result.cribbed?.length && result.say) {
+                    window.wikkit?.say(result.say);
+                }
+                if (!result.sizings?.[name]) bulkRequested.delete(name);
+            } catch (error) {
+                if (epoch === generation && error.name !== "AbortError") report(error);
+            } finally {
+                active = null;
+                controller = null;
+            }
+        }
+        if (epoch !== generation && queue.length) processQueue(generation);
+    }
+
+    window.queueFitProfile = async function queueFitProfile(profile) {
+        const epoch = generation;
+        await cancellation;
+        if (epoch !== generation) return;
+        await flush();
+        if (epoch !== generation) return;
+        const sections = [...new Set(profile.overflowing_sections.map(name => {
+            const section = document.getElementById(name === "conclusion" ? "conclusions" : name);
+            if (section?.hasAttribute("data-manual-adjustment")) return null;
+            return section?.querySelector(".content[contenteditable='true'][data-section]")?.dataset.section;
+        }).filter(Boolean))];
+        if (!sections.length) return;
+        queue = sections;
+        for (const name of bulkRequested) {
+            if (sections.includes(name)) requested.add(name);
+            else bulkRequested.delete(name);
+        }
+        starting = post("/start", {}).then(result => result.run_id);
+        const id = await starting;
+        if (epoch !== generation) return;
+        starting = null;
+        currentRun = id;
+        processQueue(epoch);
+    };
+
+    window.autoFitPoster = async function autoFitPoster(sections = null) {
+        try {
+            const names = sections || [...suggestions.keys(), ...queue, ...(active ? [active] : [])];
+            if (sections === null) {
+                for (const name of names) bulkRequested.add(name);
+            }
+            for (const name of new Set(names)) {
+                const section = [...states.keys()].find(item => item.dataset.section === name)?.closest(".section");
+                if (window.explainManualPosterAdjustment(section)) continue;
+                const result = suggestions.get(name);
+                if (result) {
+                    await applySuggestion(name, result, generation);
+                    break;
+                } else if (name === active || queue.includes(name)) {
+                    requested.add(name);
+                    if (name !== active) {
+                        queue = [name, ...queue.filter(item => item !== name)];
+                    }
+                }
+            }
+        } catch (error) {
+            report(error);
         }
     };
 
     document.getElementById("auto-fit")?.addEventListener("click", () => window.autoFitPoster());
     window.addEventListener("beforeunload", event => {
-        if (fitting) {
+        if (active || queue.length) {
             event.preventDefault();
             event.returnValue = "";
         }

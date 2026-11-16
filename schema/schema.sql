@@ -233,15 +233,37 @@ CREATE TABLE summarization (
 
 CREATE UNIQUE INDEX idx_summarization_pid_which_words ON summarization (pid, which, words);
 
+CREATE TABLE fitting_runs (
+    run_id      UUID PRIMARY KEY,
+    pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    uid         INTEGER NOT NULL,
+    cancelled   BOOLEAN NOT NULL DEFAULT FALSE
+);
+
 CREATE TABLE sizings (
+    sizing_id   BIGSERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
     section     section_which NOT NULL,
     length      INTEGER NOT NULL CHECK (length > 0),
     text        TEXT NOT NULL,
     source_text TEXT NOT NULL,
     source_hash TEXT NOT NULL,
-    version     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (pid, section, source_hash, length)
+    run_id      UUID REFERENCES fitting_runs(run_id) ON DELETE CASCADE,
+    expected_text TEXT,
+    version     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_sizings_pid_section ON sizings (pid, section, length, version);
+CREATE INDEX idx_sizings_source_hash ON sizings (source_hash);
+
+CREATE TABLE fitting_applications (
+    application_id BIGSERIAL PRIMARY KEY,
+    run_id      UUID NOT NULL REFERENCES fitting_runs(run_id) ON DELETE CASCADE,
+    sizing_id   BIGINT NOT NULL REFERENCES sizings(sizing_id) ON DELETE CASCADE,
+    section     section_which NOT NULL,
+    prior_text  TEXT NOT NULL,
+    applied_text TEXT NOT NULL,
+    rolled_back BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE keyterm (
