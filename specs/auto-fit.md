@@ -308,6 +308,21 @@ The minimum occupancy check uses `scrollHeight / clientHeight`. Since the DOM
 scroll height is at least the viewport height, this metric does not detect
 unused space in short or empty sections.
 
+Auto-fit measures text separately from the section's general overflow profile.
+`text_area` is the sum of rendered text-line rectangles in `.content`, excluding
+`.graphic` descendants; it remains a diagnostic, not an occupancy measurement.
+Auto-fit uses `text_layout_area`, the full-width layout footprint through the
+last text line/block, including paragraph margins and section padding, minus
+graphic area. Available text area includes section padding but excludes borders,
+fixed headings/spacing, and graphics. Fractional CSS dimensions are retained
+when undoing poster zoom rather than using rounded `offsetHeight`/`offsetWidth`.
+Text overflow checks both glyphs and block/margin bottoms against the section
+viewport, reserving bottom padding.
+Auto-fit uses a binary search over revision word targets, accepting layout area from
+`(1 - AUTOFIT_MINIMUM_WORD_PERCENTAGE / 100)` through all available text area,
+inclusive. After the search, the selected revision is re-rendered and re-profiled;
+a later overflowing trial is never left in its place or accepted as a fit.
+
 Threshold environment variables `SECTION_MIN_OCCUPIED` (30),
 `SECTION_MAX_OCCUPIED` (75), and `SECTION_UNDERFLOW_OCCUPIED` (0.40) are
 percentages; the latter defaults to 0.4%, as specified below. `TOO_WIDE`

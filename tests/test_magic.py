@@ -57,6 +57,36 @@ class ProfileMeasurementsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile["overflowing_sections"], ["introduction"])
         self.assertEqual(profile["underflowing_sections"], [])
 
+    async def test_text_fit_area_includes_padding_and_excludes_graphics(self) -> None:
+        await self.page.set_content("""
+            <style>
+                .section { box-sizing: border-box; width: 200px; height: 120px;
+                           padding: 10px; border: 5px solid; overflow: hidden;
+                           font: 10px/10px monospace; }
+                .graphic { width: 40px; height: 20px; }
+            </style>
+            <div class="section" id="results">
+                <div class="graphic">not text</div>
+                <div id="text">only text here</div>
+            </div>
+        """)
+        with patch.dict("os.environ", {}, clear=True):
+            profile = await magic._profile_page(self.page)
+        section = profile["sections"]["results"]
+        expected_text_area = await self.page.locator("#text").evaluate("""element => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            return Array.from(range.getClientRects(), rect => rect.width * rect.height)
+                .reduce((sum, area) => sum + area, 0);
+        }""")
+        expected_available_area = await self.page.locator("#results").evaluate(
+            "element => element.clientWidth * element.clientHeight - 40 * 20",
+        )
+        self.assertAlmostEqual(section["text_area"], expected_text_area)
+        self.assertEqual(section["available_text_area"], expected_available_area)
+        self.assertFalse(section["text_overflow"])
+        self.assertGreater(section["available_text_area"], 0)
+
     async def test_measures_graphics_and_aggregates_all_sections(self) -> None:
         await self.page.set_content("""
             <style>
@@ -95,6 +125,39 @@ class ProfileMeasurementsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile["sections"]["conclusion"]["fit"], "=")
         self.assertEqual([item["id"] for item in profile["oversized_graphics"]], ["wide", "big"])
         json.dumps(profile)
+
+    async def test_text_overflow_includes_paragraph_margin_and_bottom_padding_at_zoom(self) -> None:
+        await self.page.set_content("""
+            <style>
+                .section { box-sizing: border-box; width: 200.5px; height: 100.5px;
+                           border: 3px solid; padding: 10px; overflow: hidden;
+                           font: 10px/10px monospace; }
+                .content p { margin: 0 0 7px; height: 70px; }
+            </style>
+            <div style="transform:scale(.221837);transform-origin:top left">
+                <div class="section" id="introduction">
+                    <div class="content" data-section="introduction"><p>Short text</p></div>
+                </div>
+            </div>
+        """)
+        measured = (await magic._profile_page(self.page))["sections"]["introduction"]
+        self.assertTrue(measured["overflow"])
+        self.assertTrue(measured["text_overflow"])
+        self.assertLess(measured["text_area"], measured["available_text_area"] * .85)
+
+    async def test_sparse_text_occupancy_uses_layout_height_not_glyph_area(self) -> None:
+        await self.page.set_content("""
+            <style>
+                .section { width: 200px; height: 100px; overflow: hidden; }
+                p { margin: 0; height: 90px; font: 10px/10px monospace; }
+            </style>
+            <div class="section" id="introduction">
+                <div class="content" data-section="introduction"><p>Short text</p></div>
+            </div>
+        """)
+        measured = (await magic._profile_page(self.page))["sections"]["introduction"]
+        self.assertFalse(measured["text_overflow"])
+        self.assertAlmostEqual(measured["text_layout_area"] / measured["available_text_area"], .9)
 
     async def test_thresholds_are_inclusive_and_configurable(self) -> None:
         await self.page.set_content("""

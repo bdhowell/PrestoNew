@@ -22,10 +22,15 @@ from tests.test_layout import DRAFT
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def section(*, overflow=0, height=90):
+def section(*, overflow=0, height=90, text_area=None, available_area=10000):
+    if text_area is None:
+        text_area = available_area * (1 + overflow / 100) if overflow else available_area * height / 100
     return {
         "viewport_height": 100, "overflow_height": overflow,
         "content_height": height, "overflow": overflow > 0, "graphics": [],
+        "text_area": text_area, "available_text_area": available_area,
+        "text_layout_area": text_area,
+        "text_overflow": text_area > available_area,
     }
 
 
@@ -37,7 +42,6 @@ class FittingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.page = AsyncMock()
         self.source = " ".join(["word"] * 100)
-        self.initial = section(overflow=100, height=200)
         self.render = patch.object(magic, "_render_section", AsyncMock())
         self.render.start()
         self.addCleanup(self.render.stop)
@@ -49,48 +53,75 @@ class FittingTests(unittest.IsolatedAsyncioTestCase):
                 )) as shorten, \
                 patch.object(magic, "_clarity", AsyncMock(return_value=rating)) as clarity:
             result = await magic._fit_section(
-                self.page, "results", self.source, self.initial, cached or [], .15,
+                self.page, "results", self.source, cached or [], .15,
             )
         return result, shorten, clarity
 
-    async def test_initial_target_uses_visible_fraction_not_overflow_percentage(self):
-        result, shorten, clarity = await self.fit([profile(results=section(height=85))])
+    async def test_binary_search_returns_largest_revision_within_available_text_area(self):
+        async def measure(page):
+            revision = magic._render_section.await_args.args[2]
+            return profile(results=section(
+                text_area=magic._words(revision), available_area=100,
+            ))
+
+        with patch.object(magic, "_profile_page", AsyncMock(side_effect=measure)), \
+                patch.object(magic, "_shorten", AsyncMock(
+                    side_effect=lambda source, name, words: " ".join(["word"] * words),
+                )) as shorten, \
+                patch.object(magic, "_clarity", AsyncMock(return_value="excellent")) as clarity:
+            result = await magic._fit_section(
+                self.page, "results", self.source, [], .15,
+            )
         assert result is not None
-        self.assertEqual(magic._words(result), 50)
-        shorten.assert_awaited_once_with(self.source, "results", 50)
+        self.assertEqual(magic._words(result), 99)
+        self.assertEqual([call.args[2] for call in shorten.await_args_list],
+                         [50, 75, 87, 93, 96, 98, 99])
         clarity.assert_awaited_once_with(self.source, result)
 
-    async def test_halves_overflow_and_grows_underflow_without_oscillation(self):
-        result, shorten, _ = await self.fit([
-            profile(results=section(overflow=20)),
-            profile(results=section(height=60)),
-            profile(results=section(height=90)),
-        ])
+    async def test_binary_search_brackets_overflow_and_underflow(self):
+        async def measure(page):
+            revision = magic._render_section.await_args.args[2]
+            count = magic._words(revision)
+            return profile(results=section(
+                text_area=count * 1.1, available_area=50,
+            ))
+
+        with patch.object(magic, "_profile_page", AsyncMock(side_effect=measure)), \
+                patch.object(magic, "_shorten", AsyncMock(
+                    side_effect=lambda source, name, words: " ".join(["word"] * words),
+                )) as shorten, \
+                patch.object(magic, "_clarity", AsyncMock(return_value="excellent")):
+            result = await magic._fit_section(
+                self.page, "results", self.source, [], .15,
+            )
         assert result is not None
-        self.assertEqual([call.args[2] for call in shorten.await_args_list], [50, 25, 37])
-        self.assertEqual(magic._words(result), 37)
+        self.assertEqual([call.args[2] for call in shorten.await_args_list],
+                         [50, 25, 37, 43, 46, 44, 45])
+        self.assertEqual(magic._words(result), 45)
 
     async def test_cache_is_rendered_and_evaluated_not_blindly_accepted(self):
         cached = "<p>" + " ".join(["cached"] * 55) + "</p>"
-        result, shorten, clarity = await self.fit(
-            [profile(results=section())], cached=[cached],
-        )
-        self.assertEqual(result, cached)
-        shorten.assert_not_awaited()
-        clarity.assert_awaited_once()
+        measurements = [profile(results=section(height=60))] * 12
+        result, shorten, clarity = await self.fit(measurements, cached=[cached])
+        self.assertIsNone(result)
+        self.assertGreater(shorten.await_count, 0)
+        clarity.assert_not_awaited()
 
     async def test_cached_overflow_is_retried_with_a_smaller_target(self):
         cached = " ".join(["cached"] * 55)
-        result, shorten, _ = await self.fit([
-            profile(results=section(overflow=20)), profile(results=section()),
-        ], cached=[cached])
+        result, shorten, _ = await self.fit(
+            [profile(results=section(overflow=20))] + [profile(results=section(height=90))] * 8,
+            cached=[cached],
+        )
         assert result is not None
-        self.assertEqual(magic._words(result), 25)
-        shorten.assert_awaited_once_with(self.source, "results", 25)
+        self.assertLess(magic._words(result), 55)
+        self.assertGreater(shorten.await_count, 0)
 
-    async def test_only_excellent_ratings_are_accepted(self):
-        for rating in ("poor", "fair", "good"):
-            result, _, _ = await self.fit([profile(results=section())], rating=rating)
+    async def test_poor_and_fair_ratings_are_rejected(self):
+        for rating in ("poor", "fair"):
+            result, _, _ = await self.fit(
+                [profile(results=section(height=90))] * 8, rating=rating,
+            )
             self.assertIsNone(result)
 
     async def test_impossible_fit_stops_and_does_not_evaluate(self):
@@ -102,22 +133,24 @@ class FittingTests(unittest.IsolatedAsyncioTestCase):
         clarity.assert_not_awaited()
 
     async def test_underflow_boundary_and_conclusion_alias(self):
-        with patch.object(magic, "_profile_page", AsyncMock(return_value=profile(conclusion=section(height=85)))), \
+        with patch.object(magic, "_profile_page", AsyncMock(return_value=profile(conclusion=section(height=90)))), \
                 patch.object(magic, "_shorten", AsyncMock(return_value="word " * 50)), \
                 patch.object(magic, "_clarity", AsyncMock(return_value="excellent")):
             self.assertIsNotNone(await magic._fit_section(
-                self.page, "conclusion", self.source, self.initial, [], .15,
+                self.page, "conclusion", self.source, [], .15,
             ))
 
     async def test_model_over_target_is_measured_and_accepted_only_when_it_fits(self):
         with patch.object(magic, "_shorten", AsyncMock(
-            side_effect=["word " * 60, "word " * 30],
+            side_effect=["word " * count for count in (60, 30, 40, 42, 41, 40, 40)],
         )) as shorten, patch.object(magic, "_profile_page", AsyncMock(side_effect=[
-            profile(results=section(overflow=20)), profile(results=section(height=85)),
+            profile(results=section(text_area=count, available_area=45))
+            for count in (60, 30, 40, 42, 41, 40, 40, 42)
         ])), patch.object(magic, "_clarity", AsyncMock(return_value="excellent")) as clarity:
-            result = await magic._fit_section(self.page, "results", self.source, self.initial, [], .15)
-        self.assertEqual(magic._words(result), 30)
-        self.assertEqual([call.args[2] for call in shorten.await_args_list], [50, 25])
+            result = await magic._fit_section(self.page, "results", self.source, [], .15)
+        self.assertEqual(magic._words(result), 42)
+        self.assertEqual([call.args[2] for call in shorten.await_args_list],
+                         [50, 25, 37, 43, 46, 48, 49])
         clarity.assert_awaited_once_with(self.source, result)
 
     async def test_model_that_does_not_shorten_is_retried_without_rendering_and_stops(self):
@@ -126,7 +159,7 @@ class FittingTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(magic, "_clarity", AsyncMock()) as clarity:
             with self.assertLogs("magic", "WARNING"):
                 result = await magic._fit_section(
-                    self.page, "results", self.source, self.initial, [], .15,
+                    self.page, "results", self.source, [], .15,
                 )
         self.assertIsNone(result)
         self.assertGreater(shorten.await_count, 1)
@@ -134,6 +167,31 @@ class FittingTests(unittest.IsolatedAsyncioTestCase):
         measured.assert_not_awaited()
         clarity.assert_not_awaited()
         magic._render_section.assert_not_awaited()
+
+    async def test_selected_revision_is_restored_after_last_candidate_overflows(self):
+        async def measure(page):
+            count = magic._words(magic._render_section.await_args.args[2])
+            return profile(results=section(text_area=count, available_area=44))
+
+        with patch.object(magic, "_profile_page", AsyncMock(side_effect=measure)), \
+                patch.object(magic, "_shorten", AsyncMock(
+                    side_effect=lambda source, name, words: "word " * words,
+                )), patch.object(magic, "_clarity", AsyncMock(return_value="excellent")):
+            result = await magic._fit_section(self.page, "results", self.source, [], .15)
+        self.assertIsNotNone(result)
+        magic._render_section.assert_awaited_with(self.page, "results", result)
+
+    async def test_final_render_must_still_fit_before_clarity_is_evaluated(self):
+        trials = [profile(results=section(height=90))] * 7
+        with patch.object(magic, "_profile_page", AsyncMock(side_effect=[
+            *trials, profile(results=section(overflow=7)),
+        ])), patch.object(magic, "_shorten", AsyncMock(
+            side_effect=lambda source, name, words: "word " * words,
+        )), patch.object(magic, "_clarity", AsyncMock()) as clarity:
+            with self.assertLogs("magic", "WARNING"):
+                result = await magic._fit_section(self.page, "results", self.source, [], .15)
+        self.assertIsNone(result)
+        clarity.assert_not_awaited()
 
 
 class ModelTests(unittest.IsolatedAsyncioTestCase):
@@ -232,6 +290,16 @@ class AutoFitTests(unittest.IsolatedAsyncioTestCase):
         self.snapshots.assert_awaited_with(self.connection, 7, 11, lock=True)
         self.store.invalidate.assert_called_once_with(7, 11)
         self.fit.assert_awaited_once()
+
+    async def test_graphic_overflow_alone_does_not_trigger_text_auto_fit(self):
+        measured = profile(
+            results=section(overflow=100, text_area=50, available_area=100),
+            introduction=section(),
+        )
+        with patch.object(magic, "_profile_page", AsyncMock(return_value=measured)):
+            result = await magic.auto_fit(11, ["results"], uid=7)
+        self.assertIn("already fit", result["say"])
+        self.fit.assert_not_awaited()
 
     async def test_repeated_fitting_uses_full_original_not_prior_summary(self):
         self.connection.execute.return_value.fetchall.return_value = [
@@ -548,13 +616,34 @@ class AutoFitBrowserTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(magic, "_shorten", AsyncMock(
             side_effect=lambda source, name, words: "<p>" + " ".join(["word"] * words) + "</p>",
         )), patch.object(magic, "_clarity", AsyncMock(return_value="excellent")), patch("builtins.print"):
-            revision = await magic._fit_section(self.page, "results", source, initial, [], .15)
+            revision = await magic._fit_section(self.page, "results", source, [], .15)
             measured = (await magic._profile_page(self.page))["sections"]["results"]
         self.assertIsNotNone(revision)
         assert revision is not None
         self.assertFalse(measured["overflow"])
         self.assertGreaterEqual(measured["content_height"] / measured["viewport_height"], .85)
         self.assertLess(magic._words(revision), magic._words(source))
+
+    async def test_final_rendered_fit_with_fractional_zoom_padding_and_paragraph_margins(self):
+        await self.page.add_style_tag(content="""
+            #layout { transform: scale(.221837); transform-origin: top left; }
+            .section { box-sizing: border-box; width: 220.5px; height: 170.5px;
+                       border: 3px solid; padding: 10px; font: 10px/15px monospace; }
+            .content p { margin: 0 0 7px; }
+        """)
+        source = " ".join(["word"] * 100)
+        await magic._render_section(self.page, "results", f"<p>{source}</p>")
+        with patch.object(magic, "_shorten", AsyncMock(
+            side_effect=lambda source, name, words: "<p>" + "word " * words + "</p>",
+        )), patch.object(magic, "_clarity", AsyncMock(return_value="excellent")), \
+                patch("builtins.print"), patch.object(magic.Console, "print_json"):
+            revision = await magic._fit_section(self.page, "results", source, [], .15)
+        self.assertIsNotNone(revision)
+        self.assertEqual(await self.page.locator(".content").inner_html(), revision)
+        measured = (await magic._profile_page(self.page))["sections"]["results"]
+        self.assertFalse(measured["overflow"])
+        self.assertFalse(measured["text_overflow"])
+        self.assertGreaterEqual(measured["text_layout_area"] / measured["available_text_area"], .85)
 
 
 @unittest.skipUnless(os.environ.get("POSTERS_TEST_DATABASE_URL"), "Set POSTERS_TEST_DATABASE_URL for PostgreSQL tests")

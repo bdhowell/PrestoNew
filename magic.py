@@ -80,11 +80,66 @@ async def _profile_page(page: Page) -> dict:
               normalizedbounds.top = bounds.top + section.scrollTop;
               normalizedbounds.bottom = bounds.bottom + section.scrollTop;
         const width = section.offsetWidth, height = section.offsetHeight;
-        const scaleX = bounds.width / width, scaleY = bounds.height / height;
+        const style = getComputedStyle(section);
+        const borderLeft = parseFloat(style.borderLeftWidth), borderRight = parseFloat(style.borderRightWidth);
+        const borderTop = parseFloat(style.borderTopWidth), borderBottom = parseFloat(style.borderBottomWidth);
+        const paddingTop = parseFloat(style.paddingTop), paddingBottom = parseFloat(style.paddingBottom);
+        const borderWidth = parseFloat(style.width) + (style.boxSizing === "border-box" ? 0
+            : parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + borderLeft + borderRight);
+        const borderHeight = parseFloat(style.height) + (style.boxSizing === "border-box" ? 0
+            : paddingTop + paddingBottom + borderTop + borderBottom);
+        const scaleX = bounds.width / borderWidth, scaleY = bounds.height / borderHeight;
+        const innerWidth = borderWidth - borderLeft - borderRight;
+        const innerHeight = borderHeight - borderTop - borderBottom;
+        const localBottom = rect => (rect.bottom - bounds.top) / scaleY - borderTop + section.scrollTop;
         const range = document.createRange();
         range.selectNodeContents(section);
         const bottom = Math.max(bounds.top, ...Array.from(range.getClientRects(), rect => rect.bottom),
             ...Array.from(section.querySelectorAll("*"), child => child.getBoundingClientRect().bottom));
+        const content = section.querySelector(".content");
+        const textWalker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT, {
+            acceptNode: node => node.parentElement?.closest(".graphic")
+                ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+        });
+        let textArea = 0, textOverflow = false, textBottom = 0;
+        while (textWalker.nextNode()) {
+            if (content && !content.contains(textWalker.currentNode)) continue;
+            range.selectNodeContents(textWalker.currentNode);
+            for (const rect of range.getClientRects()) {
+                if (rect.width <= 0 || rect.height <= 0) continue;
+                textArea += rect.width * rect.height / (scaleX * scaleY);
+                const left = (rect.left - bounds.left) / scaleX - borderLeft + section.scrollLeft;
+                const right = (rect.right - bounds.left) / scaleX - borderLeft + section.scrollLeft;
+                textBottom = Math.max(textBottom, localBottom(rect));
+                textOverflow ||= left < 0 || right > innerWidth;
+            }
+        }
+        // Glyph rectangles omit line spacing, paragraph margins, and the bottom padding.
+        const textRoot = content || section;
+        for (const element of textRoot.querySelectorAll("*")) {
+            if (element.closest(".graphic")) continue;
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
+                acceptNode: node => node.textContent.trim() && !node.parentElement.closest(".graphic")
+                    ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+            });
+            if (!walker.nextNode()) continue;
+            const elementStyle = getComputedStyle(element);
+            if (elementStyle.display === "inline") continue;
+            textBottom = Math.max(textBottom, localBottom(element.getBoundingClientRect())
+                + parseFloat(elementStyle.marginBottom));
+        }
+        textOverflow ||= textBottom > 0 && textBottom + paddingBottom > innerHeight;
+        const graphics = Array.from(section.querySelectorAll(".graphic"), graphic => {
+            const rect = graphic.getBoundingClientRect();
+            return {id: graphic.id, width: rect.width / scaleX, height: rect.height / scaleY};
+        });
+        const contentTop = content
+            ? (content.getBoundingClientRect().top - bounds.top) / scaleY - borderTop + section.scrollTop
+            : paddingTop;
+        const graphicArea = graphics.reduce((area, graphic) => area + graphic.width * graphic.height, 0);
+        const textLayoutArea = textBottom > 0
+            ? Math.max(0, innerWidth * (textBottom - contentTop + paddingTop + paddingBottom) - graphicArea)
+            : 0;
         return {
             name: section.id,
             bounds: bounds,
@@ -92,10 +147,9 @@ async def _profile_page(page: Page) -> dict:
             width, height, scrollWidth: section.scrollWidth, scrollHeight: section.scrollHeight,
             viewportHeight: section.clientHeight,
             contentHeight: (bottom - bounds.top) / scaleY - section.clientTop + section.scrollTop,
-            graphics: Array.from(section.querySelectorAll(".graphic"), graphic => {
-                const rect = graphic.getBoundingClientRect();
-                return {id: graphic.id, width: rect.width / scaleX, height: rect.height / scaleY};
-            }),
+            textArea, textLayoutArea, textOverflow,
+            availableTextArea: Math.max(0, innerWidth * (innerHeight - contentTop + paddingTop) - graphicArea),
+            graphics,
         };
     })""")
     if not measurements:
@@ -119,6 +173,12 @@ async def _profile_page(page: Page) -> dict:
         if viewport_height <= 0:
             raise ValueError("Poster sections must have a positive viewport height")
         area = width * height
+        text_area = measurement["textArea"]
+        text_layout_area = measurement["textLayoutArea"]
+        available_text_area = measurement["availableTextArea"]
+        if not all(math.isfinite(value) and value >= 0
+                   for value in (text_area, text_layout_area, available_text_area)):
+            raise ValueError("Text area measurements are invalid")
         section_bounds = measurement["bounds"]
         normalized_bounds = measurement["normalizedbounds"]
         graphics = []
@@ -169,6 +229,10 @@ async def _profile_page(page: Page) -> dict:
             "vertical_overflow": vertical_overflow,
             "viewport_height": viewport_height,
             "content_height": max(0, measurement.get("contentHeight", scroll_height)),
+            "text_area": text_area,
+            "text_layout_area": text_layout_area,
+            "available_text_area": available_text_area,
+            "text_overflow": measurement["textOverflow"] or text_area > available_text_area,
             "overflow_height": overflow_height,
             "overflow_percentage": 100 * overflow_height / viewport_height,
             "overflow": overflow,
@@ -332,23 +396,22 @@ async def _render_section(page: Page, name: str, text: str) -> None:
     await page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
 
 
-async def _fit_section(page: Page, name: str, source: str, current: dict,
+async def _fit_section(page: Page, name: str, source: str,
                        cached: list[str], minimum: float) -> str | None:
     word_count = _words(source)
     if word_count < 2:
         return None
     low, high = 1, word_count - 1
-    target = max(low, min(high, math.floor(
-        word_count * current["viewport_height"]
-        / (current["viewport_height"] + current["overflow_height"])
-    )))
-    attempted: set[int] = set()
+    best_revision = None
+    best_word_count = 0
     console = Console()
+    dom_name = next((alias for alias, canonical in layout.ALIASES.items()
+                     if canonical == name and alias != "conclusions"), name)
 
     for _ in range(MAX_FIT_ATTEMPTS):
-        if low > high or target in attempted:
+        if low > high:
             break
-        attempted.add(target)
+        target = (low + high) // 2
         candidates = [text for text in cached if target <= _words(text) <= high]
         revision = min(candidates, key=_words) if candidates else await _shorten(source, name, target)
         actual = _words(revision)
@@ -357,32 +420,39 @@ async def _fit_section(page: Page, name: str, source: str, current: dict,
                 "Auto-fit summary for %s did not shorten its source (%s >= %s); reducing target",
                 name, actual, word_count,
             )
-            high = min(high, target - 1)
-            target = max(low, min(high, target // 2))
+            high = target - 1
             continue
         await _render_section(page, name, revision)
         measured = (await _profile_page(page))["sections"]
-        dom_name = next((alias for alias, canonical in layout.ALIASES.items()
-                         if canonical == name and alias != "conclusions"), name)
         section = measured[dom_name]
         print("=============================================================================")
         print(f"Profiling section {name}:")
         console.print_json(json.dumps(section, sort_keys=True))
-        if section["vertical_overflow"]:
-            print(f"Section {name} is vertically overflowing.")
-            high = min(high, target - 1, actual - 1)
-            target = max(low, min(high, target // 2))
-        elif section["content_height"] < section["viewport_height"] * (1 - minimum):
+        available_area = section["available_text_area"]
+        text_area = section["text_layout_area"]
+        if section["text_overflow"] or text_area > available_area:
+            print(f"Section {name} exceeds its available text area.")
+            high = target - 1
+        elif text_area < available_area * (1 - minimum):
             print(f"Section {name} is underflowing.")
-            low = max(low, target + 1, actual + 1)
-            target = min(high, max(low, target + max(1, target // 2)))
+            low = target + 1
         else:
             print(f"Section {name} fits within the target range.")
-            klarity = await _clarity(source, revision)
-            print(f"Clarity for section {name}: {klarity}")
-            return revision if klarity in ["good", "excellent"] else None
-#            return revision if await _clarity(source, revision) in ["good", "excellent"] else None
-    return None
+            if actual > best_word_count:
+                best_revision = revision
+                best_word_count = actual
+            low = target + 1
+    if best_revision is None:
+        return None
+    await _render_section(page, name, best_revision)
+    final = (await _profile_page(page))["sections"][dom_name]
+    if (final["text_overflow"] or final["text_layout_area"] > final["available_text_area"]
+            or final["text_layout_area"] < final["available_text_area"] * (1 - minimum)):
+        logger.warning("Auto-fit revision for %s no longer fits after final rendering", name)
+        return None
+    klarity = await _clarity(source, best_revision)
+    print(f"Clarity for section {name}: {klarity}")
+    return best_revision if klarity in ("good", "excellent") else None
 
 
 async def _fit_snapshot(
@@ -454,7 +524,7 @@ async def auto_fit(pid: int, sections: list[str] | None = None, *, uid: int) -> 
         adjustable = {layout.ALIASES.get(name, name) for name in adjustable}
         for name in selected:
             measurement = profile["sections"][available[name]]
-            if not measurement["overflow"]:
+            if not measurement["text_overflow"]:
                 continue
             if not os.environ.get("OPENAI_API_KEY"):
                 raise AutoFitError("OPENAI_API_KEY is required to auto-fit poster sections.")
@@ -463,7 +533,7 @@ async def auto_fit(pid: int, sections: list[str] | None = None, *, uid: int) -> 
                            if row[0] == name and row[1] == prior), prior)
             source_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
             cached = [row[1] for row in history if row[0] == name and row[3] == source_hash]
-            revision = await _fit_section(page, name, source, measurement, cached, minimum)
+            revision = await _fit_section(page, name, source, cached, minimum)
             if revision is None:
                 await _render_section(page, name, prior)
                 cribbed.append(name)
