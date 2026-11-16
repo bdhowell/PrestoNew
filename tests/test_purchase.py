@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from playwright.async_api import async_playwright
 import pypdfium2
 from starlette.requests import HTTPConnection
-from starlette.responses import HTMLResponse
 
 import poster_rendering
 import posters
@@ -66,10 +65,9 @@ class PurchaseRouteTests(unittest.TestCase):
 
     def test_download_renders_pdf_and_records_download_hash(self) -> None:
         self.store.get.return_value = PURCHASED
+        layout = AsyncMock(return_value="<html><body>saved editor layout</body></html>")
         with (
-            patch.object(account.poster_routes, "preview", new=AsyncMock(
-                return_value=HTMLResponse("<html>poster</html>")
-            )),
+            patch.object(account.layout_routes, "layout", layout),
             patch.object(poster_rendering, "poster_pdf", new=AsyncMock(return_value=b"%PDF-test")),
         ):
             response = self.client.get("/account/download")
@@ -77,6 +75,7 @@ class PurchaseRouteTests(unittest.TestCase):
         self.assertEqual(response.content, b"%PDF-test")
         self.assertEqual(response.headers["content-type"], "application/pdf")
         self.assertEqual(response.headers["content-disposition"], 'attachment; filename="poster-11.pdf"')
+        layout.assert_awaited_once_with("arena", 11, uid=7, request=ANY)
         self.store.record_download.assert_awaited_once_with(
             7, 11, hashlib.sha256(b"%PDF-test").hexdigest()
         )
@@ -145,23 +144,61 @@ class PurchaseBrowserAndPdfTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await browser.close()
 
-    async def test_poster_pdf_has_a_pdf_signature(self) -> None:
+    async def test_poster_pdf_keeps_the_editor_layout_and_full_size(self) -> None:
+        geometry = (
+            '{"scale":1,"header":0.2,"layout":0.8,"columns":[0.2,0.5,0.3],'
+            '"rows":[0.7,0.3],"vertical":{"pane0":[0.4,0.6],"pane1":[1],'
+            '"pane2":[1]},"horizontal":{"pane3":[0.3,0.3,0.4]}}'
+        )
         rendered = """
         <!doctype html>
         <html><head>
-            <link rel="stylesheet" href="/static/css/pages/poster-document.css">
+            <link rel="stylesheet" href="/static/css/main.css">
+            <link rel="stylesheet" href="/static/css/layout.css">
+            <link rel="stylesheet" href="/static/css/layouts/arena.css">
+            <link rel="stylesheet" href="/static/css/themes.css">
+            <link rel="stylesheet" href="/static/css/fonts.css">
         </head><body>
-            <article class="poster-document arena" style="width: 3456px; height: 4608px"
-                     data-width="3456" data-height="4608">
-                <h1>Research poster</h1>
-            </article>
+            <div id="poster-container">
+                <div id="poster-stage">
+                    <div id="poster-canvas" style="width:3456px;height:4608px;--poster-font-scale:1">
+                        <div id="poster-content">
+                            <header id="poster-header"></header>
+                            <div id="layout" class="layout three-column"
+                                 data-initial-geometry='REPLACE_GEOMETRY'>
+                                <div id="pane0" class="pane">
+                                    <div class="section"><h2>First</h2></div>
+                                    <div class="section"><h2>Second</h2></div>
+                                </div>
+                                <div id="pane1" class="pane"><div class="section"><h2>Third</h2></div></div>
+                                <div id="pane2" class="pane"><div class="section"><h2>Fourth</h2></div></div>
+                                <div id="pane3" class="pane horizontal">
+                                    <div class="section"><h2>Fifth</h2></div>
+                                    <div class="section"><h2>Sixth</h2></div>
+                                    <div class="section"><h2>Seventh</h2></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </body></html>
-        """
+        """.replace("REPLACE_GEOMETRY", geometry)
         pdf = await poster_rendering.poster_pdf(rendered)
         self.assertTrue(pdf.startswith(b"%PDF-"))
         document = pypdfium2.PdfDocument(pdf)
         try:
             self.assertEqual(len(document), 1)
             self.assertEqual(document[0].get_size(), (2592, 3456))
+            text = document[0].get_textpage().get_text_range()
+            self.assertEqual(
+                [word for word in (
+                    "First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh",
+                )
+                 if word in text],
+                ["First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh"],
+            )
+            image = document[0].render(scale=0.05).to_pil().convert("RGB")
+            self.assertLess(min(min(channel.getextrema()) for channel in image.split()), 255)
         finally:
             document.close()

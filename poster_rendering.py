@@ -2,6 +2,7 @@
 
 import math
 from pathlib import Path
+import re
 from urllib.parse import urlsplit
 
 from lxml import etree, html as dom
@@ -173,7 +174,8 @@ async def poster_thumbnail(rendered: str) -> bytes:
 async def poster_pdf(rendered: str, *, logo: str | None = None) -> bytes:
     """Render the owner's saved poster layout as a single print-ready PDF page."""
     document = dom.document_fromstring(rendered)
-    canvas = document.get_element_by_id("poster-canvas") if document.getroottree().find(".//div[@id='poster-canvas']") is not None else None
+    canvases = document.xpath('//*[@id="poster-canvas"]')
+    canvas = canvases[0] if canvases else None
     print_render = canvas is not None
     if print_render:
         width, height = _editor_canvas_size(canvas)
@@ -182,17 +184,19 @@ async def poster_pdf(rendered: str, *, logo: str | None = None) -> bytes:
             container = container.getparent()
         if container.get("id") != "poster-container":
             raise ValueError("Poster layout has no printable container")
-        stage = canvas.getparent()
-        if stage is None:
+        stage = canvas
+        while stage.getparent() is not None and stage.get("id") != "poster-stage":
+            stage = stage.getparent()
+        if stage.get("id") != "poster-stage" or stage.getparent() is not container:
             raise ValueError("Poster layout has no printable stage")
         for sibling in list(document.find("body")):
-            if sibling is not container:
+            if sibling.get("id") != "poster-container":
                 sibling.getparent().remove(sibling)
         for sibling in list(container):
-            if sibling is not stage:
+            if sibling.get("id") != "poster-stage":
                 sibling.getparent().remove(sibling)
         for sibling in list(stage):
-            if sibling is not canvas:
+            if sibling.get("id") != "poster-canvas":
                 sibling.getparent().remove(sibling)
         document.find("body").set("data-print-render", "true")
         container.attrib["style"] = f"display:block;width:{width}px;height:{height}px;overflow:hidden"
@@ -249,7 +253,9 @@ async def poster_pdf(rendered: str, *, logo: str | None = None) -> bytes:
         f"html, body {{ width: {width}px; height: {height}px; margin: 0; }}"
         + (
             " body { display: block; overflow: hidden; background: #fff; } "
-            "#poster-container { flex: none; }"
+            "#poster-container { flex: none; } "
+            "body[data-print-render='true'] #poster-container, "
+            "body[data-print-render='true'] #poster-container * { visibility: visible; }"
             if print_render else ""
         )
     )

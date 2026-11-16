@@ -7,6 +7,7 @@
     const header = document.getElementById("poster-header");
     const status = document.getElementById("content-save-status");
     let geometry = JSON.parse(layout.dataset.initialGeometry);
+    const printRender = document.body.dataset.printRender === "true";
     let unsaved = false;
 
     const children = element => [...element.children]
@@ -112,9 +113,14 @@
         await document.fonts.ready;
         if (geometry) {
             apply();
+            if (printRender) return;
         } else {
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             geometry = measure();
+            if (printRender) {
+                apply();
+                return;
+            }
             unsaved = true;
             apply();
             try {
