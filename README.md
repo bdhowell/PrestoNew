@@ -72,7 +72,41 @@ psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-analysis
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-thumbnail.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/image-assessment.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-image-classification.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/auto-fit.sql
 ```
+
+### Poster auto-fit
+
+The editor's Auto-fit button fits overflowing sections; the section context menu
+fits only the selected section. Both use the owner-scoped JSON endpoint
+`POST /magic/{pid}/auto-fit` with optional canonical `sections` names.
+Purchased posters cannot be changed.
+
+Auto-fit uses `gpt-4o-mini` for shortening and clarity evaluation
+(`OPENAI_API_KEY` required). It measures each candidate in Playwright and accepts
+only non-overflowing revisions with an `excellent` clarity rating and no more
+than `AUTOFIT_MINIMUM_WORD_PERCENTAGE` percent unused vertical space (default 15,
+valid range 0-100). Each section has at most 12 fitting attempts; an impossible
+fit retains its prior text and Wikkit suggests alternatives.
+Word targets guide the model rather than determining acceptance: a slightly
+longer summary is still measured and clarity-checked. Output that does not
+shorten the source is retried with a smaller target within the same attempt
+limit; empty or excessively large output and changed formulas remain errors.
+
+The repeatable [auto-fit migration](schema/auto-fit.sql) must be applied before
+deployment, using a database role that owns the table. It also upgrades an empty
+legacy `sizings` table; existing metadata-only rows must be backfilled or archived
+first. Grant the application's database role `SELECT`, `INSERT`, and `UPDATE` on
+`sizings` when the migration is applied by another role.
+`sizings` stores accepted revision HTML, actual word counts,
+full-length source text, source hashes, and timestamped versions. Repeated
+auto-fit uses the preserved source, while edited text starts a new source lineage.
+Cached revisions are rendered and evaluated again before reuse. Revisions and
+history are committed together only if the saved poster, sections, and layout
+settings remain unchanged. The `poster-revisions` server-client command updates
+the editor without overwriting newer local edits. Pending editor changes are saved
+to the displayed poster before fitting; the save response identifies the
+sanitized content so the revision can be matched against the saved version.
 
 The graphics evaluation page skips to `/layout/edit` when every graphic has
 current assessments for its Materials and Methods and Results sections.

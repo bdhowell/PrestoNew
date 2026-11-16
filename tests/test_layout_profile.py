@@ -43,12 +43,12 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
                 oversized_graphics: [{section: "results", id: "graphic"}],
             };
             window.wikkit = {say: message => feedback.push(message)};
-            window.fetch = async url => {
+            window.fetch = async (url, options) => {
                 requests.push(url);
                 return {
                     ok: true,
                     json: async () => url === "/layout/content"
-                        ? {ok: true} : profileResponse,
+                        ? {ok: true, content: JSON.parse(options.body).content} : profileResponse,
                 };
             };
         }""")
@@ -104,13 +104,13 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
             }));
         }""")
         self.assertEqual(await self.page.locator("#layout-context-menu [role=menuitem]").all_text_contents(), [
-            "Auto-fit (not available yet)",
+            "Auto-fit",
             "Resize graphics (not available yet)",
             "Adjust text content",
         ])
         self.assertEqual(await self.page.locator(
             "#layout-context-menu button:disabled",
-        ).count(), 2)
+        ).count(), 1)
         self.assertIn("wand-cursor.png", await self.page.locator("#results").evaluate(
             "element => getComputedStyle(element).cursor",
         ))
@@ -324,10 +324,12 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
             window.feedback = [];
             window.profileRequests = 0;
             window.wikkit = {say: message => feedback.push(message)};
-            window.fetch = async url => {
+            window.fetch = async (url, options) => {
                 if (url === "/layout/content") {
                     return new Promise(resolve => {
-                        window.finishSave = () => resolve({ok: true, json: async () => ({ok: true})});
+                        window.finishSave = () => resolve({
+                            ok: true, json: async () => ({ok: true, content: JSON.parse(options.body).content}),
+                        });
                     });
                 }
                 profileRequests++;

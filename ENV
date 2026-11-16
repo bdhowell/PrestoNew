@@ -60,3 +60,6 @@ CHAT_WORD_INTERVAL=300 # milliseconds
 CHAT_WORD_DEVIATION=100 # milliseconds
 
 SYSTEM_PURGE_ENABLED=true # allow /system/purge endpoint to be used locally only
+
+AUTOFIT_MINIMUM_WORD_PERCENTAGE=15
+

@@ -21,6 +21,7 @@
     {% include "page_assets.html" %}
     <script src="/static/javascript/wikkit.js"></script>
     {% if request.scope.get("session_monitor") %}
+    <script src="/static/javascript/common.js" defer></script>
     <script src="/static/javascript/sessions.js" defer></script>
     {% endif %}
     <script>
