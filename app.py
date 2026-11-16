@@ -17,7 +17,7 @@ load_dotenv(BASE_DIR / ".env")
 import layout  # noqa: E402
 import magic  # noqa: E402
 from content import SourceFiles  # noqa: E402
-from routers import account, conferences, content, posters, system, wikkit  # noqa: E402  (loaded after .env so routers see its settings)
+from routers import account, conferences, content, images, posters, system, wikkit  # noqa: E402  (loaded after .env so routers see its settings)
 from identity import identity_context  # noqa: E402
 from posters import poster_context  # noqa: E402
 from memory import memory_context  # noqa: E402
@@ -57,6 +57,7 @@ app.include_router(magic.router)
 app.include_router(content.router)
 app.include_router(conferences.router)
 app.include_router(system.router)
+app.include_router(images.router)
 
 
 @app.get("/", include_in_schema=False)
