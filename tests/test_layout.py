@@ -470,11 +470,11 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["location"], "/posters/list")
         self.store.get.assert_not_awaited()
 
-    def test_purchased_poster_redirects_to_view(self) -> None:
+    def test_purchased_poster_redirects_to_open_for_download(self) -> None:
         self.store.get.return_value = replace(DRAFT, purchased=True)
         response = self.client.get("/layout/layout", follow_redirects=False)
         self.assertEqual(response.status_code, 303)
-        self.assertEqual(response.headers["location"], "/posters/11/view")
+        self.assertEqual(response.headers["location"], "/posters/11/open")
 
     def test_explicit_poster_is_selected_before_saving_resumption(self) -> None:
         self.session.clear()

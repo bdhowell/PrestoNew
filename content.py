@@ -286,6 +286,97 @@ class SourceFiles:
 
 
 class SourceStore(PosterStore):
+    async def qr_exists(self, uid: int, pid: int) -> bool:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT p.moreinfopng IS NOT NULL OR EXISTS "
+                "(SELECT 1 FROM source s WHERE s.pid = p.pid AND s.kind = 'qrcode') "
+                "FROM poster p WHERE p.uid = %s AND p.pid = %s",
+                (uid, pid),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise SourceConflictError("This poster is no longer available.")
+        return bool(row[0])
+
+    async def save_qr(self, uid: int, pid: int, data: bytes, *, replace: bool) -> str:
+        """Store the QR source and its section placement in one database transaction."""
+        import graphics
+
+        width, height = await run_in_threadpool(processing.image_dimensions, data)
+        files = SourceFiles()
+        written: list[str] = []
+        old_uri: str | None = None
+        connection = await self._connect()
+        try:
+            async with connection:
+                cursor = await connection.execute(
+                    "SELECT p.moreinfopng FROM poster p WHERE p.uid = %s AND p.pid = %s "
+                    "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) FOR UPDATE",
+                    (uid, pid),
+                )
+                poster = await cursor.fetchone()
+                if poster is None:
+                    raise SourceConflictError("This poster is no longer available for editing.")
+                cursor = await connection.execute(
+                    "SELECT sid, storage_uri FROM source WHERE pid = %s AND kind = 'qrcode' FOR UPDATE",
+                    (pid,),
+                )
+                existing = await cursor.fetchone()
+                if (existing is not None or poster[0] is not None) and not replace:
+                    raise SourceConflictError("A QR code already exists. Confirm replacement first.")
+                if existing is None:
+                    asset = processing.Asset(
+                        "qrcode.png", data, "image/png", "qrcode", width=width, height=height,
+                    )
+                    source = await self._insert_source(
+                        connection, files, written, pid, asset, None, extracted=True, deduplicate=False,
+                    )
+                    sid = source.sid
+                else:
+                    sid, old_uri = existing
+                    fileid = uuid4()
+                    uri = await run_in_threadpool(files.put, fileid, data, "image/png")
+                    written.append(uri)
+                    await connection.execute(
+                        "UPDATE source SET filename = 'qrcode.png', mimetype = 'image/png', "
+                        "size = %s, height = %s, width = %s, fileid = %s, storage_uri = %s, "
+                        "hash = %s, text = NULL, extracted = TRUE, updated = now() WHERE sid = %s",
+                        (len(data), height, width, fileid, uri, source_hash(data), sid),
+                    )
+                cursor = await connection.execute(
+                    "SELECT content FROM section WHERE pid = %s AND which = 'additional information' FOR UPDATE",
+                    (pid,),
+                )
+                row = await cursor.fetchone()
+                section = graphics.replace_qr(row[0] if row and row[0] else "", sid)
+                await connection.execute(
+                    "INSERT INTO section (pid, which, content, updated) "
+                    "VALUES (%s, 'additional information', %s, now()) "
+                    "ON CONFLICT (pid, which) DO UPDATE SET content = excluded.content, "
+                    "updated = excluded.updated, embedding = NULL",
+                    (pid, section),
+                )
+                await connection.execute(
+                    "UPDATE poster SET moreinfopng = %s, updated = now(), embedding = NULL WHERE pid = %s",
+                    (data, pid),
+                )
+        except BaseException:
+            for uri in written:
+                try:
+                    await run_in_threadpool(files.delete, uri)
+                except (OSError, GoogleAPIError, GoogleAuthError):
+                    logger.exception("Could not remove failed QR source %s", uri)
+            raise
+        if old_uri:
+            try:
+                await run_in_threadpool(files.delete, old_uri)
+            except (OSError, GoogleAPIError, GoogleAuthError, ValueError):
+                logger.exception("Could not remove replaced QR source %s", old_uri)
+        self.invalidate(uid, pid)
+        return section
+
     async def delete(self, uid: int, pid: int) -> bool:
         self.invalidate(uid, pid)
         connection = await self._connect()
@@ -450,7 +541,7 @@ class SourceStore(PosterStore):
         "s.sid, coalesce(s.filename, parent.filename, 'Untitled source'), s.mimetype, "
         "s.size, s.added::text, s.parent, "
         "CASE WHEN s.kind = 'math expression' THEN s.text ELSE s.description END, "
-        "s.width, s.height, s.kind, s.extracted"
+        "s.width, s.height, s.kind, CASE WHEN s.kind = 'qrcode' THEN TRUE ELSE s.extracted END"
     )
 
     async def list_sources(self, uid: int, pid: int) -> list[Source]:
@@ -536,7 +627,7 @@ class SourceStore(PosterStore):
                 if row is None:
                     raise SourceConflictError("Source file not found for this poster.")
                 filename, uri, kind, extracted = row
-                if extracted:
+                if extracted or kind == "qrcode":
                     return
                 data = await run_in_threadpool(files.read, uri)
                 if kind in ("image", "logo"):
@@ -631,7 +722,7 @@ class SourceStore(PosterStore):
             cursor = await connection.execute(
                 "SELECT CASE WHEN s.parent IS NULL THEN s.text END, s.mimetype "
                 "FROM source s JOIN poster p USING (pid) "
-                "WHERE p.uid = %s AND p.pid = %s AND s.kind <> 'thumbnail' "
+                "WHERE p.uid = %s AND p.pid = %s AND s.kind NOT IN ('thumbnail', 'qrcode') "
                 "ORDER BY s.added, s.sid", (uid, pid),
             )
             rows = await cursor.fetchall()
@@ -650,7 +741,7 @@ class SourceStore(PosterStore):
                 return await self.source_text(uid, pid, connection)
         cursor = await connection.execute(
             "SELECT s.sid, s.filename, s.text, s.mimetype, s.extracted FROM source s JOIN poster p USING (pid) "
-            "WHERE p.uid = %s AND p.pid = %s AND s.parent IS NULL AND s.kind <> 'thumbnail' "
+            "WHERE p.uid = %s AND p.pid = %s AND s.parent IS NULL AND s.kind NOT IN ('thumbnail', 'qrcode') "
             "ORDER BY s.added, s.sid",
             (uid, pid),
         )
@@ -729,7 +820,7 @@ class SourceStore(PosterStore):
                 "a.section::text, a.rating, a.explanation, a.criteria, "
                 "a.supported_elements, a.limitations, a.suggested_improvements, a.created, "
                 "(SELECT max(root.updated) FROM source root WHERE root.pid = s.pid "
-                "AND root.parent IS NULL AND root.kind <> 'thumbnail'), "
+                "AND root.parent IS NULL AND root.kind NOT IN ('thumbnail', 'qrcode')), "
                 "(SELECT section.updated FROM section "
                 "WHERE section.pid = s.pid AND section.which::text = a.section::text), s.updated, "
                 "s.text, ARRAY(SELECT formula.text FROM source formula "
@@ -804,7 +895,7 @@ class SourceStore(PosterStore):
                 "a.section::text, a.rating, a.explanation, a.criteria, "
                 "a.supported_elements, a.limitations, a.suggested_improvements, a.created, "
                 "(SELECT max(root.updated) FROM source root WHERE root.pid = s.pid "
-                "AND root.parent IS NULL AND root.kind <> 'thumbnail'), "
+                "AND root.parent IS NULL AND root.kind NOT IN ('thumbnail', 'qrcode')), "
                 "(SELECT max(section.updated) FROM section "
                 "WHERE section.pid = s.pid AND section.which IN "
                 "('materials and methods', 'results')), s.updated, s.text "
@@ -815,7 +906,7 @@ class SourceStore(PosterStore):
                 "WHERE p.uid = %s AND p.pid = %s AND s.width IS NOT NULL "
                 "AND s.height IS NOT NULL AND s.storage_uri IS NOT NULL "
                 "AND s.mimetype IN ('image/png', 'image/jpeg') "
-                "AND s.kind <> 'thumbnail' "
+                "AND s.kind NOT IN ('thumbnail', 'qrcode') "
                 "ORDER BY (s.parent IS NOT NULL), s.sid, a.section",
                 (f"{EVALUATED_MATH_FILENAME_PREFIX}%", uid, pid),
             )
@@ -891,7 +982,7 @@ class SourceStore(PosterStore):
                     "WHERE p.uid = %s AND p.pid = %s AND s.sid = %s "
                     "AND s.width IS NOT NULL AND s.height IS NOT NULL "
                     "AND s.mimetype IN ('image/png', 'image/jpeg') "
-                    "AND s.kind <> 'thumbnail' "
+                    "AND s.kind NOT IN ('thumbnail', 'qrcode') "
                     "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
                     "FOR UPDATE OF p, s", (uid, pid, sid),
                 )

@@ -89,6 +89,11 @@
     let placeholder = null;
     let insertingCode = false;
 
+    window.posterEditorSelection = () => ({
+        editor: activeEditor,
+        range: savedRange?.cloneRange() || null,
+    });
+
     function editorFor(range) {
         const element = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
             ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
@@ -195,12 +200,14 @@
         }
         let value = "";
         let command = "insertText";
+        let richHTML = null;
         if (navigator.clipboard.read) {
             const items = await navigator.clipboard.read();
             const rich = items.find(item => item.types.includes("text/html"));
             const plain = items.find(item => item.types.includes("text/plain"));
             if (rich) {
-                value = clipboardHTML(await (await rich.getType("text/html")).text());
+                richHTML = await (await rich.getType("text/html")).text();
+                value = clipboardHTML(richHTML);
                 command = "insertHTML";
             } else if (plain) {
                 value = await (await plain.getType("text/plain")).text();
@@ -217,6 +224,7 @@
                 .some(key => savedRange[key] !== range[key])) {
             throw new Error("The selection changed. Select where to paste and try again.");
         }
+        if (richHTML && window.pastePosterGraphic?.(editor, range, richHTML)) return;
         editor.focus({preventScroll: true});
         const selection = window.getSelection();
         selection.removeAllRanges();

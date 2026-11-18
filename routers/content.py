@@ -26,6 +26,7 @@ import identity
 import posters
 import source_processing
 import elucidation
+import graphics as poster_graphics
 from markupsafe import Markup
 from wikkit import Chatbot
 from routers import wikkit
@@ -318,7 +319,8 @@ async def evaluate_page(request: Request) -> Response:
         )
     message = (
         f"<p>Okay, {name}, I&rsquo;m reviewing the {' and '.join(parts)}.</p>"
-        f"<p>Please give me a few minutes to evaluate them&mdash;I&rsquo;m predicting {round(num2words.num2words(len(graphics) * 1/3),1)} minutes.</p>"
+        f"<p>Please give me a few minutes to evaluate them&mdash;I&rsquo;m predicting "
+        f"{num2words.num2words(round(len(graphics) / 3, 1))} minutes.</p>"
         if parts else None
     )
     return render_page(
@@ -537,7 +539,7 @@ async def review_page(request: Request) -> Response:
         graphics=graphics,
         graphics_data=[asdict(graphic) for graphic in graphics],
         sections=[
-            (which, label, Markup(elucidation.clean_html(values.get(which, ""))))
+            (which, label, Markup(poster_graphics.clean_section(values.get(which, ""))))
             for which, label in REVIEW_SECTIONS
         ],
     )
@@ -595,6 +597,11 @@ async def review_workflow(bot: Chatbot) -> None:
                 continue
             sections, _ = await posters.store().content(uid, pid)
             expected = dict(sections).get(which)
+            if poster_graphics.graphic_ids(expected or ""):
+                await bot.send({
+                    "say": "<p>Please revise this section manually; I cannot yet preserve its graphics when rewriting it.</p>",
+                })
+                continue
             original = elucidation.clean_html(expected or "")
             await bot.send({
                 "say": f"<p>I&rsquo;ll revise the {which} section.</p>",

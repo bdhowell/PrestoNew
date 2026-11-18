@@ -127,13 +127,72 @@ values while converting `poster.width` and `poster.height` to double precision.
 
 # Graphics Handling
 
-Within the context of this application, _graphics_ may be PNGs or JPGs; SVG; Latex or ASCII Math rendered with MathJaxo; or charts rendered with Chart.js.
+We're creating logic for inserting and managing graphics within different sections of a poster.
 
-Graphics are inserted into section text and may be cut, copied, or pasted.
+A section is active when the user has clicked into the contentEditable portion of the poster.
 
-## Graphic Placement
+Within the context of this application, _graphics_ may be PNGs or JPGs; SVG; Latex or ASCII Math rendered with MathJax; or charts rendered with Chart.js.
 
-Graphics can snap to eight locations within the section:
+## Graphics Insertion
+
+When #image is clicked:
+    If no section is active:
+        Wikkit asks the user to select a section into which to insert the graphic.
+        Return
+    Elif the active section == "Additional Information":
+        Wikkit tells the user that only internally generated QR codes can be inserted into the "Additional Information" section.
+        If there is already an existing QR code for the poster then
+            Wikkit informs the user that a QR code already exists for the poster.
+            Wikkit asks the user whether they want to replace the existing QR code.
+            If the user answers "No":
+                Wikkit says "Okay, we won&rsquo;t replace the existing QR code."
+                Return
+        Else:
+            Wikkit asks the user whether they want to insert an internally generated QR code.
+            If the user answers "No":
+                Return
+
+        Wikkit prompts the user for the URL of the generated QR code.
+        If the user provides a URL:
+            The QR code is generated from the provided URL.
+            Add the QR code as a source in the database.
+
+        Insert an at the end of the "Additional Information" section, deleting any existing QR code.
+    
+    If the active section is in ["Literature Cited", "Acknowledgements"]:
+        Wikkit informs the user that graphics cannot be inserted into the "Literature Cited" or "Acknowledgements" sections.
+        Wikkit adds that those sections are reserved for specific content and should be kept as brief as possible.
+        Return
+    
+    Display a dialog 
+        Showing a scrollable grid of graphics thumbnails suitable for the active section.
+		Clicking on a thumbnail highlights it for insertion into the active section.
+		Double-clicking a thumbnail shows a full-size preview of the graphic.
+		Clicking the "Insert" button inserts the highlighted graphic into the active section.
+		Clicking the "Cancel" button closes the dialog without inserting a graphic.
+
+## Graphics Rendering
+
+
+All graphics can be resized; and dragged, cut, copy, and pasted within the same section or between acceptable sections. 
+
+* Images are rendered using <img> for PNG and JPEG graphics, with appropriate `src` attributes pointing to the served image URLs.
+* SVG graphics are rendered using <svg> elements, with the SVG content embedded directly or referenced via `src` attributes.
+* Charts are rendered using <canvas> elements, with the chart data and configuration provided to Chart.js for rendering.
+* Math rendered with MathJax is displayed using <span> or <div> elements with the appropriate MathJax classes and content.
+
+## Graphics Dimensions
+
+After resizing a graphic, if the pixel density drops below GRAPHICS_SAFE_DPI:
+
+- Flash the graphic to indicate it may be too low resolution.
+- Wikkit says:
+  f"""
+  {identity.user_name}, your graphic is likely to be blurry to most viewers.
+  """
+## Graphics Placement
+
+Graphics can snap to eight locations within a section:
 
 1. top-left,
 2. top-center,
@@ -147,17 +206,11 @@ Graphics can snap to eight locations within the section:
 If a graphic is not snapped to one of those eight points, then it is free-floating within the text.
 If a graphic is between two paragraphs and not snapped, then the graphic is implicitly centered vertically.
 
+Text wraps around free-floating graphics according to their placement and the surrounding text flow.
+Text wraps around snapped graphics according to their placement and the surrounding text flow.
+
 Clicking a graphic toggles resize handles at the corners and centered along each edge.
 
-## Graphics Dimensions
-
-After resizing a graphic, if the pixel density drops below GRAPHICS_SAFE_DPI:
-
-- Flash the graphic to indicate it may be too low resolution.
-- Wikkit says:
-  f"""
-  {identity.user_name}, your graphic is likely to be blurry to most viewers.
-  """
 
 ## Evaluating Poster Graphics
 
@@ -166,6 +219,10 @@ After elucidation succeeds, route the user to `/content/evaluate`. Evaluate owne
 Persist each image evaluation in the `assessment` rows for its Materials and Methods and Results sections. Use the source and section update timestamps to detect stale assessments; keep the image classification, description, and any extracted math expressions in the existing source metadata and child source records. Apply `schema/source-analysis-cleanup.sql` to existing databases to remove obsolete source-analysis columns.
 
 Wikkit reports per-image progress, then displays uploaded and extracted graphics in separate groups. A graphic is suitable when either its Materials and Methods or Results rating is `significantly`, `highly`, or `definitively`; otherwise it is not suitable. If no eligible graphics exist, Wikkit explains that and redirects to `/conferences/query`.
+
+## Graphics Suitability
+
+
 
 ## On Vertical Overflow
 

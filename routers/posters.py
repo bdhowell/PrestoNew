@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from playwright.async_api import Error as PlaywrightError
 
 import content
-import elucidation
+import graphics
 import identity
 import posters
 import poster_rendering
@@ -54,7 +54,8 @@ async def _ensure_thumbnail(request: Request, uid: int, pid: int) -> None:
         if state is None or not state.stale:
             return
         preview_response = await preview(request, pid)
-        image = await poster_rendering.poster_thumbnail(preview_response.body.decode("utf-8"))
+        rendered = await graphics.embed_sources(preview_response.body.decode("utf-8"), uid, pid)
+        image = await poster_rendering.poster_thumbnail(rendered)
         if await sources.save_thumbnail(uid, pid, image, state.revision):
             return
     raise content.SourceConflictError("The poster changed while its thumbnail was being generated.")
@@ -65,9 +66,15 @@ async def poster_list(
     request: Request, q: str = Query("", max_length=500),
     sort: posters.Sort = "name", direction: posters.Direction = "asc",
     view: Literal["list", "grid"] = "list",
+    download: int | None = Query(default=None, gt=0),
 ) -> Response:
     if getattr(request.state, "user_id", None) is None:
         return RedirectResponse("/account/signin", status_code=303)
+    download_poster = None
+    if download is not None:
+        download_poster = await _owned(request, download)
+        if not download_poster.purchased:
+            return RedirectResponse(f"/posters/{download}/open", status_code=303)
     query = " ".join(q.split())
     embedding, notice = await posters.query_embedding(query) if query else (None, None)
     try:
@@ -92,6 +99,7 @@ async def poster_list(
     return render_page(
         request, "posters/list.html", "posters-list",
         items=items, q=query, sort=sort, direction=direction, view=view, notice=notice,
+        download_poster=download_poster,
     )
 
 
@@ -195,7 +203,7 @@ async def open_poster(request: Request, pid: int) -> RedirectResponse:
         return RedirectResponse("/account/signin", status_code=303)
     poster = await _owned(request, pid)
     if poster.purchased:
-        return RedirectResponse(f"/posters/{pid}/view", status_code=303)
+        return RedirectResponse(f"/posters/list?download={pid}", status_code=303)
     _select(request, pid)
     return RedirectResponse("/layout/edit", status_code=303)
 
@@ -269,16 +277,6 @@ async def _delete_confirmed(request: Request, uid: int, pid: int) -> JSONRespons
     })
 
 
-@router.get("/{pid}/view", response_class=HTMLResponse)
-async def view_poster(request: Request, pid: int) -> Response:
-    if getattr(request.state, "user_id", None) is None:
-        return RedirectResponse("/account/signin", status_code=303)
-    poster = await _owned(request, pid)
-    if not poster.purchased:
-        return RedirectResponse(f"/posters/{pid}/open", status_code=303)
-    return render_page(request, "posters/view.html", "posters-view", poster=poster)
-
-
 @router.get("/{pid}/thumbnail")
 async def poster_thumbnail(request: Request, pid: int) -> Response:
     uid = _uid(request)
@@ -304,7 +302,7 @@ async def preview(request: Request, pid: int) -> Response:
             headers={"Cache-Control": "private, no-store"},
         )
     sections, authors = await posters.store().content(_uid(request), pid)
-    sections = [(which, Markup(elucidation.clean_html(text))) for which, text in sections]
+    sections = [(which, Markup(graphics.clean_section(text))) for which, text in sections]
     width, height = poster.inches
     return templates.TemplateResponse(
         request, "posters/document.html",

@@ -2,6 +2,55 @@
     "use strict";
 
     const message = document.querySelector(".poster-message");
+    let downloading = false;
+
+    async function downloadPoster(link) {
+        if (downloading) return;
+        downloading = true;
+        message.textContent = "Preparing your printable PDF...";
+        try {
+            const endpoint = new URL(link.dataset.downloadUrl || link.href, location.href);
+            const response = await fetch(endpoint.href, {credentials: "same-origin"});
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || "Your poster could not be downloaded. Please try again.");
+            }
+            if (response.headers.get("Content-Type")?.split(";")[0] !== "application/pdf") {
+                throw new Error("The server did not return a printable PDF. Please sign in and try again.");
+            }
+            const url = URL.createObjectURL(await response.blob());
+            const download = document.createElement("a");
+            download.href = url;
+            download.download = `poster-${endpoint.searchParams.get("pid")}.pdf`;
+            document.body.append(download);
+            download.click();
+            download.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            const name = document.createElement("span");
+            name.textContent = link.dataset.posterName;
+            await window.wikkit.say(`<p>I&rsquo;ve downloaded a copy of ${name.innerHTML}.</p>`);
+            message.textContent = "";
+        } catch (error) {
+            console.error("Poster download failed", error);
+            message.textContent = error.message;
+        } finally {
+            downloading = false;
+        }
+    }
+
+    for (const link of document.querySelectorAll("[data-download-poster]")) {
+        link.addEventListener("click", event => {
+            event.preventDefault();
+            downloadPoster(link);
+        });
+    }
+    const automatic = document.querySelector("[data-auto-download]");
+    if (automatic) {
+        const url = new URL(location.href);
+        url.searchParams.delete("download");
+        history.replaceState(null, "", url);
+        downloadPoster(automatic);
+    }
 
     async function post(url, body) {
         const response = await fetch(url, {

@@ -210,6 +210,9 @@ async def poster_pdf(rendered: str, *, logo: str | None = None) -> bytes:
 
     for link in document.xpath("//link[@rel='stylesheet']"):
         href = link.get("href", "")
+        url = urlsplit(href)
+        if url.scheme == "https" and url.hostname == "fonts.googleapis.com":
+            continue
         if not href.startswith("/static/"):
             link.getparent().remove(link)
             continue
@@ -228,9 +231,10 @@ async def poster_pdf(rendered: str, *, logo: str | None = None) -> bytes:
                 del script.attrib["src"]
             elif src != "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js":
                 script.getparent().remove(script)
-        geometry_script = etree.Element("script")
-        geometry_script.text = (ROOT / "static/javascript/layout-geometry.js").read_text()
-        document.find("body").append(geometry_script)
+        for name in ("layout-geometry", "layout-resize"):
+            script = etree.Element("script")
+            script.text = (ROOT / f"static/javascript/{name}.js").read_text()
+            document.find("body").append(script)
     else:
         posters = document.xpath(
             ".//article[contains(concat(' ', normalize-space(@class), ' '), ' poster-document ')]"
@@ -267,13 +271,28 @@ async def poster_pdf(rendered: str, *, logo: str | None = None) -> bytes:
                 viewport={"width": round(width), "height": round(height)},
                 device_scale_factor=1,
             )
+            failed_assets: list[str] = []
+            page.on("requestfailed", lambda request: failed_assets.append(request.url))
+            page.on("response", lambda response: failed_assets.append(response.url) if not response.ok else None)
             await page.set_content(dom.tostring(document, encoding="unicode"), wait_until="load")
+            if not await page.evaluate(
+                "() => Array.from(document.querySelectorAll('link[rel=stylesheet]')).every(link => link.sheet)"
+            ):
+                raise ValueError("Poster font stylesheet could not be loaded")
             if print_render:
-                await page.evaluate("() => window.posterGeometryReady")
+                await page.evaluate("() => window.posterSizingReady")
             await page.evaluate("""async () => {
                 await document.fonts.ready;
+                if (Array.from(document.fonts).some(font => font.status === "error")) {
+                    throw new Error("Poster fonts could not be loaded.");
+                }
                 if (window.MathJax?.startup?.promise) await window.MathJax.startup.promise;
             }""")
+            if any(
+                urlsplit(url).hostname in ("fonts.googleapis.com", "fonts.gstatic.com")
+                for url in failed_assets
+            ):
+                raise ValueError("Poster fonts could not be loaded")
             return await page.pdf(
                 prefer_css_page_size=True, print_background=True,
                 margin={"top": 0, "right": 0, "bottom": 0, "left": 0},

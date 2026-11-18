@@ -5,7 +5,7 @@ import html
 import math
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import psycopg
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -14,10 +14,11 @@ from lxml import etree
 from lxml import html as dom
 from playwright.async_api import Error as PlaywrightError
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 import common
 import content
-import elucidation
+import graphics
 import identity
 import posters
 from poster_rendering import balance_header_widths
@@ -119,7 +120,7 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
     if poster is None:
         raise HTTPException(404, "Poster not found")
     sections, authors = await posters.store().content(uid, pid)
-    values = {which: elucidation.clean_html(value) for which, value in sections}
+    values = {which: graphics.clean_section(value) for which, value in sections}
     values["authors"] = ", ".join(
         html.escape(name).replace(" ", "&nbsp;") + (f"&nbsp;({html.escape(affiliation)})" if affiliation else "")
         for name, affiliation in authors
@@ -148,6 +149,7 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
     layout_element.set("data-resize-settings", sizing.model_dump_json())
     layout_element.set("data-pid", str(pid))
     layout_element.set("data-template", template)
+    layout_element.set("data-graphics-safe-dpi", str(graphics.GRAPHICS_SAFE_DPI))
     layout_element.set("data-profile-validation-interval", str(profile_validation_interval()))
     geometry = (poster.layout_geometry or {}).get(template)
     layout_element.set("data-initial-geometry", (
@@ -256,7 +258,7 @@ async def edit_layout(
             raise HTTPException(404, "Poster not found")
         return RedirectResponse("/posters/list", status_code=303)
     if poster.purchased:
-        return RedirectResponse(f"/posters/{poster.pid}/view", status_code=303)
+        return RedirectResponse(f"/posters/{poster.pid}/open", status_code=303)
 
     if pid is not None:
         session = identity.session(request)
@@ -377,9 +379,13 @@ async def update_content(request: Request) -> JSONResponse:
     ):
         raise HTTPException(422, "The original section content is invalid or too long.")
 
-    cleaned = elucidation.clean_html(value)
     try:
         poster = await owned(request, pid, draft=True)
+        sources = (
+            await content.store().graphic_sources(uid_for(request), poster.pid)
+            if graphics.graphic_ids(value) else None
+        )
+        cleaned = graphics.clean_section(value, sources=sources, section=which)
         if "expected" in data:
             saved = await posters.store().save_section_if_unchanged(
                 uid_for(request), poster.pid, which, cleaned, expected,
@@ -388,7 +394,9 @@ async def update_content(request: Request) -> JSONResponse:
             saved = await posters.store().save_section(
                 uid_for(request), poster.pid, which, cleaned,
             )
-    except psycopg.Error:
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
+    except STORAGE_ERRORS:
         logger.exception("Could not save poster section %s", which)
         raise HTTPException(503, "Your changes could not be saved.") from None
     if not saved:
@@ -483,6 +491,24 @@ async def update_theme(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@router.get("/graphics")
+async def available_graphics(
+    request: Request, section: str, pid: int = Query(gt=0),
+) -> JSONResponse:
+    if section not in graphics.MATH_SECTIONS | graphics.ASSESSED_SECTIONS:
+        raise HTTPException(422, "Graphics are not available for this section.")
+    try:
+        poster = await owned(request, pid, draft=True)
+        sources = await content.store().graphic_sources(uid_for(request), poster.pid)
+    except STORAGE_ERRORS:
+        logger.exception("Could not load poster graphics for section %s", section)
+        raise HTTPException(503, "Your graphics could not be loaded. Please try again.") from None
+    return JSONResponse({
+        "ok": True,
+        "graphics": [asdict(item) for item in graphics.suitable_graphics(section, sources)],
+    }, headers=PRIVATE)
+
+
 @router.get("/qrcode")
 async def qrcode(request: Request, pid: int = Query(gt=0)) -> Response:
     try:
@@ -493,6 +519,40 @@ async def qrcode(request: Request, pid: int = Query(gt=0)) -> Response:
     if not poster.moreinfopng:
         raise HTTPException(404, "Poster QR code not found")
     return Response(bytes(poster.moreinfopng), media_type="image/png", headers=PRIVATE)
+
+
+@router.get("/qrcode/status")
+async def qrcode_status(request: Request, pid: int = Query(gt=0)) -> JSONResponse:
+    try:
+        poster = await owned(request, pid, draft=True)
+        exists = await content.store().qr_exists(uid_for(request), poster.pid)
+    except content.SourceConflictError as error:
+        raise HTTPException(409, str(error)) from None
+    except STORAGE_ERRORS:
+        logger.exception("Could not check poster QR code")
+        raise HTTPException(503, "Your QR code could not be checked. Please try again.") from None
+    return JSONResponse({"ok": True, "exists": exists}, headers=PRIVATE)
+
+
+@router.post("/qrcode")
+async def create_qrcode(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    pid, url, replace = data.get("pid"), data.get("url"), data.get("replace")
+    if type(pid) is not int or pid <= 0 or not isinstance(url, str) or type(replace) is not bool:
+        raise HTTPException(422, "Choose a poster, a URL, and whether to replace an existing QR code.")
+    try:
+        poster = await owned(request, pid, draft=True)
+        png = await run_in_threadpool(graphics.qr_png, url)
+        section = await content.store().save_qr(uid_for(request), poster.pid, png, replace=replace)
+        posters.store().invalidate(uid_for(request), poster.pid)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
+    except content.SourceConflictError as error:
+        raise HTTPException(409, str(error)) from None
+    except STORAGE_ERRORS:
+        logger.exception("Could not save poster QR code")
+        raise HTTPException(503, "Your QR code could not be saved. Please try again.") from None
+    return JSONResponse({"ok": True, "content": section}, headers=PRIVATE)
 
 
 @router.get("/logo")
@@ -675,7 +735,7 @@ async def dimensions_page(request: Request) -> Response:
         logger.exception("Could not load poster dimensions")
         raise HTTPException(503, "Your poster could not be loaded.") from None
     if poster.purchased:
-        return RedirectResponse(f"/posters/{poster.pid}/view", status_code=303)
+        return RedirectResponse(f"/posters/{poster.pid}/open", status_code=303)
     await common.resume(request)
     return render_page(request, "layout/dimensions.html", "layout-dimensions", poster=poster)
 

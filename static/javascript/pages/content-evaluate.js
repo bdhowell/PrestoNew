@@ -125,6 +125,11 @@
             window.wikkit.execute({does: "redirect", payload: "/conferences/query"});
         } else if (event.type === "progress") {
             status.textContent = `I am reviewing image ${event.current} of ${event.total}.`;
+            const minutesLeftReal = (event.total - event.current) * 1/3;
+            const minutesLeftWhole = Math.round(minutesLeftReal);
+            const timing = minutesLeftWhole ? 
+                `<p>I&rsquo;m estimating ${numberToWords(minutesLeftWhole)} minute${minutesLeftWhole === 1 ? "" : "s"} left.</p>` : 
+                "We&rsquo;re down to less than a minute left, now.";
             const response = [
                 'I&rsquo;m reviewing graphic',
                 'I&rsquo;m looking at graphic',
@@ -135,8 +140,7 @@
                 'It&rsquo;s worth the wait, I promise. I&rsquo;m on graphic',
             ][Math.floor(Math.random() * 7)];
             await window.wikkit.say(
-                `<p>${response} ${event.current_word} of ${event.total_word}.</p>` +
-                `<p>I&rsquo;m estimating ${Math.round((event.total - event.current) / 20)} minutes left.</p>`
+                `<p>${response} ${event.current_word} of ${event.total_word}.</p>` + timing
             );
         } else if (event.type === "result") {
             results.set(event.source.sid, event);

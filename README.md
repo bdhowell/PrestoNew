@@ -2,7 +2,7 @@
 
 AutoPoster is a browser-based application for creating, organizing, archiving, and presenting scientific and educational posters. It combines a rich poster editor, conference and collection management, downloadable rendering, and searchable storage in a single web app.
 
-For a detailed feature inventory, see [FEATURES.md](FEATURES.md). For search and retrieval details, see [SEARCH.md](SEARCH.md).
+For a detailed feature inventory, see [FEATURES.md](FEATURES.md). For search and retrieval details, see [SEARCH.md](SEARCH.md). For the route inventory and authoring flow, see [specs/endpoints.md](specs/endpoints.md).
 
 ## What the project does
 
@@ -151,12 +151,36 @@ Overflowing math graphics smoothly return to their top-left scroll position
 after five seconds without further scrolling. The return uses a 600ms animation
 with jQuery-style swing easing; interacting with the graphic interrupts it.
 
+In the layout editor, select a section and use Image to choose from that
+poster's sources. Methods and Results offer supported graphics ordered by type
+and section assessment; Abstract, Introduction, Conclusion, and Future Plans
+offer math expressions. Literature Cited and Acknowledgements do not accept
+graphics. Additional Information accepts a single locally generated QR code;
+replacing it updates the stored source and section together.
+
+Click an inserted graphic to show its resize handles and Move control. Drag
+near a section edge to select a snap placement, or into the text for free
+placement. Placements use document flow and floats, so bottom and middle snap
+positions follow the surrounding text rather than anchoring to the physical
+section boundary. Raster graphics warn when their effective resolution drops
+below 150 DPI. Selected graphics can be cut or copied and pasted into another
+compatible section of the same poster. Charts currently use their stored PNGs,
+not reconstructed Chart.js data. Auto-fit and Wikkit section rewriting require
+manual adjustment for sections containing inserted graphics, so neither can
+silently discard them.
+
 The current draft's stored PNG thumbnail appears in both List and Large
 thumbnails views. Opening the poster list refreshes it when the poster or its
 sources are newer. Thumbnails preserve the saved poster aspect ratio inside a
 640 x 640 PNG on a contrasting gray background, without stretching or cropping.
 Both display modes use square thumbnail containers. Previews include wrapping
 author lists and themed section borders.
+
+Printable PDFs restore the selected template's saved geometry and manual gutter
+adjustments, including column, row, and section sizes. They retain the editor's
+font set, font sizing, and Google Fonts stylesheet; export requires access to
+Google Fonts and reports a rendering error rather than downloading a PDF with
+failed font loads.
 
 - Poppler (`pdftocairo`) for importing vector figures from PDFs
 - Playwright browser binaries installed

@@ -23,6 +23,7 @@ from playwright.async_api import Page, Route, async_playwright
 from rich.console import Console
 
 import layout
+import graphics
 import posters
 import elucidation
 import identity
@@ -38,7 +39,7 @@ SECTIONS = [
 TOO_LONG = ">"
 TOO_SHORT = "<"
 JUST_RIGHT = "="
-GRAPHICS_SAFE_DPI = 150
+GRAPHICS_SAFE_DPI = graphics.GRAPHICS_SAFE_DPI
 MAX_FIT_ATTEMPTS = 12
 
 
@@ -267,6 +268,7 @@ async def _poster_page(pid: int, *, uid: int) -> AsyncGenerator[Page]:
         raise HTTPException(409, "Set poster dimensions before profiling it.")
     template = poster.template if poster.template in posters.TEMPLATES else "arena"
     rendered = await layout.layout(template, pid, uid=uid)
+    rendered = await graphics.embed_sources(rendered, uid, pid)
     document = dom.document_fromstring(rendered)
     for script in document.xpath("//script"):
         script.getparent().remove(script)
@@ -577,9 +579,16 @@ async def auto_fit(
             measurement = profile["sections"][available[name]]
             if not measurement["text_overflow"]:
                 continue
+            prior = saved.get(name, "")
+            if graphics.graphic_ids(prior):
+                cribbed.append(name)
+                messages.append(
+                    f"Please adjust the text or graphics in {html.escape(name)} manually; "
+                    "auto-fit cannot yet preserve inserted graphics."
+                )
+                continue
             if not os.environ.get("OPENAI_API_KEY"):
                 raise AutoFitError("OPENAI_API_KEY is required to auto-fit poster sections.")
-            prior = saved.get(name, "")
             source = next((row[2] for row in history
                            if row[0] == name and row[1] == prior), prior)
             source_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
@@ -673,7 +682,7 @@ async def poster_auto_fit(request: Request, response: Response, pid: int) -> dic
             result = await auto_fit(pid, sections, uid=uid)
         else:
             result = await _cancellable_fit(pid, sections, uid=uid, run_id=run_id)
-    except (psycopg.Error, PlaywrightError, OSError, ValueError, openai.OpenAIError, AutoFitError):
+    except (*layout.STORAGE_ERRORS, PlaywrightError, ValueError, AutoFitError):
         logger.exception("Could not auto-fit poster %s", pid)
         raise HTTPException(503, "Your poster could not be auto-fitted. Please try again.") from None
     result["say"] = result["say"].replace("{{user.username}}", identity.display_name(request))
@@ -899,7 +908,7 @@ async def poster_profile(request: Request, response: Response, pid: int) -> dict
     uid = layout.uid_for(request)
     try:
         profile = await profile_poster(pid, uid=uid)
-    except (psycopg.Error, PlaywrightError, OSError, ValueError):
+    except (*layout.STORAGE_ERRORS, PlaywrightError, ValueError):
         logger.exception("Could not profile poster %s", pid)
         raise HTTPException(503, "Your poster could not be profiled.") from None
     response.headers.update(layout.PRIVATE)

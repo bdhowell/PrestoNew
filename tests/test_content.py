@@ -296,11 +296,23 @@ class ContentRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("one graphic you uploaded", response.text)
         self.assertIn("one graphic I was able to extract", response.text)
+        self.assertIn("predicting zero point seven minutes.", response.text)
         self.assertIn('/static/graphics/wikkitmeasuring.png', response.text)
         self.assertIn('alt="Wikkit measuring a graphic"', response.text)
         self.assertIn("/static/javascript/pages/content-evaluate.js", response.text)
         self.assertIn('"pid": 11', response.text)
         self.sources.evaluation_sources.assert_awaited_once_with(7, 11)
+
+    def test_graphic_evaluation_estimate_rounds_before_converting_to_words(self) -> None:
+        for count, estimate in ((1, "zero point three"), (3, "one"), (4, "one point three")):
+            with self.subTest(count=count):
+                self.sources.evaluation_sources.return_value = [
+                    content.GraphicEvaluationSource(index, "upload.png", "image/png", None, None, None)
+                    for index in range(count)
+                ]
+                response = self.client.get("/content/evaluate")
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(f"predicting {estimate} minutes.", response.text)
 
     def test_graphic_evaluation_streams_persists_and_groups_source_results(self) -> None:
         self.sources.evaluation_sources.return_value = [

@@ -60,7 +60,12 @@ class PosterRouteTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn('class="poster-card current"', response.text)
             self.assertIn('/posters/11/open', response.text)
-            self.assertIn('/posters/12/view', response.text)
+            self.assertIn('/account/download?pid=12', response.text)
+            self.assertIn('data-download-poster', response.text)
+            self.assertEqual(response.text.count('>Print</button>'), 1)
+            self.assertIn('data-download-url="/account/download?pid=12"', response.text)
+            self.assertNotIn('data-download-url="/account/download?pid=11"', response.text)
+            self.assertNotIn('/posters/12/view', response.text)
             self.assertIn('&lt;Research&gt;', response.text)
             self.assertIn('data-new-poster', response.text)
             self.assertIn('src="/posters/11/thumbnail"', response.text)
@@ -98,7 +103,7 @@ class PosterRouteTests(unittest.TestCase):
 
     def test_signed_out_pages_redirect_and_mutations_require_identity(self) -> None:
         self.uid = None
-        for path in ("/posters/list", "/posters/open", "/posters/11/open", "/posters/11/view"):
+        for path in ("/posters/list", "/posters/open", "/posters/11/open"):
             response = self.client.get(path, follow_redirects=False)
             self.assertEqual(response.status_code, 303)
             self.assertEqual(response.headers["location"], "/account/signin")
@@ -244,14 +249,15 @@ class PosterRouteTests(unittest.TestCase):
         self.store.get.return_value = None
         self.assertEqual(self.client.get("/posters/99/open").status_code, 404)
 
-    def test_purchased_viewer_and_preview_are_owner_scoped(self) -> None:
+    def test_purchased_open_downloads_and_preview_is_owner_scoped(self) -> None:
         self.store.get.return_value = replace(DRAFT, purchased=True, theme="basic")
-        response = self.client.get("/posters/11/view")
+        response = self.client.get("/posters/11/open", follow_redirects=False)
+        self.assertEqual(response.headers["location"], "/posters/list?download=11")
+        response = self.client.get("/posters/list?download=11")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("data-fit", response.text)
-        self.assertIn("data-full-size", response.text)
+        self.assertIn("data-auto-download", response.text)
+        self.assertIn('data-poster-name="&lt;Research&gt;"', response.text)
         self.assertIn("/account/download?pid=11", response.text)
-        self.assertNotIn("connect(", response.text)
         response = self.client.get("/posters/11/preview")
         self.assertEqual(response.status_code, 200)
         self.assertIn('data-width="3456.0"', response.text)
@@ -261,11 +267,12 @@ class PosterRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["cache-control"], "private, no-store")
         self.store.content.assert_awaited_once_with(7, 11)
         self.store.get.return_value = None
-        self.assertEqual(self.client.get("/posters/99/view").status_code, 404)
+        self.assertEqual(self.client.get("/posters/list?download=99").status_code, 404)
         self.assertEqual(self.client.get("/posters/99/preview").status_code, 404)
 
-    def test_unpurchased_view_redirects_to_edit_flow(self) -> None:
-        response = self.client.get("/posters/11/view", follow_redirects=False)
+    def test_view_page_is_removed_and_drafts_cannot_auto_download(self) -> None:
+        self.assertEqual(self.client.get("/posters/11/view").status_code, 404)
+        response = self.client.get("/posters/list?download=11", follow_redirects=False)
         self.assertEqual(response.headers["location"], "/posters/11/open")
 
     def test_delete_requires_confirmation_and_clears_selected_poster(self) -> None:

@@ -516,11 +516,11 @@ Would you like me to open it for you?
 - `GET /posters/{pid}/open` checks ownership, selects the draft in the server-side
   session, and redirects to `/layout/edit`. **The layout editor is deliberately
   deferred**.
-- `GET /posters/{pid}/view` opens purchased posters in a full-viewport viewer
-  outside the Wikkit shell. Fit and 100% zoom, intermediate zoom, scrolling, and
-  Close/Escape are supported. The read-only HTML preview renders stored title,
-  authors, and text sections; it is not a print/export renderer or layout editor.
-  `GET /posters/{pid}/preview` also supplies owner-only draft thumbnails.
+- Purchased poster links and their Print buttons download the printable PDF without leaving the poster
+  list. Wikkit says "I've downloaded a copy of {poster.name}." after the PDF
+  response succeeds. Opening a purchased poster redirects to the list and starts
+  the same download; the former `/posters/{pid}/view` page has been removed.
+  `GET /posters/{pid}/preview` remains an owner-only HTML thumbnail source.
 - `POST /posters/delete` accepts same-origin JSON with `pid` and returns Wikkit's
   confirmation question with Yes/No buttons without rendering a template. The
   list waits for a chat reply, then posts `pid` and `response` to the same
@@ -687,7 +687,6 @@ Can you add anything?
 
 	- If the user provides additional information, repeat the search for matching conferences or fairs.
 	prompt the user to provide more information or continue without conference information.
-
 
 	Add the current conferences in the table with the newly found results.
 

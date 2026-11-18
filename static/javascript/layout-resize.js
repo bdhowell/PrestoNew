@@ -1,4 +1,4 @@
-(async () => {
+window.posterSizingReady = (async () => {
     "use strict";
 
     if (window.posterGeometryReady) await window.posterGeometryReady;
@@ -343,6 +343,12 @@
                     `${(value * 100).toFixed(2)}% ${handle.kind === "bottom" ? "upwards" : "inwards"} from the initial position`);
             }
         }
+    }
+
+    if (document.body.dataset.printRender === "true") {
+        apply();
+        overlay.remove();
+        return;
     }
 
     const observer = new ResizeObserver(() => {

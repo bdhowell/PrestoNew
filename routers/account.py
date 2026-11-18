@@ -18,6 +18,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from playwright.async_api import Error as PlaywrightError
 
 import identity
+import content
+import graphics
 import layout as layout_routes
 import mailer
 import posters
@@ -273,6 +275,7 @@ async def download_poster(request: Request, pid: int | None = None) -> Response:
             poster.template if poster.template in posters.TEMPLATES else "arena",
             selected_pid, uid=uid, request=request,
         )
+        rendered = await graphics.embed_sources(rendered, uid, selected_pid)
         logo_type = {
             "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
             "svg": "image/svg+xml", "image/png": "image/png",
@@ -288,7 +291,7 @@ async def download_poster(request: Request, pid: int | None = None) -> Response:
         digest = hashlib.sha256(pdf).hexdigest()
         if not await posters.store().record_download(uid, selected_pid, digest):
             raise HTTPException(409, "This poster is no longer available for download.")
-    except (psycopg.Error, PlaywrightError, OSError, ValueError):
+    except (psycopg.Error, PlaywrightError, OSError, ValueError, content.GoogleAPIError, content.GoogleAuthError):
         logger.exception("Could not render or record download for poster %s", selected_pid)
         raise HTTPException(503, "Your poster could not be downloaded. Please try again.") from None
     if session is not None:

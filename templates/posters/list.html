@@ -33,10 +33,14 @@
 </form>
 {% if notice %}<p role="status">{{ notice }}</p>{% endif %}
 <p class="poster-message" role="status" aria-live="polite"></p>
+{% if download_poster %}
+<a hidden href="/account/download?pid={{ download_poster.pid }}" data-download-poster
+   data-poster-name="{{ download_poster.name }}" data-auto-download>Download poster</a>
+{% endif %}
 <div class="poster-items {{ view }}">
 {% for poster in items %}
     <article class="poster-card{% if not poster.purchased %} current{% endif %}" data-poster-id="{{ poster.pid }}">
-        <a class="poster-link" href="/posters/{{ poster.pid }}/{{ 'view' if poster.purchased else 'open' }}"{% if poster.purchased %} target="_top"{% endif %}>
+        <a class="poster-link" href="{{ '/account/download?pid=' ~ poster.pid if poster.purchased else '/posters/' ~ poster.pid ~ '/open' }}"{% if poster.purchased %} data-download-poster data-poster-name="{{ poster.name }}"{% endif %}>
             {% if view == "grid" or not poster.purchased %}
             <div class="poster-thumbnail" aria-hidden="true">
                 {% if poster.purchased %}
@@ -50,6 +54,10 @@
             <p>{% if not poster.purchased %}<strong>Current unpurchased poster</strong>{% else %}Purchased{% endif %}</p>
             <p>Conference: {% if poster.conference_date %}{{ poster.conference_date.strftime("%B %d, %Y") }}{% else %}Not set{% endif %}</p>
         </a>
+        {% if poster.purchased %}
+        <button type="button" data-download-poster data-download-url="/account/download?pid={{ poster.pid }}"
+                data-poster-name="{{ poster.name }}" aria-label="Print {{ poster.name }}">Print</button>
+        {% endif %}
         <button type="button" data-delete-poster="{{ poster.pid }}" aria-label="Delete {{ poster.name }}">Delete</button>
     </article>
 {% else %}

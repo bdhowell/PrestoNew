@@ -38,7 +38,7 @@
                             title="Retry saving font sizing"><i class="fa-solid fa-rotate-right"></i></button>
                 </div>
             </div>
-            | <button id="image" aria-label="Image" title="Image"><i class="fa-solid fa-image"></i></button>
+            | <button id="image" aria-label="Image" title="Image" aria-haspopup="dialog" aria-controls="graphics-dialog"><i class="fa-solid fa-image"></i></button>
             <button id="chart-line" aria-label="Chart" title="Chart"><i class="fa-solid fa-chart-line"></i></button>
             <button id="formula" aria-label="Formula" title="Formula"><i class="fa-solid fa-square-root-variable"></i></button>
             | <button id="cut" aria-label="Cut" title="Cut"><i class="fa-solid fa-cut"></i></button>
@@ -58,6 +58,21 @@
             <output id="poster-zoom-value" for="poster-zoom">100%</output>
         </div>
     </div>
+    <dialog id="graphics-dialog" aria-labelledby="graphics-dialog-title">
+        <h2 id="graphics-dialog-title">Insert a graphic</h2>
+        <p>Select a source graphic. Double-click to preview it.</p>
+        <div id="graphics-grid" role="group" aria-label="Poster source graphics"></div>
+        <p id="graphics-status" role="status" aria-live="polite"></p>
+        <div class="graphics-actions">
+            <button type="button" id="graphics-cancel">Cancel</button>
+            <button type="button" id="graphics-insert" disabled>Insert</button>
+        </div>
+    </dialog>
+    <dialog id="graphics-preview" aria-labelledby="graphics-preview-title">
+        <h2 id="graphics-preview-title">Graphic preview</h2>
+        <div id="graphics-preview-content"></div>
+        <button type="button" id="graphics-preview-close">Close preview</button>
+    </dialog>
     <dialog id="font-dialog" aria-labelledby="font-dialog-title" data-pid="{{ poster.pid }}">
         <form id="font-form">
             <h2 id="font-dialog-title">Choose a font set</h2>
