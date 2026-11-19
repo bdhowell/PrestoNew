@@ -289,10 +289,13 @@
                 if (result.sizings?.[name]) {
                     suggestions.set(name, result);
                     if (requested.delete(name)) await applySuggestion(name, result, epoch);
-                } else if (result.cribbed?.length && result.say) {
+                } else if ((result.cribbed?.length || requested.delete(name)) && result.say) {
                     window.wikkit?.say(result.say);
                 }
-                if (!result.sizings?.[name]) bulkRequested.delete(name);
+                if (!result.sizings?.[name]) {
+                    bulkRequested.delete(name);
+                    requested.delete(name);
+                }
             } catch (error) {
                 if (epoch === generation && error.name !== "AbortError") report(error);
             } finally {
@@ -303,13 +306,30 @@
         if (epoch !== generation && queue.length) processQueue(generation);
     }
 
+    async function enqueue(name) {
+        const epoch = generation;
+        await cancellation;
+        if (epoch !== generation) return;
+        await flush();
+        if (epoch !== generation) return;
+        queue = [name, ...queue.filter(item => item !== name)];
+        if (!currentRun) {
+            starting ||= post("/start", {}).then(result => result.run_id);
+            const id = await starting;
+            if (epoch !== generation) return;
+            starting = null;
+            currentRun = id;
+        }
+        processQueue(epoch);
+    }
+
     window.queueFitProfile = async function queueFitProfile(profile) {
         const epoch = generation;
         await cancellation;
         if (epoch !== generation) return;
         await flush();
         if (epoch !== generation) return;
-        const sections = [...new Set(profile.overflowing_sections.map(name => {
+        const sections = [...new Set([...profile.overflowing_sections, ...(profile.sparse_sections ?? [])].map(name => {
             const section = document.getElementById(name === "conclusion" ? "conclusions" : name);
             if (section?.hasAttribute("data-manual-adjustment")) return null;
             return section?.querySelector(".content[contenteditable='true'][data-section]")?.dataset.section;
@@ -346,6 +366,10 @@
                     if (name !== active) {
                         queue = [name, ...queue.filter(item => item !== name)];
                     }
+                } else if (sections !== null) {
+                    // Sections the profile did not flag can still be fitted on request.
+                    requested.add(name);
+                    await enqueue(name);
                 }
             }
         } catch (error) {

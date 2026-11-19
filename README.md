@@ -107,6 +107,23 @@ longer summary is still measured and clarity-checked. Output that does not
 shorten the source is retried with a smaller target within the same attempt
 limit; empty or excessively large output and changed formulas remain errors.
 
+Sections with one inserted graphic are fitted as a whole: auto-fit searches the
+graphic's width together with the text length, keeping the user's placement
+(float left, float right, or centered) and the 2rem graphic margins in
+`static/css/graphics.css`. The result must not overflow and must leave no more
+than `AUTOFIT_MAXIMUM_EMPTY_PERCENTAGE` percent of the section empty (default 40);
+among fitting candidates it prefers the original text, a larger graphic, and
+occupancy near `AUTOFIT_TARGET_OCCUPIED_PERCENTAGE` (default 82). A graphic is
+never shrunk below the size whose shorter side subtends `GRAPHIC_MIN_VISUAL_ANGLE`
+degrees (default 5) at `GRAPHIC_VIEWING_DISTANCE` inches (default 36), about
+3.1 printed inches; enlargement stops at `GRAPHICS_SAFE_DPI` unless that minimum
+requires more. Sections with several graphics, or whose container cannot hold a
+discernible graphic, are left for manual adjustment. Text-only sections that are
+more than the maximum empty percentage use a longer cached sizing when one fits,
+otherwise the original section text, shortened again only as needed; new content
+is never invented. Profiles list these sections in `sparse_sections`, and they
+join the auto-fit queue with `overflowing_sections`.
+
 The repeatable [auto-fit migration](schema/auto-fit.sql) must be applied before
 deployment, using a database role that owns the table. It also upgrades an empty
 legacy `sizings` table; existing metadata-only rows must be backfilled or archived

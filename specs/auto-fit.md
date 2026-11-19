@@ -380,6 +380,41 @@ Auto-fit uses a binary search over revision word targets, accepting layout area 
 inclusive. After the search, the selected revision is re-rendered and re-profiled;
 a later overflowing trial is never left in its place or accepted as a fit.
 
+### Text and graphics
+
+A section with exactly one graphic is fitted as one container (`.content` inside
+its fixed `.section`). The graphic's placement is never changed: `*-left` and
+`left-middle` float left, `*-right` and `right-middle` float right, `*-center`
+is centered, each with a 2rem margin except on the side touching the container.
+Rewritten text is regenerated without the graphic, which is reinserted at the
+same proportional block position (first for `top-*`, last for `bottom-*`).
+
+For each text variant, ordered as original text, cached sizings (longest first),
+then new summaries from a binary search over word targets, the graphic width is
+sampled over 13 coarse and 9 refined widths. Occupancy is the exact union area of
+the graphic and text line boxes clipped to the container. A width is feasible
+when nothing overflows (glyphs, block margins, graphic, or section scroll) and
+occupancy is at least `1 - AUTOFIT_MAXIMUM_EMPTY_PERCENTAGE / 100` (default 40).
+Feasible candidates are ranked by
+`0.45 * fidelity + 0.35 * graphic size + 0.20 * occupancy balance`, where
+fidelity is 1 for the original text and the word ratio otherwise, and balance
+peaks at `AUTOFIT_TARGET_OCCUPIED_PERCENTAGE` (default 82). Non-original text
+still requires a `good` or `excellent` clarity rating.
+
+A graphic is discernible when its shorter side subtends at least
+`GRAPHIC_MIN_VISUAL_ANGLE` degrees (default 5) at `GRAPHIC_VIEWING_DISTANCE`
+inches (default 36), at 96 CSS px per printed inch. Its width is bounded by that
+minimum and by `GRAPHICS_SAFE_DPI` (enlarging past it is reported as possibly
+blurry only when the minimum requires it). If no discernible width fits the
+container, or the graphic alone overflows at that width, the section is
+cribbed with an explanation. Sections with several graphics are cribbed.
+
+Text-only sections more than `AUTOFIT_MAXIMUM_EMPTY_PERCENTAGE` empty are
+lengthened only from history: a longer cached sizing that fits is used first;
+otherwise fitting restarts from the original section text. Profiles report these
+sections in `sparse_sections`; the client queues them with `overflowing_sections`,
+and a section's Auto-fit context command queues any section on request.
+
 Threshold environment variables `SECTION_MIN_OCCUPIED` (30),
 `SECTION_MAX_OCCUPIED` (75), and `SECTION_UNDERFLOW_OCCUPIED` (0.40) are
 percentages; the latter defaults to 0.4%, as specified below. `TOO_WIDE`

@@ -12,21 +12,25 @@
     margin: 0;
 }
 
+/* Placed graphics keep 2rem clear of text, except on the side touching the container. */
 .graphic[data-placement$="left"],
 .graphic[data-placement="left-middle"] {
     float: left;
-    margin: 0 1em 0.5em 0;
+    max-width: calc(100% - 2rem);
+    margin: 2rem 2rem 2rem 0;
 }
 
 .graphic[data-placement$="right"],
 .graphic[data-placement="right-middle"] {
     float: right;
-    margin: 0 0 0.5em 1em;
+    max-width: calc(100% - 2rem);
+    margin: 2rem 0 2rem 2rem;
 }
 
 .graphic[data-placement$="center"] {
     display: block;
-    margin: 0.5em auto;
+    max-width: calc(100% - 4rem);
+    margin: 2rem auto;
 }
 
 #graphics-dialog, #graphics-preview {

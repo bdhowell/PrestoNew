@@ -1,6 +1,7 @@
 """Measure sections and graphics in an owner's saved poster layout."""
 
 import asyncio
+import copy
 import logging
 import hashlib
 import html
@@ -10,13 +11,14 @@ import os
 import re
 import uuid
 from contextlib import asynccontextmanager
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import psycopg
 import openai
 from fastapi import APIRouter, HTTPException, Request, Response
+from lxml import etree
 from lxml import html as dom
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Route, async_playwright
@@ -41,6 +43,10 @@ TOO_SHORT = "<"
 JUST_RIGHT = "="
 GRAPHICS_SAFE_DPI = graphics.GRAPHICS_SAFE_DPI
 MAX_FIT_ATTEMPTS = 12
+CSS_PX_PER_INCH = 96
+GRAPHIC_XPATH = './/span[contains(concat(" ", normalize-space(@class), " "), " graphic ")]'
+WIDTH_COARSE_SAMPLES = 13
+WIDTH_REFINE_SAMPLES = 9
 
 
 class AutoFitError(RuntimeError):
@@ -73,8 +79,28 @@ def _thresholds() -> dict[str, float]:
     return values
 
 
+def _occupancy() -> tuple[float, float]:
+    """Return the minimum and preferred occupied fractions of an auto-fitted container."""
+    minimum = 1 - _setting("AUTOFIT_MAXIMUM_EMPTY_PERCENTAGE", 40, 100) / 100
+    target = _setting("AUTOFIT_TARGET_OCCUPIED_PERCENTAGE", 82, 100) / 100
+    if target < minimum:
+        raise ValueError("AUTOFIT_TARGET_OCCUPIED_PERCENTAGE must leave at most the maximum empty space")
+    return minimum, target
+
+
+def _viewing_distance() -> float:
+    return _setting("GRAPHIC_VIEWING_DISTANCE", 36, 1200)
+
+
+def _discernible_short_side() -> float:
+    """CSS px a graphic's shorter side needs to subtend the minimum angle at viewing distance."""
+    angle = _setting("GRAPHIC_MIN_VISUAL_ANGLE", 5, 90)
+    return 2 * _viewing_distance() * math.tan(math.radians(angle) / 2) * CSS_PX_PER_INCH
+
+
 async def _profile_page(page: Page) -> dict:
     thresholds = _thresholds()
+    minimum_occupied, _ = _occupancy()
     measurements = await page.locator(".section").evaluate_all("""sections => sections.map(section => {
         const bounds = section.getBoundingClientRect();
         const normalizedbounds = { ...bounds };
@@ -161,6 +187,7 @@ async def _profile_page(page: Page) -> dict:
     sections = {}
     overflowing_sections = []
     underflowing_sections = []
+    sparse_sections = []
     all_oversized_graphics = []
     total_area = 0.0
     occupied_area = 0.0
@@ -221,6 +248,8 @@ async def _profile_page(page: Page) -> dict:
             underflowing_sections.append(name)
         if overflow:
             overflowing_sections.append(name)
+        elif (text_layout_area + graph_area) < (available_text_area + graph_area) * minimum_occupied:
+            sparse_sections.append(name)
         sections[name] = {
             "bounds": section_bounds,
             "normalizedbounds": normalized_bounds,
@@ -255,6 +284,7 @@ async def _profile_page(page: Page) -> dict:
         "sections": sections,
         "overflowing_sections": overflowing_sections,
         "underflowing_sections": underflowing_sections,
+        "sparse_sections": sparse_sections,
         "oversized_graphics": all_oversized_graphics,
     }
 
@@ -298,7 +328,10 @@ async def _poster_page(pid: int, *, uid: int) -> AsyncGenerator[Page]:
         try:
             page = await browser.new_page(viewport={"width": 1280, "height": 900})
             await page.route("**/*", assets_only)
-            await page.set_content(dom.tostring(document, encoding="utf-8").decode("utf-8"), wait_until="load")
+            await page.set_content(
+                dom.tostring(document, encoding="utf-8", doctype="<!DOCTYPE html>").decode("utf-8"),
+                wait_until="load",
+            )
             await page.evaluate("""async () => {
                 await document.fonts.ready;
                 if (Array.from(document.fonts).some(font => font.status === "error") ||
@@ -389,19 +422,33 @@ async def _clarity(source: str, revision: str) -> str:
 
 
 async def _render_section(page: Page, name: str, text: str) -> None:
+    # Auto-fit keeps the live graphic node, whose image was embedded for this headless page.
     await page.locator(".content[data-section]").evaluate_all(
         """(elements, data) => {
             const element = elements.find(item => item.dataset.section === data.name);
             if (!element) throw new Error("Poster section not found");
             element.innerHTML = data.text;
             if (element.firstElementChild?.matches("h2, h3")) element.firstElementChild.remove();
-        }""", {"name": name, "text": elucidation.clean_html(text)},
+            const live = window.autofitGraphics?.[data.name];
+            const marker = live && element.querySelector(".graphic");
+            if (marker) {
+                for (const name of ["data-width", "data-height", "data-placement", "style"]) {
+                    if (marker.hasAttribute(name)) live.setAttribute(name, marker.getAttribute(name));
+                    else live.removeAttribute(name);
+                }
+                marker.replaceWith(live);
+            }
+        }""", {"name": name, "text": graphics.clean_section(text)},
     )
     await page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
 
 
-async def _fit_section(page: Page, name: str, source: str,
-                       cached: list[str], minimum: float) -> str | None:
+async def _fit_section(page: Page, name: str, source: str, cached: list[str], minimum: float, *,
+                       initial: Sequence[str] = (), search: bool = True) -> str | None:
+    """Fit text-only content; ``initial`` revisions (e.g. longer cached sizings) are tried first.
+
+    With ``search`` disabled, only ``initial`` revisions are considered and no new text is generated.
+    """
     word_count = _words(source)
     if word_count < 2:
         return None
@@ -412,7 +459,18 @@ async def _fit_section(page: Page, name: str, source: str,
     dom_name = next((alias for alias, canonical in layout.ALIASES.items()
                      if canonical == name and alias != "conclusions"), name)
 
-    for _ in range(MAX_FIT_ATTEMPTS):
+    def fits(section: dict) -> bool:
+        return not (section["text_overflow"]
+                    or section["text_layout_area"] > section["available_text_area"]
+                    or section["text_layout_area"] < section["available_text_area"] * (1 - minimum))
+
+    for revision in dict.fromkeys(initial):
+        await _render_section(page, name, revision)
+        if fits((await _profile_page(page))["sections"][dom_name]):
+            actual = _words(revision)
+            fitting_candidates.setdefault(revision, (actual, actual))
+
+    for _ in range(0 if fitting_candidates or not search else MAX_FIT_ATTEMPTS):
         if low > high:
             break
         attempts += 1
@@ -461,6 +519,8 @@ async def _fit_section(page: Page, name: str, source: str,
                 or final["text_layout_area"] < final["available_text_area"] * (1 - minimum)):
             logger.warning("Auto-fit revision for %s no longer fits after final rendering", name)
             return False
+        if revision == source:
+            return True
         if revision in evaluated:
             return False
         evaluated.add(revision)
@@ -474,7 +534,7 @@ async def _fit_section(page: Page, name: str, source: str,
         if await accept(revision):
             return revision
 
-    while clarity_rejected and attempts < MAX_FIT_ATTEMPTS:
+    while search and clarity_rejected and attempts < MAX_FIT_ATTEMPTS:
         attempts += 1
         revision = await _shorten(source, name, retry_target)
         if _words(revision) >= word_count:
@@ -483,6 +543,352 @@ async def _fit_section(page: Page, name: str, source: str,
         if await accept(revision):
             return revision
     return None
+
+
+# Text-and-graphic fitting: the graphic keeps the user's placement and CSS margins while
+# its width and the text length are searched together (formerly poster_optimizer.py).
+_PREPARE_GRAPHIC = r"""async (elements, name) => {
+    const content = elements.find(item => item.dataset.section === name);
+    const graphic = content?.querySelector(".graphic");
+    if (!graphic) throw new Error("Poster graphic not found");
+    const stash = window.autofitGraphics ||= {};
+    stash[name] ||= graphic;
+    const image = graphic.querySelector("img");
+    if (image) await image.decode().catch(() => {});
+    const width = graphic.offsetWidth, style = graphic.style.width;
+    graphic.style.width = "100000px";
+    const maxWidth = graphic.offsetWidth;
+    graphic.style.width = style;
+    return {
+        image: Boolean(image?.naturalWidth && image.naturalHeight),
+        naturalWidth: image?.naturalWidth || 0, naturalHeight: image?.naturalHeight || 0,
+        width, maxWidth,
+    };
+}"""
+
+_MEASURE_CONTAINER = r"""(elements, data) => {
+    const content = elements.find(item => item.dataset.section === data.name);
+    if (!content) throw new Error("Poster section not found");
+    const section = content.closest(".section") || content;
+    const graphic = content.querySelector(".graphic");
+    if (graphic && data.width !== null) {
+        graphic.dataset.width = String(data.width);
+        delete graphic.dataset.height;
+        graphic.style.width = data.width + "px";
+        graphic.style.removeProperty("height");
+    }
+    section.scrollTop = 0;
+    const box = section.getBoundingClientRect();
+    const scaleX = box.width / section.offsetWidth || 1, scaleY = box.height / section.offsetHeight || 1;
+    const style = getComputedStyle(section);
+    const bounds = {
+        left: box.left + (section.clientLeft + parseFloat(style.paddingLeft)) * scaleX,
+        right: box.left + (section.clientLeft + section.clientWidth - parseFloat(style.paddingRight)) * scaleX,
+        top: section === content
+            ? box.top + (section.clientTop + parseFloat(style.paddingTop)) * scaleY
+            : content.getBoundingClientRect().top,
+        bottom: box.top + (section.clientTop + section.clientHeight - parseFloat(style.paddingBottom)) * scaleY,
+    };
+    const area = Math.max(0, bounds.right - bounds.left) * Math.max(0, bounds.bottom - bounds.top);
+    const outsideText = node => !node.parentElement?.closest(".graphic");
+    const glyphs = [], occupied = [];
+    const range = document.createRange();
+    const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, {
+        acceptNode: node => node.textContent.trim() && outsideText(node)
+            ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT,
+    });
+    while (walker.nextNode()) {
+        const parent = getComputedStyle(walker.currentNode.parentElement);
+        // Text occupies whole line boxes, not just glyph boxes, so leading is not "empty".
+        const lineHeight = (parseFloat(parent.lineHeight) || parseFloat(parent.fontSize) * 1.2) * scaleY;
+        range.selectNodeContents(walker.currentNode);
+        for (const rect of range.getClientRects()) {
+            if (rect.width <= 0 || rect.height <= 0) continue;
+            glyphs.push(rect);
+            const leading = Math.max(0, lineHeight - rect.height) / 2;
+            occupied.push({left: rect.left, right: rect.right,
+                top: rect.top - leading, bottom: rect.bottom + leading});
+        }
+    }
+    let textBottom = -Infinity;
+    for (const element of content.querySelectorAll("*")) {
+        if (element.closest(".graphic")) continue;
+        const elementStyle = getComputedStyle(element);
+        if (elementStyle.display === "inline" || !element.textContent.trim()) continue;
+        textBottom = Math.max(textBottom, element.getBoundingClientRect().bottom
+            + parseFloat(elementStyle.marginBottom) * scaleY);
+    }
+    const graphicRect = graphic?.getBoundingClientRect();
+    if (graphicRect) occupied.push(graphicRect);
+    const eps = 0.75 * Math.max(scaleX, scaleY);
+    const outside = rect => rect.left < bounds.left - eps || rect.top < bounds.top - eps
+        || rect.right > bounds.right + eps || rect.bottom > bounds.bottom + eps;
+    const overflow = glyphs.some(outside) || Boolean(graphicRect && outside(graphicRect))
+        || textBottom > bounds.bottom + eps
+        || (section !== content && section.scrollHeight > section.clientHeight + 1);
+    // Exact union area of axis-aligned rectangles, clipped to the container.
+    const clipped = occupied.map(rect => ({
+        x1: Math.max(bounds.left, rect.left), x2: Math.min(bounds.right, rect.right),
+        y1: Math.max(bounds.top, rect.top), y2: Math.min(bounds.bottom, rect.bottom),
+    })).filter(rect => rect.x2 > rect.x1 && rect.y2 > rect.y1);
+    const xs = [...new Set(clipped.flatMap(rect => [rect.x1, rect.x2]))].sort((a, b) => a - b);
+    let union = 0;
+    for (let index = 1; index < xs.length; index++) {
+        const x1 = xs[index - 1], x2 = xs[index];
+        const spans = clipped.filter(rect => rect.x1 < x2 && rect.x2 > x1)
+            .map(rect => [rect.y1, rect.y2]).sort((a, b) => a[0] - b[0]);
+        let length = 0, low = 0, high = 0, started = false;
+        for (const [y1, y2] of spans) {
+            if (!started || y1 > high) {
+                if (started) length += high - low;
+                low = y1; high = y2; started = true;
+            } else high = Math.max(high, y2);
+        }
+        if (started) length += high - low;
+        union += (x2 - x1) * length;
+    }
+    return {
+        overflow, utilization: area > 0 ? union / area : 0,
+        graphic_width: graphic ? graphic.offsetWidth : 0,
+        graphic_height: graphic ? graphic.offsetHeight : 0,
+    };
+}"""
+
+
+def _serialize(root: etree._Element) -> str:
+    return html.escape(root.text or "", quote=False) + "".join(
+        etree.tostring(child, encoding="unicode", method="html") for child in root
+    )
+
+
+def _graphic_count(value: str) -> int:
+    graphics.graphic_ids(value)  # Validates graphic source IDs.
+    return len(dom.fragment_fromstring(value, create_parent=True).xpath(GRAPHIC_XPATH))
+
+
+def _split_graphic(value: str) -> tuple[str, etree._Element, float]:
+    """Separate a section's single graphic from its text and record where it sits."""
+    root = dom.fragment_fromstring(graphics.clean_section(value), create_parent=True)
+    nodes = root.xpath(GRAPHIC_XPATH)
+    if len(nodes) != 1:
+        raise ValueError("Auto-fit arranges exactly one graphic per section.")
+    node = nodes[0]
+    block = node
+    while block.getparent() is not root:
+        block = block.getparent()
+    blocks = list(root)
+    index = blocks.index(block)
+    count = len(blocks) - (block is node)
+    placement = node.get("data-placement", "free")
+    anchor = 0.0 if placement.startswith("top") else 1.0 if placement.startswith("bottom") \
+        else (index / count if count else 0.0)
+    graphic = copy.deepcopy(node)
+    graphic.tail = None
+    node.drop_tree()
+    if block is not node and not block.text_content().strip() and not len(block):
+        block.drop_tree()
+    return _serialize(root), graphic, anchor
+
+
+def _strip_graphics(value: str) -> str:
+    root = dom.fragment_fromstring(graphics.clean_section(value), create_parent=True)
+    for node in root.xpath(GRAPHIC_XPATH):
+        node.drop_tree()
+    return _serialize(root)
+
+
+def _compose(text: str, graphic: etree._Element, anchor: float, width: int | None) -> str:
+    """Insert the graphic between the rewritten text's blocks at its proportional position."""
+    root = dom.fragment_fromstring(text, create_parent=True)
+    node = copy.deepcopy(graphic)
+    if width is not None:
+        node.set("data-width", str(width))
+        node.attrib.pop("data-height", None)
+        node.set("style", f"width:{width}px")
+    root.insert(round(anchor * len(root)), node)
+    return graphics.clean_section(_serialize(root))
+
+
+def _sample_widths(low: int, high: int, count: int) -> list[int]:
+    if high < low:
+        return []
+    if count < 2 or high == low:
+        return [low]
+    return sorted({round(low + (high - low) * index / (count - 1)) for index in range(count)})
+
+
+async def _measure_container(page: Page, name: str, width: int | None = None) -> dict:
+    return await page.locator(".content[data-section]").evaluate_all(
+        _MEASURE_CONTAINER, {"name": name, "width": width},
+    )
+
+
+async def _graphic_bounds(page: Page, name: str) -> dict | None:
+    """Return integer CSS px width limits, or None when no discernible width fits."""
+    info = await page.locator(".content[data-section]").evaluate_all(_PREPARE_GRAPHIC, name)
+    container = math.floor(info["maxWidth"])
+    if not info["image"]:
+        width = max(1, min(10000, round(info["width"])))
+        return {"min": width, "max": width, "sharp": width, "resizable": False}
+    ratio = info["naturalWidth"] / info["naturalHeight"]
+    minimum = max(1, math.ceil(_discernible_short_side() * max(1.0, ratio)))
+    sharp = math.floor(info["naturalWidth"] * CSS_PX_PER_INCH / GRAPHICS_SAFE_DPI)
+    if minimum > min(container, 10000):
+        return None
+    return {"min": minimum, "max": min(container, 10000, max(minimum, sharp)),
+            "sharp": sharp, "resizable": True}
+
+
+async def _search_width(page: Page, name: str, bounds: dict, fidelity: float,
+                        occupied: float, target: float) -> tuple[str, int | None, float | None]:
+    """Search graphic widths for the rendered text; return its fit state, width, and quality."""
+    low, high = bounds["min"], bounds["max"]
+    tried: dict[int, float | None] = {}
+    overflows_at_minimum = False
+
+    async def evaluate(width: int) -> float | None:
+        nonlocal overflows_at_minimum
+        if width in tried:
+            return tried[width]
+        measured = await _measure_container(page, name, width)
+        quality = None
+        if measured["overflow"]:
+            overflows_at_minimum |= width == low
+        elif measured["utilization"] >= occupied and measured["graphic_width"] + 0.75 >= low:
+            size = min(measured["graphic_width"] / high, 1.0) if bounds["resizable"] else 1.0
+            balance = max(0.0, 1.0 - abs(measured["utilization"] - target) / max(target, 1 - target))
+            quality = 0.45 * fidelity + 0.35 * size + 0.20 * balance
+        tried[width] = quality
+        return quality
+
+    coarse = _sample_widths(low, high, WIDTH_COARSE_SAMPLES)
+    for width in coarse:
+        await evaluate(width)
+    feasible = [(quality, width) for width, quality in tried.items() if quality is not None]
+    if feasible and len(coarse) > 1:
+        center = max(feasible)[1]
+        step = (high - low) / (WIDTH_COARSE_SAMPLES - 1)
+        for width in _sample_widths(max(low, math.floor(center - step)),
+                                    min(high, math.ceil(center + step)), WIDTH_REFINE_SAMPLES):
+            await evaluate(width)
+    feasible = [(quality, width) for width, quality in tried.items() if quality is not None]
+    if feasible:
+        quality, width = max(feasible)
+        return JUST_RIGHT, width, quality
+    return (TOO_LONG if overflows_at_minimum else TOO_SHORT), None, None
+
+
+async def _fit_graphic_section(
+    page: Page, name: str, source: str, prior: str, cached: list[str],
+) -> tuple[str | None, str | None]:
+    """Fit one graphic and its text together; return a revision and/or a message for the user."""
+    occupied, target = _occupancy()
+    label = html.escape(name)
+    feet = f"{_viewing_distance() / 12:g}"
+    _, graphic, anchor = _split_graphic(prior)
+    source_text = _strip_graphics(source)
+    bounds = await _graphic_bounds(page, name)
+    too_large = (
+        f"I&rsquo;m sorry {{{{user.username}}}}, your {label} graphic cannot fit in its section "
+        f"at a size that is discernible from {feet} feet. Consider enlarging the section, "
+        "changing the graphic&rsquo;s placement, or moving it to another section."
+    )
+    if bounds is None:
+        return None, too_large
+    await _render_section(page, name, _compose("", graphic, anchor, bounds["min"]))
+    if (await _measure_container(page, name))["overflow"]:
+        return None, too_large
+
+    source_words = _words(source_text)
+    trials: dict[str, tuple[str, int | None, float | None]] = {}
+
+    async def trial(text: str) -> tuple[str, int | None, float | None]:
+        if text not in trials:
+            await _render_section(page, name, _compose(text, graphic, anchor, None))
+            fidelity = 1.0 if text == source_text else min(1.0, _words(text) / max(1, source_words))
+            trials[text] = await _search_width(page, name, bounds, fidelity, occupied, target)
+        return trials[text]
+
+    # Prefer the original text, then longer cached sizings, before asking for new rewrites.
+    variants = list(dict.fromkeys(
+        [source_text] + sorted({_strip_graphics(text) for text in cached}, key=_words, reverse=True)
+    ))
+    fitting: dict[str, tuple[float, int]] = {}
+    for text in variants:
+        if _words(text):
+            state, width, quality = await trial(text)
+            if state == JUST_RIGHT:
+                fitting[text] = (quality, width)
+
+    attempts = 0
+    retry_target = source_words - 1
+    if not fitting and source_words >= 2:
+        low, high = 1, source_words - 1
+        while low <= high and attempts < MAX_FIT_ATTEMPTS:
+            attempts += 1
+            words = (low + high) // 2
+            candidates = [text for text in variants if words <= _words(text) <= high]
+            text = min(candidates, key=_words) if candidates else await _shorten(source_text, name, words)
+            if _words(text) >= source_words:
+                logger.warning("Auto-fit summary for %s did not shorten its source", name)
+                high = words - 1
+                continue
+            variants.append(text)
+            state, width, quality = await trial(text)
+            if state == TOO_LONG:
+                high = words - 1
+            elif state == TOO_SHORT:
+                low = words + 1
+            else:
+                fitting.setdefault(text, (quality, width))
+                retry_target = words
+                low = words + 1
+
+    evaluated: set[str] = set()
+    clarity_rejected = False
+
+    async def accept(text: str, width: int) -> str | None:
+        nonlocal clarity_rejected
+        revision = _compose(text, graphic, anchor, width)
+        await _render_section(page, name, revision)
+        final = await _measure_container(page, name)
+        if final["overflow"] or final["utilization"] < occupied:
+            logger.warning("Auto-fit revision for %s no longer fits after final rendering", name)
+            return None
+        if text == source_text:
+            return revision
+        if text in evaluated:
+            return None
+        evaluated.add(text)
+        clarity = await _clarity(source_text, text)
+        if clarity not in ("good", "excellent"):
+            clarity_rejected = True
+            return None
+        return revision
+
+    def blurry(width: int) -> str | None:
+        if bounds["resizable"] and width > bounds["sharp"]:
+            return (f"Your {label} graphic had to be enlarged beyond its sharp print size "
+                    "to fill the section; it may look blurry.")
+        return None
+
+    for text, (_, width) in sorted(fitting.items(), key=lambda item: item[1][0], reverse=True):
+        if revision := await accept(text, width):
+            return revision, blurry(width)
+    while clarity_rejected and attempts < MAX_FIT_ATTEMPTS and source_words >= 2:
+        attempts += 1
+        text = await _shorten(source_text, name, retry_target)
+        if _words(text) >= source_words:
+            continue
+        state, width, _ = await trial(text)
+        if state == JUST_RIGHT and (revision := await accept(text, width)):
+            return revision, blurry(width)
+    return None, (
+        f"I&rsquo;m sorry {{{{user.username}}}}, I can&rsquo;t fit your {label} text and graphic "
+        "without losing too much clarity, leaving more than "
+        f"{round((1 - occupied) * 100)}% of the section empty, or shrinking the graphic "
+        f"below what is discernible from {feet} feet."
+    )
 
 
 async def _fit_snapshot(
@@ -570,6 +976,12 @@ async def auto_fit(
             }).filter(name => name !== "authors")"""
         )
         adjustable = {layout.ALIASES.get(name, name) for name in adjustable}
+        occupied, _ = _occupancy()
+
+        def require_model() -> None:
+            if not os.environ.get("OPENAI_API_KEY"):
+                raise AutoFitError("OPENAI_API_KEY is required to auto-fit poster sections.")
+
         for name in selected:
             if name in layout.MANUAL_ADJUSTMENT_SECTIONS:
                 if sections is not None:
@@ -577,27 +989,70 @@ async def auto_fit(
                     messages.append(layout.manual_adjustment_message(name))
                 continue
             measurement = profile["sections"][available[name]]
-            if not measurement["text_overflow"]:
-                continue
             prior = saved.get(name, "")
-            if graphics.graphic_ids(prior):
-                cribbed.append(name)
-                messages.append(
-                    f"Please adjust the text or graphics in {html.escape(name)} manually; "
-                    "auto-fit cannot yet preserve inserted graphics."
-                )
-                continue
-            if not os.environ.get("OPENAI_API_KEY"):
-                raise AutoFitError("OPENAI_API_KEY is required to auto-fit poster sections.")
+            label = html.escape(name)
+            graphic_count = _graphic_count(prior)
             source = next((row[2] for row in history
                            if row[0] == name and row[1] == prior), prior)
             source_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
             cached = [row[1] for row in history if row[0] == name and row[3] == source_hash]
+            if graphic_count > 1:
+                if measurement["text_overflow"] or measurement["overflow"]:
+                    cribbed.append(name)
+                    messages.append(
+                        f"Please adjust the text or graphics in {label} manually; "
+                        "auto-fit can arrange only one graphic per section."
+                    )
+                continue
+            if graphic_count == 1:
+                current = await _measure_container(page, name)
+                if not current["overflow"] and current["utilization"] >= occupied:
+                    continue
+                require_model()
+                revision, note = await _fit_graphic_section(page, name, source, prior, cached)
+                if note:
+                    messages.append(note)
+                if revision is None:
+                    await _render_section(page, name, prior)
+                    cribbed.append(name)
+                    if name in adjustable:
+                        messages.append(f"Consider revising adjacent sections to allow {label} more room.")
+                elif revision != graphics.clean_section(prior):
+                    revisions[name] = revision
+                    originals[name] = source
+                continue
+            if not measurement["text_overflow"]:
+                # Sparse text grows only toward longer cached sizings or the original source.
+                if measurement["text_layout_area"] >= measurement["available_text_area"] * occupied:
+                    continue
+                longer = sorted((text for text in dict.fromkeys(cached) if _words(text) > _words(prior)),
+                                key=_words, reverse=True)
+                if not longer and _words(source) <= _words(prior):
+                    continue
+                require_model()
+                revision = None
+                if longer:
+                    revision = await _fit_section(page, name, source, [], 1 - occupied,
+                                                  initial=longer, search=False)
+                if revision is None and _words(source) > _words(prior):
+                    revision = await _fit_section(page, name, source, cached, 1 - occupied,
+                                                  initial=[source])
+                if revision is None:
+                    await _render_section(page, name, prior)
+                    cribbed.append(name)
+                    messages.append(
+                        f"I&rsquo;m sorry {{{{user.username}}}}, I can&rsquo;t find a longer version of "
+                        f"your {label} text that fits without losing clarity."
+                    )
+                elif revision != prior:
+                    revisions[name] = revision
+                    originals[name] = source
+                continue
+            require_model()
             revision = await _fit_section(page, name, source, cached, minimum)
             if revision is None:
                 await _render_section(page, name, prior)
                 cribbed.append(name)
-                label = html.escape(name)
                 messages.append(
                     f"I&rsquo;m sorry {{{{user.username}}}}, I can&rsquo;t make your {label} "
                     "text any shorter without it losing too much clarity or leaving too much empty space."
@@ -618,7 +1073,7 @@ async def auto_fit(
                 await _active_fit_run(connection, uid, pid, run_id, lock=True)
             for name, revision in revisions.items():
                 source = originals[name]
-                values = (pid, name, _words(revision), revision, source,
+                values = (pid, name, _words(_strip_graphics(revision)), revision, source,
                           hashlib.sha256(source.encode("utf-8")).hexdigest())
                 if run_id is None:
                     cursor = await connection.execute(
@@ -661,7 +1116,7 @@ async def auto_fit(
         "say": "".join(f"<p>{message}</p>" for message in messages),
         "command": {"does": "poster-revisions", "payload": {
             "pid": pid, "revisions": revisions,
-            "expected": {name: elucidation.clean_html(saved[name]) for name in revisions},
+            "expected": {name: graphics.clean_section(saved[name]) for name in revisions},
         }},
     }
 
