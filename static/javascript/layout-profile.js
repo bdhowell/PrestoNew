@@ -27,6 +27,8 @@
     let contextMenu = null;
     let contentTimer = null;
     let latestProfile = null;
+    let loadOverflow = null;
+    let previousOverflow = new Set();
     const editedSections = new Set();
 
     if (!Number.isSafeInteger(pid) || pid <= 0
@@ -73,6 +75,10 @@
 
     function sectionElement(name) {
         return document.getElementById(name === "conclusion" ? "conclusions" : name);
+    }
+
+    function sectionName(section) {
+        return section.id === "conclusions" ? "conclusion" : section.id;
     }
 
     function closeContextMenu() {
@@ -138,48 +144,45 @@
         menu.querySelector("button:not(:disabled)")?.focus();
     }
 
-    function applyProfile(profile) {
+    function applyProfile(profile, {saved = false} = {}) {
         if (!profile || !profile.sections || !Array.isArray(profile.overflowing_sections)
             || !Array.isArray(profile.underflowing_sections)
             || !Array.isArray(profile.oversized_graphics)) {
             throw new Error("The profiler returned invalid section measurements.");
         }
 
-        latestProfile = profile;
+        if (saved) latestProfile = profile;
         const liveOverflow = new Set(profile.overflowing_sections);
         const liveUnderflow = new Set(profile.underflowing_sections);
         for (const section of editedSections) {
             if (!layout.contains(section) || section.clientHeight <= 0) continue;
-            const name = section.id === "conclusions" ? "conclusion" : section.id;
+            const name = sectionName(section);
             liveOverflow.delete(name);
             liveUnderflow.delete(name);
             if (section.scrollHeight > section.clientHeight) liveOverflow.add(name);
         }
         const overflowing = liveOverflow;
         const underflowing = liveUnderflow;
-        const oversized = new Map();
+        const oversized = new Set();
         for (const graphic of profile.oversized_graphics) {
             if (typeof graphic.section !== "string") {
                 throw new Error("The profiler returned an invalid graphic measurement.");
             }
-            oversized.set(graphic.section, (oversized.get(graphic.section) || 0) + 1);
+            oversized.add(graphic.section);
         }
 
-        const attention = new Set([...overflowing, ...underflowing, ...oversized.keys()]);
+        const attention = new Set([...overflowing, ...underflowing, ...oversized]);
         const outlined = new Set();
         const feedback = [];
         for (const name of attention) {
             const section = sectionElement(name);
             if (!section?.classList.contains("section") || !layout.contains(section)) continue;
             outlined.add(section);
-            const label = labels[name] || name;
-            if (overflowing.has(name)) {
+            const shouldReport = loadOverflow === null ? saved
+                : !loadOverflow.has(name) && !previousOverflow.has(name);
+            if (overflowing.has(name) && shouldReport) {
+                const label = labels[name] || name;
                 feedback.push(`${label} is overflowing; try shortening its text or resizing a graphic.`);
-            } else if (underflowing.has(name)) {
-                feedback.push(`${label} has room for more content; consider adding a little text or a graphic.`);
-            }
-            if (oversized.has(name)) {
-                feedback.push(`${label} has ${oversized.get(name) === 1 ? "a graphic" : "graphics"} that may be too large; consider resizing ${oversized.get(name) === 1 ? "it" : "them"}.`);
             }
         }
 
@@ -199,6 +202,8 @@
             element.classList.remove(contextTargetClass);
         }
         for (const element of outlined) element.classList.add(attentionClass);
+        if (saved && loadOverflow === null) loadOverflow = overflowing;
+        previousOverflow = overflowing;
         if (feedback.length) showMessage(feedback);
     }
 
@@ -220,7 +225,7 @@
                 throw new Error(result.detail || "Your layout could not be profiled.");
             }
             if (currentRevision === revision) {
-                applyProfile(result);
+                applyProfile(result, {saved: true});
                 await window.queueFitProfile?.(result);
             }
         } catch (error) {

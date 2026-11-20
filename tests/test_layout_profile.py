@@ -54,7 +54,8 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         }""", list(sections))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-content.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
-        await self.page.wait_for_function("feedback.length === 1")
+        await self.page.wait_for_function("document.querySelectorAll('.layout-profile-attention').length === 3")
+        self.assertEqual(await self.page.evaluate("feedback.length"), 1)
         for name, (canonical, label) in sections.items():
             self.assertIn("layout-profile-attention", await self.page.locator(f"#{name}").get_attribute("class"))
             for action in ("Auto-fit", "Resize graphics", "Adjust text content"):
@@ -110,7 +111,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-content.js"))
         await self.page.evaluate("window.queueFitProfile = undefined")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
-        await self.page.wait_for_function("feedback.length === 1")
+        await self.page.wait_for_function("document.querySelectorAll('.layout-profile-attention').length === 4")
         self.assertEqual(await self.page.evaluate("requests"), ["/magic/11/profile"])
         await self.page.locator(".content").evaluate("""element => {
             element.textContent = "Updated poster text";
@@ -141,9 +142,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
             "element => getComputedStyle(element).outlineStyle",
         ), "solid")
         self.assertIn("Results is overflowing", await self.page.evaluate("feedback[0]"))
-        self.assertIn("consider resizing it", await self.page.evaluate("feedback[0]"))
-        self.assertIn("Literature Cited has room for more content", await self.page.evaluate("feedback[0]"))
-        self.assertIn("Command-click on a Mac", await self.page.evaluate("feedback[0]"))
+        self.assertNotIn("Literature Cited", await self.page.evaluate("feedback[0]"))
 
         await self.page.locator("#results").evaluate("""section => {
             section.dispatchEvent(new PointerEvent("pointerdown", {
@@ -207,7 +206,61 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.page.locator("#graphic").evaluate(
             "element => element.classList.contains('layout-profile-attention')",
         ))
-        self.assertGreaterEqual(await self.page.evaluate("feedback.length"), 2)
+        self.assertEqual(await self.page.evaluate("feedback.length"), 1)
+
+    async def test_saved_profiles_announce_only_new_overflows(self) -> None:
+        await self.page.set_content("""
+            <div id="layout" data-pid="11" data-profile-validation-interval="0">
+                <div id="results" class="section"></div>
+                <div id="methods" class="section"></div>
+                <div id="conclusions" class="section"></div>
+                <div id="abstract" class="section"><div id="graphic" class="graphic"></div></div>
+            </div>
+        """)
+        await self.page.evaluate("""() => {
+            window.feedback = [];
+            window.appliedProfiles = [];
+            window.overflow = ["results"];
+            window.wikkit = {say: message => feedback.push(message)};
+            window.queueFitProfile = profile => appliedProfiles.push(profile.overflowing_sections);
+            window.fetch = async () => ({ok: true, json: async () => ({
+                sections: {results: {}, methods: {}, conclusion: {}, abstract: {}},
+                overflowing_sections: overflow,
+                underflowing_sections: ["abstract"],
+                oversized_graphics: [{section: "abstract", id: "graphic"}],
+            })});
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
+        await self.page.wait_for_function("appliedProfiles.length === 1")
+        self.assertEqual(await self.page.evaluate("feedback.length"), 1)
+        self.assertIn("Results is overflowing", await self.page.evaluate("feedback[0]"))
+
+        async def reprofile(names, count):
+            await self.page.evaluate("""names => {
+                window.overflow = names;
+                document.dispatchEvent(new Event("poster-layout-updated"));
+            }""", names)
+            await self.page.wait_for_function("count => appliedProfiles.length === count", arg=count)
+
+        await reprofile(["results", "methods", "conclusion"], 2)
+        messages = await self.page.evaluate("""feedback.map(message => {
+            const body = new DOMParser().parseFromString(message, "text/html");
+            return [...body.querySelectorAll("li")].map(item => item.textContent.split(" is overflowing")[0]);
+        })""")
+        self.assertEqual(messages, [["Results"], ["Materials and Methods", "Conclusion"]])
+        self.assertEqual(await self.page.evaluate("appliedProfiles.at(-1)"), ["results", "methods", "conclusion"])
+        self.assertEqual(await self.page.locator(".layout-profile-attention").evaluate_all(
+            "elements => elements.map(element => element.id)",
+        ), ["results", "methods", "conclusions", "abstract", "graphic"])
+
+        await reprofile(["results", "methods", "conclusion"], 3)
+        await reprofile(["conclusion"], 4)
+        self.assertEqual(await self.page.evaluate("feedback.length"), 2)
+        await reprofile(["results", "methods", "conclusion"], 5)
+        self.assertEqual(await self.page.evaluate("feedback.length"), 3)
+        self.assertIn("Materials and Methods is overflowing", await self.page.evaluate("feedback.at(-1)"))
+        self.assertNotIn("Conclusion is overflowing", await self.page.evaluate("feedback.at(-1)"))
+        self.assertNotIn("Results is overflowing", await self.page.evaluate("feedback.at(-1)"))
 
     async def test_outlines_follow_current_section_and_graphic_warnings(self) -> None:
         await self.page.set_content("""
@@ -234,7 +287,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
             window.fetch = async () => ({ok: true, json: async () => profileResponse});
         }""")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
-        await self.page.wait_for_function("feedback.length === 1")
+        await self.page.wait_for_function("document.querySelectorAll('.layout-profile-attention').length === 3")
         self.assertEqual(await self.page.locator(".layout-profile-attention").evaluate_all(
             "elements => elements.map(element => element.id)",
         ), ["results", "old-graphic", "conclusions"])
@@ -248,11 +301,10 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
             };
             document.dispatchEvent(new Event("poster-layout-updated"));
         }""")
-        await self.page.wait_for_function("feedback.length === 2")
+        await self.page.wait_for_function("document.querySelector('#new-graphic.layout-profile-attention')")
         self.assertEqual(await self.page.locator(".layout-profile-attention").evaluate_all(
             "elements => elements.map(element => element.id)",
         ), ["results", "new-graphic"])
-        self.assertIn("consider resizing it", await self.page.evaluate("feedback[1]"))
         for target in ("results", "old-graphic", "new-graphic", "conclusions"):
             with self.subTest(target=target):
                 outline = await self.page.locator(f"#{target}").evaluate(
@@ -267,7 +319,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         await self.page.wait_for_function(
             "document.querySelectorAll('.layout-profile-attention').length === 0",
         )
-        self.assertEqual(await self.page.evaluate("feedback.length"), 2)
+        self.assertEqual(await self.page.evaluate("feedback.length"), 1)
 
     async def test_warning_and_editing_outlines_stay_visible_at_poster_zoom(self) -> None:
         await self.page.set_content("""
@@ -304,7 +356,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         }""")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-zoom.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
-        await self.page.wait_for_function("feedback.length === 1")
+        await self.page.wait_for_function("document.querySelector('#graphic.layout-profile-attention')")
         for zoom in (20, 50, 100):
             await self.page.locator("#poster-zoom").evaluate("""(slider, value) => {
                 slider.value = value;
@@ -399,7 +451,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-content.js"))
         await self.page.evaluate("window.queueFitProfile = undefined")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
-        await self.page.wait_for_function("feedback.length === 1")
+        await self.page.wait_for_function("document.querySelector('#introduction.layout-profile-attention')")
         await self.page.locator(".content").evaluate("""element => {
             element.textContent = "Short";
             element.style.height = "20px";
@@ -416,6 +468,16 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.page.locator("#introduction").evaluate(
             "element => element.classList.contains('layout-profile-attention')",
         ))
+        self.assertEqual(await self.page.evaluate("feedback.length"), 1)
+        self.assertIn("Introduction is overflowing", await self.page.evaluate("feedback[0]"))
+        await self.page.locator(".content").evaluate("""element => {
+            element.style.height = "200px";
+            element.dispatchEvent(new Event("input", {bubbles: true}));
+        }""")
+        await self.page.wait_for_function("document.querySelector('#introduction.layout-profile-attention')")
+        await self.page.evaluate("document.dispatchEvent(new Event('poster-layout-updated'))")
+        await self.page.wait_for_function("profileRequests === 3")
+        self.assertEqual(await self.page.evaluate("feedback.length"), 1)
 
     async def test_initial_profile_waits_for_dom_and_geometry(self) -> None:
         await self.page.route("https://presto.test/layout-profile.js", lambda route: route.fulfill(
@@ -457,9 +519,16 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         await self.page.goto("https://presto.test/layout/edit")
         self.assertEqual(await self.page.evaluate("requests"), [])
         await self.page.evaluate("finishGeometry()")
-        await self.page.wait_for_function("feedback.length === 1")
+        await self.page.wait_for_function("document.querySelector('#results.layout-profile-attention')")
         self.assertEqual(await self.page.evaluate("requests"), ["/magic/11/profile"])
         self.assertEqual(await self.page.locator(".layout-profile-attention").count(), 1)
+        self.assertEqual(await self.page.evaluate("feedback.length"), 1)
+        self.assertIn("Results is overflowing", await self.page.evaluate("feedback[0]"))
+        await self.page.reload()
+        self.assertEqual(await self.page.evaluate("requests"), [])
+        await self.page.evaluate("finishGeometry()")
+        await self.page.wait_for_function("feedback.length === 1")
+        self.assertIn("Results is overflowing", await self.page.evaluate("feedback[0]"))
 
     async def test_profile_failure_is_reported_to_wikkit(self) -> None:
         await self.page.set_content("""

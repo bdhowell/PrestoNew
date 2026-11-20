@@ -20,6 +20,7 @@ class GraphicsEditorTests(unittest.IsolatedAsyncioTestCase):
             for name in (
                 "bold", "italic", "underline", "strikethrough", "superscript", "subscript",
                 "ullist", "ollist", "code", "plaintext", "cut", "copy", "paste", "image",
+                "graphics-left", "graphics-center", "graphics-right",
             )
         )
         await self.page.set_content(f"""
@@ -51,7 +52,7 @@ class GraphicsEditorTests(unittest.IsolatedAsyncioTestCase):
                 ]})};
             };
         }""")
-        for script in ("layout-editor.js", "layout-graphics.js"):
+        for script in ("layout-editor.js", "layout-graphics.js", "layout-graphic-controls.js"):
             await self.page.add_script_tag(path=str(ROOT / "static/javascript" / script))
 
     async def select_section(self, name: str) -> None:
@@ -95,6 +96,30 @@ class GraphicsEditorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await graphic.get_attribute("data-sid"), "22")
         self.assertEqual(await graphic.locator("img").get_attribute("src"), "/layout/source?sid=22")
         self.assertTrue((await self.page.locator('[data-section="results"]').inner_html()).startswith("Hello"))
+
+    async def test_float_controls_change_selected_graphic_placement(self) -> None:
+        await self.page.locator('[data-section="results"]').evaluate("""editor => {
+            editor.innerHTML = '<span class="graphic" data-sid="22" data-type="png" ' +
+                'data-placement="free"><img alt="Chart"></span>';
+        }""")
+        graphic = self.page.locator('[data-section="results"] .graphic')
+        await graphic.click()
+
+        button_ids = ("graphics-left", "graphics-center", "graphics-right")
+        for button_id, placement in (
+            ("graphics-left", "left-middle"),
+            ("graphics-center", "free"),
+            ("graphics-right", "right-middle"),
+        ):
+            button = self.page.locator(f"#{button_id}")
+            self.assertFalse(await button.is_disabled())
+            await button.click()
+            self.assertEqual(await graphic.get_attribute("data-placement"), placement)
+            for candidate in button_ids:
+                self.assertEqual(
+                    await self.page.locator(f"#{candidate}").get_attribute("aria-pressed"),
+                    str(candidate == button_id).lower(),
+                )
 
     async def test_qr_replacement_no_leaves_the_section_unchanged(self) -> None:
         await self.page.evaluate("""() => {

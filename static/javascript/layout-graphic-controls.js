@@ -14,6 +14,12 @@
     let overlay = null;
     let operation = null;
     const directions = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+    const placementControls = [
+        ["graphics-left", "left", "left-middle"],
+        ["graphics-center", "none", "free"],
+        ["graphics-right", "right", "right-middle"],
+    ].map(([id, mode, placement]) => [document.getElementById(id), mode, placement])
+        .filter(([button]) => button);
 
     function say(text) {
         const paragraph = document.createElement("p");
@@ -35,6 +41,18 @@
         overlay?.remove();
         overlay = null;
         selected = null;
+        updatePlacementControls();
+    }
+
+    function updatePlacementControls() {
+        const placement = selected?.dataset.placement || "free";
+        const mode = placement === "left-middle" || placement.endsWith("-left")
+            ? "left"
+            : placement === "right-middle" || placement.endsWith("-right") ? "right" : "none";
+        for (const [button, controlMode] of placementControls) {
+            button.disabled = !selected?.isConnected;
+            button.setAttribute("aria-pressed", String(Boolean(selected?.isConnected && mode === controlMode)));
+        }
     }
 
     function editorFor(element) {
@@ -155,6 +173,7 @@
         const editor = editorFor(graphic);
         if (!editor) return;
         selected = graphic;
+        updatePlacementControls();
         editor.focus({preventScroll: true});
         const range = document.createRange();
         range.selectNode(graphic);
@@ -289,6 +308,19 @@
             deselect();
         }
     });
+    for (const [button, , placement] of placementControls) {
+        button.addEventListener("click", () => {
+            if (!selected?.isConnected) {
+                deselect();
+                return;
+            }
+            selected.dataset.placement = placement;
+            editorFor(selected)?.dispatchEvent(new Event("input", {bubbles: true}));
+            updatePlacementControls();
+            updateOverlay();
+        });
+    }
+    updatePlacementControls();
     window.addEventListener("resize", updateOverlay);
     document.addEventListener("scroll", updateOverlay, true);
     document.addEventListener("poster-layout-updated", updateOverlay);

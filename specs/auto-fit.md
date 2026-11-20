@@ -706,7 +706,7 @@ When editing:
 After a section has or sections have been resized or updated, such as by the user editing text or adding or removing graphics (currently under consideration) and not changing for os.environ.get('PROFILE_VALIDATION_INTERVAL', 300):
 - profile the section(s) or the whole document, such as after layout out the page for editing.
 - identify the sections that are overflowing, underflowing, or have oversized graphics by placing an outline around them for the user to see.
-- Wikkit gently provides feedback to the user in character with his other messaging, telling the user which sections need attention and suggesting possible actions, such as resizing graphics or adjusting text content.
+- Wikkit announces all overflowing sections in the initial profile. Those sections form a fixed baseline until the page is opened or reloaded again. Later checks, including live text checks, announce only new overflow outside that baseline. Continuing overflow is not repeated, but a section outside the baseline can be announced again if it stops overflowing and later overflows again.
 
 ============================================================
 
@@ -714,8 +714,8 @@ When over a section that is overflowing or underflowing or has other problems, h
 
 The layout editor currently exposes this menu only on profiled problem sections. Adjust text content focuses the section editor; auto-fit saves pending edits and fits only the selected section, while graphic resizing is not yet available. Literature Cited, Acknowledgements, and Additional Information are still tested for overflow but are excluded from auto-fit queues. For these three sections, all three menu actions instead have Wikkit say, "I'm sorry, {identity.username}, you have to adjust {section.name} yourself." Authors can still edit their text manually. The menu also opens on a Command-click or Control-click and closes on Escape or an outside click.
 
-Each applied profile outlines the sections mentioned in Wikkit's current
-suggestions or warnings and their oversized graphics. Outlines are reconciled
+Each applied profile outlines all sections with current layout warnings and
+their oversized graphics, regardless of what Wikkit announces. Outlines are reconciled
 on every profile: resolved sections and graphics lose their highlights while
 items that still qualify remain outlined.
 Warning outlines stay amber and three screen pixels wide at every poster zoom
