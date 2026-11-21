@@ -1346,9 +1346,9 @@ Implementation contract:
   dimensions. All conference bounds are converted to centimeters before validation.
   The size picker reserves space beside the default chat window on wider screens
   and allows its choices to be scrolled above the chat window on narrow screens.
-  Sizes and filters remain selectable while waiting for the custom-dimensions
-  prompt. A selected size is staged until that prompt is active, then placed
-  in Wikkit's input; OK submits it only during custom-dimensions entry.
+  Selecting a size immediately validates and saves it via the dimensions
+  endpoint, then proceeds to upload. Invalid sizes display validation errors
+  and the correction form.
 - Exact conference requirements take precedence over readability minima.
   Otherwise both dimensions must meet the configured minimums. Partial maxima
   and requirements still constrain custom input. Layout validation enforces
@@ -1360,7 +1360,8 @@ Implementation contract:
   Edits POST JSON `{"dimensions": "36 in x 48 in"}` to `/layout/dimensions`;
   invalid values return HTTP 422 with errors and, when parseable, a preview.
   Valid values persist width, height, units, and orientation together and redirect
-  to `/layout/edit`. The server rejects edits to purchased or foreign posters.
+  to `/content/upload` (or `/layout/edit` when saving with a template).
+  The server rejects edits to purchased or foreign posters.
 
 The following original design sketch is superseded by the implementation
 contract above where unit conversions, field names, or orientation differ.

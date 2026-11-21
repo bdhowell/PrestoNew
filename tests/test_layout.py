@@ -558,7 +558,7 @@ class LayoutRouteTests(unittest.TestCase):
         document = html.fromstring(response.text)
         pairs = json.loads(document.get_element_by_id("dimension-picker").get("data-sizes"))
         self.assertIn([[70, 100, "cm"]], pairs)
-        self.assertIn([[24, 36, "in"], [36, 24, "in"]], pairs)
+        self.assertNotIn([[24, 36, "in"], [36, 24, "in"]], pairs)
         self.assertIs(wikkit.WORKFLOWS["layout-dimensions"], routes.dimensions_workflow)
         self.store.set_resumption.assert_awaited_once_with(
             7, 11, "http://testserver/layout/dimensions?xyzzy=arpa",
@@ -570,6 +570,36 @@ class LayoutRouteTests(unittest.TestCase):
         self.store.set_resumption.assert_awaited_once_with(
             7, 11, "http://testserver/layout/dimensions?tag=a%2Fb&tag=two&xyzzy=arpa",
         )
+
+    def test_dimension_picker_hides_examples_outside_conference_limits(self) -> None:
+        self.store.conference_details.return_value = (
+            "Meeting",
+            {
+                "maximum_poster_width": 48,
+                "maximum_poster_height": 36,
+                "poster_units": "in",
+            },
+        )
+        response = self.client.get("/layout/dimensions")
+        document = html.fromstring(response.text)
+        pairs = json.loads(document.get_element_by_id("dimension-picker").get("data-sizes"))
+        for group in pairs:
+            for width, height, units, *_ in group:
+                rules = routes.DimensionRules.from_details("Meeting", {
+                    "maximum_poster_width": 48,
+                    "maximum_poster_height": 36,
+                    "poster_units": "in",
+                })
+                self.assertEqual(rules.errors(
+                    width * routes.SCALE[units],
+                    height * routes.SCALE[units],
+                    units,
+                ), [])
+        self.assertTrue(any([48, 36, "in"] in group or [48, 36, "in", "tri"] in group for group in pairs))
+        self.assertFalse(any(
+            [96, 48, "in"] in group or [48, 96, "in"] in group
+            for group in pairs
+        ))
 
     def test_dimension_updates_store_centimeters_and_report_the_display_units(self) -> None:
         response = self.client.post("/layout/dimensions", json={"dimensions": "36 in x 48 in"})
@@ -811,8 +841,6 @@ class DimensionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 121.92, 91.44, "in")
         self.assertIn("&lt;Meeting&gt;", self.bot.request_response.await_args.args[0])
         self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/content/upload")
-        self.assertFalse(any(call.args[0].get("command", {}).get("does") == "dimension-entry"
-                             for call in self.bot.send.await_args_list))
 
     async def test_accept_maximum_and_idk_use_cm_and_correct_display_units(self) -> None:
         self.store.conference_details.return_value = ("Meeting", {
@@ -823,8 +851,7 @@ class DimensionWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.bot.request_response.return_value = reply
             await routes.dimensions_workflow(self.bot)
             self.store.set_dimensions.assert_awaited_once_with(7, 11, 121.92, 91.44, "in")
-            self.assertFalse(any(call.args[0].get("command", {}).get("does") == "dimension-entry"
-                                 for call in self.bot.send.await_args_list))
+            self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/content/upload")
 
     async def test_declining_maxima_allows_custom_dimensions(self) -> None:
         self.store.conference_details.return_value = ("Meeting", {
@@ -833,9 +860,7 @@ class DimensionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.bot.request_response.side_effect = ["cancel", "140 x 100 cm"]
         await routes.dimensions_workflow(self.bot)
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 100, 140, "cm")
-        commands = [call.args[0]["command"] for call in self.bot.send.await_args_list
-                    if call.args[0].get("command", {}).get("does") == "dimension-entry"]
-        self.assertEqual([command["payload"] for command in commands], [True, False])
+        self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/content/upload")
 
     async def test_invalid_input_shows_correction_and_retries_until_valid(self) -> None:
         self.bot.request_response.side_effect = ["idk", "nonsense", "10 cm x 100 cm", "100 cm x 150 cm"]

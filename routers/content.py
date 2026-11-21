@@ -50,10 +50,10 @@ FORMATS_MESSAGE = (
 STORAGE_ERRORS = (psycopg.Error, OSError, GoogleAPIError, GoogleAuthError, openai.OpenAIError, source_processing.ProcessingError)
 
 
-def conversion_notice() -> str:
-    if source_processing.enrichment_enabled():
-        return ""
-    return f"<p>{source_processing.REDUCED_FEATURE_NOTICE}</p>"
+# def conversion_notice() -> str:
+#     if source_processing.enrichment_enabled():
+#         return ""
+#     return f"<p>{source_processing.REDUCED_FEATURE_NOTICE}</p>"
 
 
 def size_warning(items: list[content.Source]) -> str:
@@ -104,7 +104,8 @@ async def upload_page(request: Request) -> Response:
         raise HTTPException(503, "Your source files could not be loaded. Please try again.") from None
     return render_page(
         request, "content/upload.html", "content-upload",
-        (INTRO if not items else "") + FORMATS_MESSAGE + conversion_notice() + size_warning(items),
+        # (INTRO if not items else "") + FORMATS_MESSAGE + conversion_notice() + size_warning(items),
+        (INTRO if not items else "") + FORMATS_MESSAGE + size_warning(items),
         items=items, accept=",".join(content.FORMATS),
     )
 
@@ -143,7 +144,8 @@ async def upload_file(request: Request) -> JSONResponse:
         raise HTTPException(503, "Your file could not be saved. Please try again.") from None
     return JSONResponse({
         "ok": True, "item": item_json(item), "items": [item_json(source) for source in items],
-        "say": conversion_notice() + size_warning(items),
+        # "say": conversion_notice() + size_warning(items),
+        "say": size_warning(items),
     }, status_code=201)
 
 @router.post("/finished")
@@ -180,8 +182,8 @@ async def extract_page(request: Request) -> Response:
         request, "content/extract.html", "content-extract",
         f"<p>{identity.display_name(request)}, your content has finished uploading.</p>"
         "<p>I&rsquo;m reading through it now, extracting the text, tables, and images "
-        "I can use for your poster. Please keep this page open while I work.</p>"
-        + conversion_notice(),
+        "I can use for your poster. Please keep this page open while I work.</p>",
+        # + conversion_notice(),
         pending=[{"sid": item.sid, "filename": item.filename}
                  for item in items if item.parent is None and not item.extracted],
     )

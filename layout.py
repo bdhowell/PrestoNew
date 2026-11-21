@@ -666,6 +666,18 @@ class DimensionRules:
             for units, presets in posters.POSTER_PRESETS.items()
         }
 
+    def eligible_dimension_pairs(self, pairs: list[list[list]]) -> list[list[list]]:
+        eligible = []
+        for group in pairs:
+            fitting = [
+                pair for pair in group
+                if len(pair) >= 3
+                and not self.errors(pair[0] * SCALE[pair[2]], pair[1] * SCALE[pair[2]], pair[2])
+            ]
+            if fitting:
+                eligible.append(fitting)
+        return eligible
+
     def errors(self, width: float, height: float, units: str | None = None) -> list[str]:
         units = units or self.units
         scale = SCALE[units]
@@ -751,9 +763,10 @@ async def dimensions_page(request: Request) -> Response:
         return RedirectResponse(f"/posters/{poster.pid}/open", status_code=303)
     await common.resume(request)
     sizes = json.loads((Path(__file__).resolve().parent / "stipulations" / "sizes.json").read_text())
+    rules = await rules_for(uid_for(request), poster.pid)
     return render_page(
         request, "layout/dimensions.html", "layout-dimensions", poster=poster,
-        dimension_pairs=sizes["poster_dimension_pairs"],
+        dimension_pairs=rules.eligible_dimension_pairs(sizes["poster_dimension_pairs"]),
     )
 
 
@@ -835,9 +848,7 @@ async def dimensions_workflow(bot: Chatbot) -> None:
             while True:
                 units = rules.units
                 if width is None or height is None:
-                    await bot.send({"command": {"does": "dimension-entry", "payload": True}})
                     reply = await bot.request_response(prompt)
-                    await bot.send({"command": {"does": "dimension-entry", "payload": False}})
                     if (clean_response(reply) or {}).get("response") == "idk":
                         if rules.max_width is None or rules.max_height is None:
                             prompt = "<p>No maximum dimensions are available. Please enter height x width and units.</p>"

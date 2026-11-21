@@ -7,28 +7,18 @@
     const input = document.querySelector("#poster-dimensions");
     const status = document.querySelector("#dimension-status");
     const picker = document.querySelector("#dimension-picker");
-    const accept = document.querySelector("#dimension-accept");
+    const controls = document.querySelector("#dimension-picker-controls");
     const pickerStatus = document.querySelector("#dimension-picker-status");
     const sizeList = document.querySelector("#dimension-sizes");
     const empty = document.querySelector("#dimension-empty");
-    const chatInput = document.querySelector("#chatinput");
     const pairs = JSON.parse(picker.dataset.sizes);
     let units = "in";
     let orientation = "landscape";
-    let selected = null;
-    let dimensionEntry = false;
     let active;
     let timer;
 
     function renderSizes() {
-        if (selected) {
-            if (dimensionEntry) window.wikkit.setInput("");
-            pickerStatus.textContent = dimensionEntry
-                ? "Choose a size or enter your own dimensions."
-                : "Choose a size while waiting for Wikkit to ask for dimensions.";
-        }
         sizeList.replaceChildren();
-        selected = null;
         const sizes = pairs.flat().filter(([width, height, sourceUnits]) =>
             (units === "in" ? sourceUnits === "in" : sourceUnits === "cm" || sourceUnits === "mm")
             && (orientation === "landscape" ? width > height : height > width)
@@ -44,7 +34,6 @@
             const button = document.createElement("button");
             button.type = "button";
             button.className = "dimension-size";
-            button.setAttribute("aria-pressed", "false");
             button.setAttribute("aria-label", `${width} by ${height} ${units}, width by height`);
             const rectangle = document.createElement("span");
             rectangle.className = "dimension-rectangle";
@@ -54,14 +43,7 @@
             label.textContent = `${width} × ${height} ${units}`;
             button.append(rectangle, label);
             button.addEventListener("click", () => {
-                selected?.button.setAttribute("aria-pressed", "false");
-                const text = `${height} ${units} x ${width} ${units}`;
-                if (dimensionEntry) window.wikkit.setInput(text);
-                selected = { button, text };
-                button.setAttribute("aria-pressed", "true");
-                pickerStatus.textContent = dimensionEntry
-                    ? "Size placed in Wikkit's input. Choose OK or press Enter to continue."
-                    : "Size selected. Wait for Wikkit to ask for dimensions.";
+                saveDimensions(`${height} ${units} x ${width} ${units}`, true);
             });
             sizeList.append(button);
         }
@@ -82,17 +64,6 @@
             renderSizes();
         });
     }
-    chatInput.addEventListener("input", () => {
-        if (selected) {
-            selected.button.setAttribute("aria-pressed", "false");
-            selected = null;
-        }
-    });
-    accept.addEventListener("click", () => {
-        if (!window.wikkit.submitInput()) {
-            pickerStatus.textContent = "Enter dimensions in Wikkit's input and wait for its prompt.";
-        }
-    });
     renderSizes();
 
     function show(payload) {
@@ -106,59 +77,59 @@
         }
     }
 
-    async function update(event) {
-        if (event) event.preventDefault();
+    async function saveDimensions(dimensions, fromPicker = false) {
         clearTimeout(timer);
         if (active) active.abort();
         const controller = new AbortController();
         active = controller;
-        status.textContent = "Checking dimensions...";
+        controls.disabled = true;
+        if (fromPicker) form.inert = true;
+        const message = fromPicker ? pickerStatus : status;
+        message.textContent = "Checking dimensions...";
         try {
             const response = await fetch("/layout/dimensions", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ dimensions: input.value }),
+                body: JSON.stringify({ dimensions }),
                 signal: controller.signal,
             });
             const result = await response.json();
             if (controller.signal.aborted) return;
             if (result.preview) show(result.preview);
             if (!response.ok) {
-                status.textContent = result.errors ? result.errors.join(" ") : result.detail;
+                if (fromPicker) {
+                    region.hidden = false;
+                    if (!result.preview) input.value = dimensions;
+                }
+                message.textContent = result.errors ? result.errors.join(" ")
+                    : result.detail || "Your dimensions could not be saved. Please try again.";
                 return;
             }
             window.location.assign(result.redirect);
         } catch (error) {
             if (error.name !== "AbortError") {
-                status.textContent = "Your dimensions could not be saved. Please try again.";
+                message.textContent = "Your dimensions could not be saved. Please try again.";
+            }
+        } finally {
+            if (active === controller) {
+                active = null;
+                controls.disabled = false;
+            }
+            if (fromPicker) {
+                form.inert = false;
             }
         }
     }
-    form.addEventListener("submit", update);
+    form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        saveDimensions(input.value);
+    });
     input.addEventListener("input", () => {
         if (active) active.abort();
         clearTimeout(timer);
-        timer = setTimeout(() => update(), 400);
+        timer = setTimeout(() => saveDimensions(input.value), 400);
     });
     window.registerWikkitCommands({ commands: {
         "correct-dimensions": { does: show },
-        "dimension-entry": { does: (enabled) => {
-            dimensionEntry = enabled;
-            accept.disabled = !enabled;
-            if (enabled && selected) {
-                const choice = selected;
-                window.wikkit.setInput(choice.text);
-                selected = choice;
-                choice.button.setAttribute("aria-pressed", "true");
-            }
-            if (!enabled && selected) {
-                selected.button.setAttribute("aria-pressed", "false");
-                selected = null;
-            }
-            pickerStatus.textContent = enabled
-                ? (selected ? "Size placed in Wikkit's input. Choose OK or press Enter to continue."
-                    : "Choose a size or enter your own dimensions.")
-                : "Choose a size while waiting for Wikkit to ask for dimensions.";
-        } },
     } });
 })();

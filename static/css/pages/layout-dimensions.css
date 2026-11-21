@@ -46,11 +46,11 @@
     margin: 1.5rem 0;
 }
 
-.dimension-size {
-    display: flex;
-    flex-direction: column;
+.wikkit-page .dimension-size {
+    display: grid;
+    grid-template-rows: 1fr auto;
+    justify-items: center;
     align-items: center;
-    justify-content: end;
     gap: .5rem;
     width: 9rem;
     min-height: 8rem;
@@ -58,13 +58,9 @@
     scroll-margin-top: 5rem;
 }
 
-.dimension-size[aria-pressed="true"] {
-    outline: 3px solid currentColor;
-    outline-offset: 2px;
-}
-
 .dimension-rectangle {
     display: block;
+    align-self: center;
     border: 2px solid currentColor;
     background: white;
     box-sizing: border-box;
