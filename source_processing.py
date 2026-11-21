@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import openai
+import cv2
+import numpy as np
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 from lxml.etree import XMLSyntaxError
@@ -72,6 +74,25 @@ def image_dimensions(data: bytes) -> tuple[int, int]:
             return image.size
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
         raise ValueError("The image cannot be decoded safely.") from error
+
+
+def image_complexity_score(data: bytes) -> float:
+    try:
+        power = float(os.environ.get("IMAGE_COMPLEXITY_PENALTY_POWER", "0.15"))
+    except ValueError as error:
+        raise ValueError("Image complexity settings must be numbers.") from error
+    if not math.isfinite(power) or power < 0:
+        raise ValueError("IMAGE_COMPLEXITY_PENALTY_POWER must be nonnegative and finite.")
+    try:
+        image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            raise ValueError("The image could not be decoded for complexity evaluation.")
+        height, width = image.shape
+        edges = cv2.Canny(cv2.GaussianBlur(image, (3, 3), 0), 50, 150)
+        area = width * height
+        return float(np.count_nonzero(edges) / area / max((area / 10000.0) ** power, 1.0))
+    except (cv2.error, OverflowError) as error:
+        raise ValueError("The image could not be evaluated for complexity.") from error
 
 
 def svg_dimensions(data: bytes) -> tuple[int, int]:

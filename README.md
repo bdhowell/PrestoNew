@@ -73,6 +73,7 @@ psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-thumbnai
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/image-assessment.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-image-classification.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/auto-fit.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-complexity.sql
 ```
 
 ### Poster dimensions
@@ -168,12 +169,13 @@ and Results sections, including criteria, supported elements, limitations, and
 suggested improvements, linked to the image source; the conference is optional.
 Interrupted connections are retried automatically twice before offering a manual
 retry; saved assessments are reused on each attempt.
-PNG and JPEG graphics are also scored using blurred Canny edge density with an
-area penalty. `IMAGE_COMPLEXITY_THRESHOLD` defaults to `0.5` and
+Raster source images and extracted raster assets are scored using blurred Canny
+edge density with an area penalty; the score is stored in `source.complexity`.
+`IMAGE_COMPLEXITY_THRESHOLD` defaults to `0.5` and
 `IMAGE_COMPLEXITY_PENALTY_POWER` defaults to `0.15`; scores strictly above the
-threshold are marked unsuitable and omitted from the editor's suggested
-graphics. Scores are recalculated from source bytes so configuration changes
-also apply to existing assessments. Existing placed graphics remain editable.
+threshold are omitted from the editor's suggested graphics. Threshold changes
+apply immediately to stored scores; penalty-power changes affect newly processed
+images. Existing placed graphics remain editable.
 Classified charts are normalized and stored as PNG images. For a classified
 math-expression image, each extracted LaTeX expression is stored in `source.text`
 on its own child source record, while the original image remains available.

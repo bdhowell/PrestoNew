@@ -147,6 +147,7 @@ CREATE TABLE source (
     size        INTEGER NOT NULL,
     height      INTEGER,
     width       INTEGER,
+    complexity  REAL,
     fileid      UUID,
     storage_uri TEXT, -- absolute local path or gs://bucket/key for an original upload
     hash        TEXT, -- prevents repeatedly extracted the same item

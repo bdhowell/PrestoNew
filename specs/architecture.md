@@ -1132,6 +1132,21 @@ be at least 450 pixels (3 inches). Missing or non-positive dimensions are unknow
 not suitable by default; text/document sources are not subject to this check.
 This diagnostic check does not change the upload page's existing size warnings.
 
+`GET /system/dump?sid=123` displays every column of the source record as an
+HTML page, including its text and storage URI, but not the contents of any
+externally stored file. Text retains its line breaks and tabs; literal backslash
+sequences are not decoded. Table sources with table markup in their text also
+show a sanitized table preview while preserving the original text below.
+Image media types show a larger responsive preview via `GET /system/dump/{sid}/image`,
+which independently checks the current superuser flag, regardless of the
+source's classification or poster ownership. The original image is served except
+that TIFF is converted to PNG for browser compatibility. Missing image files are
+reported in the page or by the image endpoint. The original thumbnail endpoint
+remains available.
+It requires a signed-in account whose
+current `user.superuser` flag is true, regardless of poster ownership. The
+response is not cacheable; nonexistent sources return 404.
+
 `POST /system/purge` permanently removes all posters and conferences, including
 their cascading dependent records and optional poster memory, then deletes only
 the numbered `0` through `9` subdirectories of the configured local `SOURCES_DIR`.

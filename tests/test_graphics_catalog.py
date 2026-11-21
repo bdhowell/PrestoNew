@@ -33,6 +33,9 @@ class GraphicsSelectionTests(unittest.TestCase):
         success, encoded = cv2.imencode(".jpg", numpy.zeros((20, 20), dtype=numpy.uint8))
         self.assertTrue(success)
         self.assertEqual(graphics.image_complexity(encoded.tobytes())["score"], 0)
+        success, encoded = cv2.imencode(".tiff", numpy.zeros((20, 20), dtype=numpy.uint8))
+        self.assertTrue(success)
+        self.assertEqual(graphics.image_complexity(encoded.tobytes())["score"], 0)
         with self.assertRaises(ValueError):
             graphics.image_complexity(b"not an image")
         for key, value in (("IMAGE_COMPLEXITY_THRESHOLD", "nan"),
@@ -130,10 +133,10 @@ class GraphicsCatalogRouteTests(unittest.TestCase):
         self.sources = AsyncMock()
         self.sources.graphic_sources.return_value = [
             content.GraphicSource(21, "formula.png", type="math", math_expressions=["x^2"]),
-            content.GraphicSource(22, "chart.png", assessments={"results": {"rating": "highly"}}),
+            content.GraphicSource(
+                22, "chart.png", assessments={"results": {"rating": "highly"}}, complexity=0.8,
+            ),
         ]
-        _, encoded = cv2.imencode(".png", numpy.zeros((20, 20), dtype=numpy.uint8))
-        self.sources.graphic_source.return_value = (encoded.tobytes(), "image/png")
         mocked = patch.object(content, "store", return_value=self.sources)
         mocked.start()
         self.addCleanup(mocked.stop)
@@ -176,9 +179,12 @@ class GraphicsCatalogRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
 
     def test_catalog_omits_complex_raster_but_not_svg(self) -> None:
-        image = numpy.random.default_rng(8).integers(0, 256, (100, 100), dtype=numpy.uint8)
-        _, encoded = cv2.imencode(".png", image)
-        self.sources.graphic_source.return_value = (encoded.tobytes(), "image/png")
+        self.sources.graphic_sources.return_value[0] = content.GraphicSource(
+            21, "formula.png", type="math", complexity=0.8,
+        )
+        self.sources.graphic_sources.return_value[1] = content.GraphicSource(
+            22, "chart.png", complexity=0.8,
+        )
         self.sources.graphic_sources.return_value.append(
             content.GraphicSource(23, "vector.svg", mimetype="image/svg+xml", type="svg")
         )
@@ -186,14 +192,16 @@ class GraphicsCatalogRouteTests(unittest.TestCase):
             response = self.client.get("/layout/graphics", params={"pid": 11, "section": "results"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual([item["sid"] for item in response.json()["graphics"]], [23])
-        self.assertCountEqual([call.args for call in self.sources.graphic_source.await_args_list],
-                              [(7, 11, 21), (7, 11, 22)])
+        self.sources.graphic_source.assert_not_awaited()
 
-    def test_invalid_raster_reports_catalog_error(self) -> None:
-        self.sources.graphic_source.return_value = (b"invalid", "image/png")
-        with self.assertLogs("layout", "ERROR"):
-            response = self.client.get("/layout/graphics", params={"pid": 11, "section": "results"})
-        self.assertEqual(response.status_code, 503)
+    def test_catalog_uses_stored_complexity_without_loading_image(self) -> None:
+        self.sources.graphic_sources.return_value = [
+            content.GraphicSource(22, "chart.png", complexity=0.1),
+        ]
+        response = self.client.get("/layout/graphics", params={"pid": 11, "section": "results"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["sid"] for item in response.json()["graphics"]], [22])
+        self.sources.graphic_source.assert_not_awaited()
 
     def test_saving_graphics_checks_owner_source_and_section(self) -> None:
         self.store.save_section.return_value = True

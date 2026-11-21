@@ -506,11 +506,8 @@ async def available_graphics(
         available = []
         for item in candidates:
             if item.mimetype in ("image/png", "image/jpeg"):
-                source = await content.store().graphic_source(uid_for(request), poster.pid, item.sid)
-                if source is None:
-                    raise ValueError(f"Graphic source {item.sid} is no longer available.")
-                complexity = await run_in_threadpool(graphics.image_complexity, source[0])
-                if complexity["too_complex"]:
+                threshold = graphics.complexity_threshold()
+                if item.complexity is not None and item.complexity > threshold:
                     continue
             available.append(item)
     except (*STORAGE_ERRORS, ValueError):

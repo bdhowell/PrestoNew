@@ -840,12 +840,12 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
             (
                 21, "chart.png", "image/png", "image", "A chart", None,
                 None, None, None, None, None, None, None, None, None, None,
-                datetime(2026, 11, 10, tzinfo=timezone.utc), None, [],
+                datetime(2026, 11, 10, tzinfo=timezone.utc), None, [], None,
             ),
             (
                 22, "paper figure.jpg", "image/jpeg", "image", None, 1,
                 None, None, None, None, None, None, None, None, None, None,
-                datetime(2026, 11, 10, tzinfo=timezone.utc), None, [],
+                datetime(2026, 11, 10, tzinfo=timezone.utc), None, [], None,
             ),
         ]
         with patch.object(store, "_connect", AsyncMock(return_value=connection)):
@@ -885,6 +885,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                 21, "chart.png", "image/png", "chart", "A chart", None,
                 section, "highly", "Supports results.", {"relevance": "Relevant"},
                 ["Data"], ["None"], ["Add a key"], created, updated, updated, updated, None, [],
+                None,
             )
 
         cursor.fetchall.return_value = [
@@ -916,7 +917,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
             return (
                 sid, "formula.png", "image/png", kind, None, None,
                 None, None, None, None, None, None, None, None, None, None,
-                updated, text, expressions,
+                updated, text, expressions, None,
             )
 
         connection.execute.return_value.fetchall.return_value = [
@@ -1033,7 +1034,8 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         files.put.return_value = "/sources/new-thumbnail"
         with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
                 patch.object(content, "SourceFiles", return_value=files), \
-                patch.object(content.processing, "image_dimensions", return_value=(640, 480)):
+                patch.object(content.processing, "image_dimensions", return_value=(640, 480)), \
+                patch.object(content.processing, "image_complexity_score", return_value=0.25):
             self.assertTrue(await store.save_thumbnail(
                 7, 11, b"\x89PNG\r\n\x1a\nimage", (updated, None),
             ))
@@ -1148,7 +1150,8 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params[:6], (11, "text", None, "file.md", "text/markdown", 4))
         self.assertIsInstance(params[6], uuid.UUID)
         self.assertEqual(params[7:11], (content.source_hash(b"text"), "/sources/1/test", None, None))
-        self.assertIs(params[-1], False)
+        self.assertIs(params[13], False)
+        self.assertIsNone(params[14])
         content.processing.extract.assert_not_called()
         content.processing.summarize.assert_not_awaited()
 
@@ -1268,9 +1271,13 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                 files.put.return_value = "/sources/logo"
                 asset = source_processing.Asset("logo.png", b"image", "image/png", "image",
                                                 description="A logo", width=300, height=300)
-                result = await store._insert_source(connection, files, [], 11, asset, None)
+                with patch.object(content.processing, "image_complexity_score", return_value=0.25):
+                    result = await store._insert_source(connection, files, [], 11, asset, None)
                 self.assertEqual(result.kind, expected_kind)
                 self.assertEqual(connection.execute.await_args_list[-1].args[1][1], expected_kind)
+                statement, params = connection.execute.await_args_list[-1].args
+                self.assertIn("extracted, complexity)", statement)
+                self.assertEqual(params[-1], 0.25)
                 if expected_kind == "logo":
                     self.assertIn("UPDATE source SET kind = 'image'", connection.execute.await_args_list[2].args[0])
 
@@ -1323,7 +1330,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                     content.processing.summarize.assert_not_awaited()
                     statement, params = connection.execute.await_args_list[-1].args
                     self.assertIn("extracted = TRUE", statement)
-                    self.assertEqual(params, ("text", None, None, None, "text", 1))
+                    self.assertEqual(params, ("text", None, None, None, "text", None, 1))
 
     async def test_failed_conversion_keeps_original_for_retry(self) -> None:
         store = content.SourceStore()
@@ -1857,6 +1864,48 @@ class ContentDatabaseTests(unittest.TestCase):
                 "VALUES (%s, %s, 1, 'image/png')", (pid, kind),
             )
 
+    def test_source_complexity_migration_is_repeatable(self) -> None:
+        self.connection.execute("ALTER TABLE source DROP COLUMN complexity")
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        sid = self.connection.execute(
+            "INSERT INTO source (pid, kind, size, mimetype) "
+            "VALUES (%s, 'image', 1, 'image/png') RETURNING sid",
+            (pid,),
+        ).fetchone()[0]
+        migration = (ROOT / "schema/source-complexity.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        column = self.connection.execute(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'source' "
+            "AND column_name = 'complexity'",
+        ).fetchone()
+        self.assertEqual(column, ("real",))
+        self.assertEqual(self.connection.execute(
+            "SELECT complexity FROM source WHERE sid = %s", (sid,),
+        ).fetchone(), (None,))
+
+    def test_source_complexity_migration_is_repeatable(self) -> None:
+        self.connection.execute("ALTER TABLE source DROP COLUMN complexity")
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        sid = self.connection.execute(
+            "INSERT INTO source (pid, kind, size, mimetype) "
+            "VALUES (%s, 'image', 1, 'image/png') RETURNING sid",
+            (pid,),
+        ).fetchone()[0]
+        migration = (ROOT / "schema/source-complexity.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        column = self.connection.execute(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'source' "
+            "AND column_name = 'complexity'",
+        ).fetchone()
+        self.assertEqual(column, ("real",))
+        self.assertEqual(self.connection.execute(
+            "SELECT complexity FROM source WHERE sid = %s", (sid,),
+        ).fetchone(), (None,))
+
     def test_poster_thumbnail_refreshes_for_poster_and_source_updates(self) -> None:
         from PIL import Image
 
@@ -2212,6 +2261,18 @@ class ContentDatabaseTests(unittest.TestCase):
             describe.assert_not_awaited()
             self.assertFalse(item.extracted)
             self.assertEqual(item.kind, "image")
+            score = self.connection.execute(
+                "SELECT complexity FROM source WHERE sid = %s", (item.sid,),
+            ).fetchone()[0]
+            self.assertAlmostEqual(
+                score, source_processing.image_complexity_score(image.getvalue()),
+            )
+            score = self.connection.execute(
+                "SELECT complexity FROM source WHERE sid = %s", (item.sid,),
+            ).fetchone()[0]
+            self.assertAlmostEqual(
+                score, source_processing.image_complexity_score(image.getvalue()),
+            )
             asyncio.run(self.store.extract(7, pid, item.sid))
             describe.assert_awaited_once_with(image.getvalue())
             sources = asyncio.run(self.store.list_sources(7, pid))

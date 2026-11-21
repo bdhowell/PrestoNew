@@ -69,7 +69,7 @@ Otherwise, it should be treated as a raster image and handled accordingly.
 
 ==============================================================
 
-When evaluating png and jpeg images, we can use edge-based complexity scoring to determine how "complex" or "detailed" an image is. 
+When evaluating raster images such as PNG, JPEG, and TIFF, we can use edge-based complexity scoring to determine how "complex" or "detailed" an image is.
 This can help differentiate between simple graphics and more intricate raster images.
 Highly complex images, especially smaller ones that have a complexity above `os.environ.get("IMAGE_COMPLEXITY_THRESHOLD", 0.5)`, are not suitable for use in posters because they will not scale well and may appear visually cluttered or noisy at a three-foot viewing distance.
 

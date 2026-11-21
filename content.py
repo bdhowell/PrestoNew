@@ -200,6 +200,7 @@ class GraphicSource:
     assessments: dict[str, dict[str, object]] = field(default_factory=dict)
     math_expressions: list[str] = field(default_factory=list)
     table_html: str = ""
+    complexity: float | None = None
 
 
 @dataclass(frozen=True)
@@ -306,6 +307,7 @@ class SourceStore(PosterStore):
         import graphics
 
         width, height = await run_in_threadpool(processing.image_dimensions, data)
+        complexity = await run_in_threadpool(processing.image_complexity_score, data)
         files = SourceFiles()
         written: list[str] = []
         old_uri: str | None = None
@@ -343,8 +345,9 @@ class SourceStore(PosterStore):
                     await connection.execute(
                         "UPDATE source SET filename = 'qrcode.png', mimetype = 'image/png', "
                         "size = %s, height = %s, width = %s, fileid = %s, storage_uri = %s, "
-                        "hash = %s, text = NULL, extracted = TRUE, updated = now() WHERE sid = %s",
-                        (len(data), height, width, fileid, uri, source_hash(data), sid),
+                        "hash = %s, complexity = %s, text = NULL, extracted = TRUE, updated = now() "
+                        "WHERE sid = %s",
+                        (len(data), height, width, fileid, uri, source_hash(data), complexity, sid),
                     )
                 cursor = await connection.execute(
                     "SELECT content FROM section WHERE pid = %s AND which = 'additional information' FOR UPDATE",
@@ -456,6 +459,7 @@ class SourceStore(PosterStore):
         if not data.startswith(b"\x89PNG\r\n\x1a\n"):
             raise ValueError("Poster thumbnails must be PNG images.")
         width, height = await run_in_threadpool(processing.image_dimensions, data)
+        complexity = await run_in_threadpool(processing.image_complexity_score, data)
         files = SourceFiles()
         written: list[str] = []
         old_uri: str | None = None
@@ -508,8 +512,9 @@ class SourceStore(PosterStore):
                         "UPDATE source SET filename = 'thumbnail.png', mimetype = 'image/png', "
                         "size = %s, height = %s, width = %s, fileid = %s, storage_uri = %s, "
                         "hash = %s, parent = NULL, text = NULL, description = NULL, "
-                        "added = now(), updated = now(), extracted = TRUE WHERE sid = %s",
-                        (len(data), height, width, fileid, uri, source_hash(data), sid),
+                        "complexity = %s, added = now(), updated = now(), extracted = TRUE "
+                        "WHERE sid = %s",
+                        (len(data), height, width, fileid, uri, source_hash(data), complexity, sid),
                     )
         except BaseException:
             for uri in written:
@@ -633,11 +638,13 @@ class SourceStore(PosterStore):
                 data = await run_in_threadpool(files.read, uri)
                 if kind in ("image", "logo"):
                     width, height = await run_in_threadpool(processing.image_dimensions, data)
+                    complexity = await run_in_threadpool(processing.image_complexity_score, data)
                     result = processing.Processed(
                         width=width, height=height,
                         description=await processing.describe_image(data),
                     )
                 else:
+                    complexity = None
                     result = await run_in_threadpool(processing.extract, filename, data)
                 for asset in result.assets:
                     if asset.width is not None and not asset.description:
@@ -658,10 +665,11 @@ class SourceStore(PosterStore):
                 kind = await self._asset_kind(connection, pid, original)
                 await connection.execute(
                     "UPDATE source SET text = %s, description = %s, "
-                    "width = %s, height = %s, kind = %s, extracted = TRUE, updated = now() "
+                    "width = %s, height = %s, kind = %s, complexity = %s, "
+                    "extracted = TRUE, updated = now() "
                     "WHERE sid = %s",
                     (result.text or None, result.description or None, result.width,
-                     result.height, kind, sid),
+                     result.height, kind, complexity, sid),
                 )
                 for asset in result.assets:
                     await self._insert_source(connection, files, written, pid, asset, sid)
@@ -690,17 +698,22 @@ class SourceStore(PosterStore):
             if row is not None:
                 return Source(*row)
         kind = await self._asset_kind(connection, pid, asset) if extracted else asset.kind
+        complexity = (
+            await run_in_threadpool(processing.image_complexity_score, asset.data)
+            if asset.mimetype.startswith("image/") and asset.mimetype != "image/svg+xml"
+            else None
+        )
         fileid = uuid4()
         uri = await run_in_threadpool(files.put, fileid, asset.data, asset.mimetype)
         written.append(uri)
         cursor = await connection.execute(
             "INSERT INTO source (pid, kind, parent, filename, mimetype, size, fileid, hash, "
-            "storage_uri, text, description, width, height, extracted) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "storage_uri, text, description, width, height, extracted, complexity) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
             "RETURNING sid, filename, mimetype, size, added::text, parent, description, width, height, kind, extracted",
             (pid, kind, parent, asset.filename, asset.mimetype, len(asset.data), fileid,
              digest, uri, asset.text or None, asset.description or None,
-             asset.width, asset.height, extracted),
+             asset.width, asset.height, extracted, complexity),
         )
         row = await cursor.fetchone()
         assert row is not None
@@ -841,7 +854,7 @@ class SourceStore(PosterStore):
                 "WHERE formula.pid = s.pid AND formula.parent = s.sid "
                 "AND formula.kind = 'math expression' AND formula.filename LIKE %s "
                 "AND formula.text IS NOT NULL AND btrim(formula.text) <> '' "
-                "ORDER BY formula.sid) "
+                "ORDER BY formula.sid), s.complexity "
                 "FROM source s JOIN poster p USING (pid) "
                 "LEFT JOIN source parent ON parent.sid = s.parent "
                 "LEFT JOIN assessment a ON a.sid = s.sid "
@@ -892,6 +905,7 @@ class SourceStore(PosterStore):
                 sid, filename, row[2], row[3], row[4], row[5], source_type, assessments,
                 expressions if source_type == "math" else [],
                 clean_graphic_table(row[17] or "") if source_type == "tables" else "",
+                row[19],
             ))
         return graphics
 
@@ -1085,6 +1099,7 @@ class SourceStore(PosterStore):
                     image_data = await run_in_threadpool(files.read, row[5])
                     png_data = await run_in_threadpool(processing.image_as_png, image_data)
                     width, height = await run_in_threadpool(processing.image_dimensions, png_data)
+                    complexity = await run_in_threadpool(processing.image_complexity_score, png_data)
                     fileid = uuid4()
                     uri = await run_in_threadpool(files.put, fileid, png_data, "image/png")
                     written.append(uri)
@@ -1093,11 +1108,11 @@ class SourceStore(PosterStore):
                     await connection.execute(
                         "UPDATE source SET filename = %s, mimetype = 'image/png', size = %s, "
                         "width = %s, height = %s, fileid = %s, storage_uri = %s, hash = %s, "
-                        "updated = now() "
+                        "complexity = %s, updated = now() "
                         "WHERE pid = %s AND sid = %s",
                         (
                             Path(row[3] or "chart").with_suffix(".png").name,
-                            len(png_data), width, height, fileid, uri, png_hash, pid, sid,
+                            len(png_data), width, height, fileid, uri, png_hash, complexity, pid, sid,
                         ),
                     )
 

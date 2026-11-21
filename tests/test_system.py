@@ -1,20 +1,235 @@
 import io
 import os
+from html.parser import HTMLParser
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 import psycopg
 from psycopg import sql
 from PIL import Image
 
 import content
+import identity
 import posters
+import users
 from routers import system
+
+
+class DumpRouteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.session = {}
+        self.user_store = Mock()
+        self.user_store.get = AsyncMock(return_value=users.User(
+            7, "Ada", "ada", "ada@example.test", "hash", None, None,
+        ))
+        self.dump_source = AsyncMock(return_value=(True, {
+            "sid": 11, "text": "<script>unsafe</script>\nRésumé", "embedding": None,
+        }))
+        self.dump_graphic = AsyncMock(return_value=(True, None))
+        patcher = patch("identity.users.store", return_value=self.user_store)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = patch.object(system._store, "dump_source", self.dump_source)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = patch.object(system._store, "dump_graphic", self.dump_graphic)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        app = FastAPI(dependencies=[Depends(identity.identity_context)])
+
+        @app.middleware("http")
+        async def session_middleware(request, call_next):
+            request.scope["session"] = self.session
+            return await call_next(request)
+
+        app.include_router(system.router)
+        self.client = TestClient(app)
+
+    def test_requires_trusted_signed_in_identity(self) -> None:
+        self.client.cookies.set("presto_user", "root")
+        response = self.client.get("/system/dump?sid=11")
+        self.assertEqual(response.status_code, 401)
+        self.dump_source.assert_not_awaited()
+        self.session["user_id"] = 7
+        self.user_store.get.return_value = None
+        self.assertEqual(self.client.get("/system/dump?sid=11").status_code, 401)
+        self.dump_source.assert_not_awaited()
+
+    def test_superuser_can_dump_complete_record_with_readable_text(self) -> None:
+        self.session["user_id"] = 7
+        self.dump_source.return_value = (True, {
+            "sid": 11,
+            "text": "\n<script>unsafe</script>\n\tRésumé\\n stays literal",
+            "description": "First line\r\nSecond line",
+            "embedding": None,
+            "extracted": True,
+            "size": 0,
+        })
+        response = self.client.get("/system/dump?sid=11")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<h1>Source 11</h1>", response.text)
+        self.assertIn("&lt;script&gt;unsafe&lt;/script&gt;", response.text)
+        self.assertNotIn("<script>unsafe", response.text)
+        self.assertIn('<link rel="stylesheet" href="/static/css/pages/system-dump.css">', response.text)
+
+        class Values(HTMLParser):
+            def __init__(self) -> None:
+                super().__init__()
+                self.inside = False
+                self.values = []
+
+            def handle_starttag(self, tag, attrs) -> None:
+                if tag == "code":
+                    self.inside = True
+                    self.values.append("")
+
+            def handle_endtag(self, tag) -> None:
+                if tag == "code":
+                    self.inside = False
+
+            def handle_data(self, data) -> None:
+                if self.inside:
+                    self.values[-1] += data
+
+        parser = Values()
+        parser.feed(response.text)
+        self.assertEqual(parser.values, [
+            "11", "\n<script>unsafe</script>\n\tRésumé\\n stays literal",
+            "First line\r\nSecond line", "null", "true", "0",
+        ])
+        self.assertEqual(response.headers["content-type"], "text/html; charset=utf-8")
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        self.assertIn("default-src 'none'", response.headers["content-security-policy"])
+        self.dump_source.assert_awaited_once_with(7, 11)
+
+    def test_non_superusers_missing_sources_and_database_errors(self) -> None:
+        self.session["user_id"] = 7
+        self.dump_source.return_value = (False, None)
+        self.assertEqual(self.client.get("/system/dump?sid=11").status_code, 403)
+        self.dump_source.return_value = (True, None)
+        self.assertEqual(self.client.get("/system/dump?sid=11").status_code, 404)
+        self.dump_source.side_effect = psycopg.OperationalError("offline")
+        with self.assertLogs("routers.system", "ERROR"):
+            self.assertEqual(self.client.get("/system/dump?sid=11").status_code, 503)
+
+    def test_table_preview_is_sanitized_and_preserves_raw_text(self) -> None:
+        self.session["user_id"] = 7
+        markup = (
+            '<table onclick="alert(1)"><tr><th scope="col">Group</th>'
+            '<td colspan="2"><img src=x onerror=alert(1)>A &amp; B</td></tr></table>'
+            '<script>alert(2)</script>'
+        )
+        self.dump_source.return_value = (True, {"sid": 11, "kind": "table", "text": markup})
+        response = self.client.get("/system/dump?sid=11")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<h2 id="table-preview-heading">Table preview</h2>', response.text)
+        self.assertIn('<table><tbody><tr><th scope="col">Group</th>', response.text)
+        self.assertIn('<td colspan="2">A &amp; B</td>', response.text)
+        self.assertNotIn('<script>', response.text)
+        self.assertNotIn('<img ', response.text)
+        self.assertIn('&lt;table onclick=&#34;alert(1)&#34;&gt;', response.text)
+        self.assertIn("&lt;script&gt;alert(2)&lt;/script&gt;", response.text)
+
+    def test_table_preview_only_for_table_sources_with_table_markup(self) -> None:
+        self.session["user_id"] = 7
+        for kind, text in (
+            ("text", "<table><tr><td>data</td></tr></table>"),
+            ("table", "plain text"),
+            ("table", None),
+        ):
+            self.dump_source.return_value = (True, {"sid": 11, "kind": kind, "text": text})
+            response = self.client.get("/system/dump?sid=11")
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn('id="table-preview-heading"', response.text)
+
+    def test_graphic_source_shows_image_for_any_classification(self) -> None:
+        self.session["user_id"] = 7
+        for kind in ("image", "chart", "table", "diagram", "thumbnail"):
+            self.dump_source.return_value = (True, {
+                "sid": 11, "kind": kind, "mimetype": "image/png", "storage_uri": "/image",
+            })
+            response = self.client.get("/system/dump?sid=11")
+            self.assertIn('src="/system/dump/11/image"', response.text)
+            self.assertIn("img-src 'self'", response.headers["content-security-policy"])
+        self.dump_source.return_value = (True, {
+            "sid": 11, "kind": "image", "mimetype": "image/png", "storage_uri": None,
+        })
+        response = self.client.get("/system/dump?sid=11")
+        self.assertIn("No stored image file is available.", response.text)
+        self.assertNotIn('src="/system/dump/11/image"', response.text)
+
+    def test_image_requires_current_superuser_and_handles_errors(self) -> None:
+        path = "/system/dump/11/image"
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.dump_graphic.assert_not_awaited()
+        self.session["user_id"] = 7
+        self.dump_graphic.return_value = (False, None)
+        self.assertEqual(self.client.get(path).status_code, 403)
+        self.dump_graphic.return_value = (True, None)
+        self.assertEqual(self.client.get(path).status_code, 404)
+        for error in (psycopg.OperationalError("offline"), OSError("missing")):
+            self.dump_graphic.side_effect = error
+            with self.assertLogs("routers.system", "ERROR"):
+                self.assertEqual(self.client.get(path).status_code, 503)
+        self.assertEqual(self.client.get("/system/dump/0/image").status_code, 422)
+
+    def test_full_size_image_and_tiff_conversion(self) -> None:
+        self.session["user_id"] = 7
+        image = io.BytesIO()
+        Image.new("RGB", (800, 400)).save(image, "PNG")
+        original = image.getvalue()
+        self.dump_graphic.return_value = (True, (original, "image/png"))
+        response = self.client.get("/system/dump/11/image")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, original)
+        self.assertEqual(response.headers["content-type"], "image/png")
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        with Image.open(io.BytesIO(response.content)) as preview:
+            self.assertEqual(preview.size, (800, 400))
+        tiff = io.BytesIO()
+        Image.new("RGB", (800, 400)).save(tiff, "TIFF")
+        self.dump_graphic.return_value = (True, (tiff.getvalue(), "image/tiff"))
+        response = self.client.get("/system/dump/11/image")
+        self.assertEqual(response.headers["content-type"], "image/png")
+        with Image.open(io.BytesIO(response.content)) as preview:
+            self.assertEqual(preview.size, (800, 400))
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+        self.dump_graphic.return_value = (True, (svg, "image/svg+xml"))
+        response = self.client.get("/system/dump/11/image")
+        self.assertEqual(response.content, svg)
+        self.assertIn("sandbox", response.headers["content-security-policy"])
+
+    def test_thumbnail_raster_and_svg_responses(self) -> None:
+        self.session["user_id"] = 7
+        image = io.BytesIO()
+        Image.new("RGB", (800, 400)).save(image, "PNG")
+        self.dump_graphic.return_value = (True, (image.getvalue(), "image/png"))
+        response = self.client.get("/system/dump/11/thumbnail")
+        self.dump_graphic.assert_awaited_once_with(7, 11)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertEqual(response.headers["content-type"], "image/png")
+        with Image.open(io.BytesIO(response.content)) as thumbnail:
+            self.assertEqual(thumbnail.size, (160, 80))
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+        self.dump_graphic.return_value = (True, (svg, "image/svg+xml"))
+        response = self.client.get("/system/dump/11/thumbnail")
+        self.assertEqual(response.content, svg)
+        self.assertEqual(response.headers["content-type"], "image/svg+xml")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        self.assertIn("sandbox", response.headers["content-security-policy"])
+
+    def test_source_id_is_required_and_bounded(self) -> None:
+        self.session["user_id"] = 7
+        for query in ("", "?sid=", "?sid=0", "?sid=-1", "?sid=abc", "?sid=2147483648"):
+            self.assertEqual(self.client.get("/system/dump" + query).status_code, 422)
+        self.dump_source.assert_not_awaited()
 
 
 class CatalogRouteTests(unittest.TestCase):
@@ -287,6 +502,48 @@ class SystemRouteTests(unittest.TestCase):
 
 
 class SystemStoreTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dump_graphic_authorizes_before_reading_source(self) -> None:
+        store = system.SystemStore()
+        connection = AsyncMock()
+        user, source = AsyncMock(), AsyncMock()
+        user.fetchone.return_value = (False,)
+        source.fetchone.return_value = ("/image", "image/png")
+        connection.execute.side_effect = [user, source]
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            self.assertEqual(await store.dump_graphic(7, 11), (False, None))
+        connection.execute.assert_awaited_once()
+        connection.reset_mock()
+        connection.execute.side_effect = [user, source]
+        user.fetchone.return_value = (True,)
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                patch.object(content.SourceFiles, "read", return_value=b"image") as read:
+            self.assertEqual(await store.dump_graphic(7, 11), (True, (b"image", "image/png")))
+        read.assert_called_once_with("/image")
+        self.assertEqual(connection.execute.await_args.args[1], (11,))
+
+    async def test_dump_checks_superuser_before_querying_source(self) -> None:
+        store = system.SystemStore()
+        connection = AsyncMock()
+        user, source = AsyncMock(), AsyncMock()
+        user.fetchone.return_value = (False,)
+        source.fetchone.return_value = ({"sid": 11, "text": "example"},)
+        connection.execute.side_effect = [user, source]
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            self.assertEqual(await store.dump_source(7, 11), (False, None))
+        connection.execute.assert_awaited_once_with(
+            'SELECT superuser FROM "user" WHERE uid = %s', (7,),
+        )
+        connection.reset_mock()
+        connection.execute.side_effect = [user, source]
+        user.fetchone.return_value = (True,)
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            self.assertEqual(await store.dump_source(7, 11), (
+                True, {"sid": 11, "text": "example"},
+            ))
+        connection.execute.assert_any_await(
+            "SELECT row_to_json(s) FROM source s WHERE s.sid = %s", (11,),
+        )
+
     async def test_poster_deletion_precedes_conferences_in_one_transaction(self) -> None:
         store = system.SystemStore()
         connection = AsyncMock()
@@ -360,6 +617,25 @@ class SystemDatabaseTests(unittest.TestCase):
         )
         self.connection.execute("INSERT INTO poster_memory VALUES (1, 'test', '{}')")
         self.store = system.SystemStore("SYSTEM_TEST_DATABASE_URL", self.schema)
+
+    def test_dump_checks_live_superuser_flag_and_returns_source_columns(self) -> None:
+        sid = self.connection.execute(
+            "UPDATE source SET text = 'example' RETURNING sid",
+        ).fetchone()[0]
+        self.assertEqual(asyncio.run(self.store.dump_source(7, sid)), (False, None))
+        self.assertEqual(asyncio.run(self.store.dump_source(999, sid)), (False, None))
+        self.connection.execute('UPDATE "user" SET superuser = true WHERE uid = 7')
+        authorized, source = asyncio.run(self.store.dump_source(7, sid))
+        self.assertTrue(authorized)
+        columns = [row[0] for row in self.connection.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = 'source'", (self.schema,),
+        ).fetchall()]
+        self.assertEqual(set(source), set(columns))
+        self.assertEqual(source["text"], "example")
+        self.assertEqual(asyncio.run(self.store.dump_source(7, 2147483647)), (True, None))
+        self.connection.execute('UPDATE "user" SET superuser = false WHERE uid = 7')
+        self.assertEqual(asyncio.run(self.store.dump_source(7, sid)), (False, None))
 
     def test_catalog_includes_children_and_posters_without_owners(self) -> None:
         self.connection.execute(
