@@ -1,6 +1,7 @@
 """Session lifecycle routes and explicitly enabled local maintenance."""
 
 import ipaddress
+import json
 import logging
 import os
 import shutil
@@ -11,6 +12,7 @@ from urllib.parse import urlsplit
 
 import psycopg
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import Path as PathParam
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from google.api_core.exceptions import GoogleAPIError
 from google.auth.exceptions import GoogleAuthError
@@ -22,7 +24,7 @@ import content
 import identity
 import posters
 import source_processing
-from routers.wikkit import read_json, render_page
+from routers.wikkit import read_json, render_page, templates
 from sessions import Session
 
 logger = logging.getLogger(__name__)
@@ -91,6 +93,40 @@ def remove_directories(directories: list[Path]) -> None:
 
 
 class SystemStore(posters.PosterStore):
+    @staticmethod
+    async def _is_superuser(connection: psycopg.AsyncConnection, uid: int) -> bool:
+        cursor = await connection.execute(
+            'SELECT superuser FROM "user" WHERE uid = %s', (uid,),
+        )
+        user = await cursor.fetchone()
+        return user is not None and bool(user[0])
+
+    async def dump_source(self, uid: int, sid: int) -> tuple[bool, dict | None]:
+        connection = await self._connect()
+        async with connection:
+            if not await self._is_superuser(connection, uid):
+                return False, None
+            cursor = await connection.execute(
+                "SELECT row_to_json(s) FROM source s WHERE s.sid = %s", (sid,),
+            )
+            row = await cursor.fetchone()
+            return True, row[0] if row is not None else None
+
+    async def dump_graphic(self, uid: int, sid: int) -> tuple[bool, tuple[bytes, str] | None]:
+        connection = await self._connect()
+        async with connection:
+            if not await self._is_superuser(connection, uid):
+                return False, None
+            cursor = await connection.execute(
+                "SELECT storage_uri, mimetype FROM source "
+                "WHERE sid = %s AND mimetype LIKE 'image/%%'", (sid,),
+            )
+            row = await cursor.fetchone()
+        if row is None or not row[0]:
+            return True, None
+        data = await run_in_threadpool(content.SourceFiles().read, row[0])
+        return True, (data, row[1])
+
     async def catalog(self, pid: int) -> list[content.Source] | None:
         connection = await self._connect()
         async with connection:
@@ -149,6 +185,84 @@ class SystemStore(posters.PosterStore):
 
 
 _store = SystemStore()
+
+
+@router.get("/dump")
+async def dump(
+    request: Request, sid: Annotated[int, Query(ge=1, le=2147483647)],
+) -> Response:
+    uid = getattr(request.state, "user_id", None)
+    if type(uid) is not int or uid <= 0:
+        raise HTTPException(401, "Please sign in.")
+    try:
+        authorized, source = await _store.dump_source(uid, sid)
+    except psycopg.Error:
+        logger.exception("Could not dump source %s", sid)
+        raise HTTPException(503, "The source could not be loaded.") from None
+    if not authorized:
+        raise HTTPException(403, "Superuser access required.")
+    if source is None:
+        raise HTTPException(404, "Source not found.")
+    fields = {
+        key: value if isinstance(value, str) else json.dumps(value, indent=2, ensure_ascii=False)
+        for key, value in source.items()
+    }
+    table_preview = None
+    text = source.get("text")
+    if source.get("kind") == "table" and isinstance(text, str):
+        cleaned = content.clean_graphic_table(text)
+        if "<table>" in cleaned:
+            table_preview = cleaned
+    response = templates.TemplateResponse(
+        request, "system/dump.html",
+        {"sid": sid, "fields": fields, "table_preview": table_preview,
+         "image_source": isinstance(source.get("mimetype"), str)
+         and source["mimetype"].startswith("image/"),
+         "has_image_file": bool(source.get("storage_uri"))},
+    )
+    response.headers.update({
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+    })
+    return response
+
+
+@router.get("/dump/{sid}/thumbnail")
+async def dump_thumbnail(request: Request, sid: Annotated[int, PathParam(ge=1, le=2147483647)]) -> Response:
+    return await _dump_image(request, sid, thumbnail=True)
+
+
+@router.get("/dump/{sid}/image")
+async def dump_image(request: Request, sid: Annotated[int, PathParam(ge=1, le=2147483647)]) -> Response:
+    return await _dump_image(request, sid, thumbnail=False)
+
+
+async def _dump_image(request: Request, sid: int, *, thumbnail: bool) -> Response:
+    uid = getattr(request.state, "user_id", None)
+    if type(uid) is not int or uid <= 0:
+        raise HTTPException(401, "Please sign in.")
+    try:
+        authorized, graphic = await _store.dump_graphic(uid, sid)
+        if not authorized:
+            raise HTTPException(403, "Superuser access required.")
+        if graphic is None:
+            raise HTTPException(404, "Source graphic not found.")
+        data, mimetype = graphic
+        if thumbnail and mimetype != "image/svg+xml":
+            data = await run_in_threadpool(source_processing.image_thumbnail, data)
+            mimetype = "image/png"
+        elif mimetype == "image/tiff":
+            data = await run_in_threadpool(source_processing.image_as_png, data)
+            mimetype = "image/png"
+    except (psycopg.Error, OSError, GoogleAPIError, GoogleAuthError, Image.DecompressionBombError, ValueError):
+        logger.exception("Could not load dump image %s", sid)
+        raise HTTPException(503, "The source image could not be loaded.") from None
+    return Response(data, media_type=mimetype, headers={
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+    })
 
 
 @router.get("/catalog")
