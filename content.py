@@ -180,7 +180,8 @@ class Source:
 
     @property
     def ill_sized(self) -> bool:
-        return self.width is not None and self.height is not None and min(self.width, self.height) < 300
+        return (self.mimetype != "image/svg+xml" and self.width is not None and
+                self.height is not None and min(self.width, self.height) < 300)
 
     @property
     def thumbnail(self) -> bool:
@@ -640,7 +641,14 @@ class SourceStore(PosterStore):
                     result = await run_in_threadpool(processing.extract, filename, data)
                 for asset in result.assets:
                     if asset.width is not None and not asset.description:
-                        asset.description = await processing.describe_image(asset.data)
+                        image = asset.data
+                        if asset.mimetype == "image/svg+xml":
+                            if asset.description_image is None:
+                                raise processing.ProcessingError(
+                                    "Cannot describe the extracted SVG: its raster crop is unavailable."
+                                )
+                            image = asset.description_image
+                        asset.description = await processing.describe_image(image)
                 for warning in result.warnings:
                     logger.warning("Source conversion warning for %s: %s", filename, warning)
                 original = processing.Asset(
@@ -785,16 +793,22 @@ class SourceStore(PosterStore):
             await connection.execute("UPDATE poster SET updated = now(), embedding = NULL WHERE pid = %s", (pid,))
 
     async def graphic(self, uid: int, pid: int, sid: int) -> bytes | None:
+        result = await self.thumbnail_source(uid, pid, sid)
+        return result[0] if result is not None else None
+
+    async def thumbnail_source(self, uid: int, pid: int, sid: int) -> tuple[bytes, str] | None:
         connection = await self._connect()
         async with connection:
             cursor = await connection.execute(
-                "SELECT s.storage_uri FROM source s JOIN poster p USING (pid) "
+                "SELECT s.storage_uri, s.mimetype FROM source s JOIN poster p USING (pid) "
                 "WHERE p.uid = %s AND p.pid = %s AND s.sid = %s "
                 "AND s.width IS NOT NULL AND s.height IS NOT NULL "
                 "AND s.kind <> 'thumbnail'", (uid, pid, sid),
             )
             row = await cursor.fetchone()
-        return await run_in_threadpool(SourceFiles().read, row[0]) if row and row[0] else None
+        if row is None or not row[0]:
+            return None
+        return await run_in_threadpool(SourceFiles().read, row[0]), row[1]
 
     async def graphic_source(self, uid: int, pid: int, sid: int) -> tuple[bytes, str] | None:
         connection = await self._connect()

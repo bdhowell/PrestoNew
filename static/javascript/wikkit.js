@@ -15,7 +15,7 @@
     document.addEventListener("click", (event) => {
         for (let element = event.target; element instanceof Element; element = element.parentElement) {
             if (element.matches(
-                "#editor-controls button, .theme-color-option, .theme-choice-option, .theme-option, "
+                "#editor-controls button, #dimension-picker button, .theme-color-option, .theme-choice-option, .theme-option, "
                     + "#review nav a[aria-current='location'], "
                     + "#poster-content [contenteditable='true'], "
                     + "#poster-content [contenteditable='plaintext-only']",
@@ -849,6 +849,17 @@
                         return enqueue(() => executeCommand(command));
                     },
                     setSignedIn: updateMenu,
+                    setInput: (text) => {
+                        chatinput.textContent = String(text);
+                        chatinput.dispatchEvent(new Event("input", { bubbles: true }));
+                    },
+                    submitInput: () => {
+                        if (!requestingResponse) return false;
+                        const text = chatinput.innerText.trim();
+                        if (!submitResponse(text)) return false;
+                        chatinput.replaceChildren();
+                        return true;
+                    },
                     // Appends text or an HTML fragment to #chatlog as <div class="chat">.
                     say: (html) => say(String(html)),
                     requestResponse: () => {

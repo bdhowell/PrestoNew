@@ -429,7 +429,15 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
             if not graphics:
                 yield json.dumps({"type": "empty"}) + "\n"
                 return
-            if not pending:
+            cached_complexities = {}
+            for graphic in graphics:
+                if is_current(graphic):
+                    source = await content.store().graphic_source(uid, pid, graphic.sid)
+                    if source is None:
+                        raise ValueError(f"Graphic source {graphic.sid} is no longer available.")
+                    complexity = await run_in_threadpool(poster_graphics.image_complexity, source[0])
+                    cached_complexities[graphic.sid] = complexity
+            if not pending and not any(value["too_complex"] for value in cached_complexities.values()):
                 yield json.dumps({"type": "already-evaluated"}) + "\n"
                 return
 
@@ -439,6 +447,7 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                         "type": "result",
                         "source": graphic_source_payload(graphic, graphic.evaluation),
                         "evaluation": graphic.evaluation,
+                        "complexity": cached_complexities[graphic.sid],
                     }, ensure_ascii=False) + "\n"
 
             for index, graphic in enumerate(graphics, start=1):
@@ -455,6 +464,7 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                 if source is None:
                     raise ValueError(f"Graphic source {graphic.sid} is no longer available.")
                 data, mimetype = source
+                complexity = await run_in_threadpool(poster_graphics.image_complexity, data)
                 image_url = f"data:{mimetype};base64,{base64.b64encode(data).decode('ascii')}"
                 result = await run_in_threadpool(
                     graphic_evaluation.evaluate_image,
@@ -473,10 +483,17 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                     raise content.SourceConflictError(
                         "The poster or its graphics changed during evaluation."
                     )
+                analysis = evaluation_result.get("image_analysis")
+                if mimetype == "image/jpeg" and isinstance(analysis, dict) and analysis.get("classification") == "chart":
+                    normalized = await content.store().graphic_source(uid, pid, graphic.sid)
+                    if normalized is None:
+                        raise ValueError(f"Graphic source {graphic.sid} is no longer available.")
+                    complexity = await run_in_threadpool(poster_graphics.image_complexity, normalized[0])
                 yield json.dumps({
                     "type": "result",
                     "source": graphic_source_payload(graphic, evaluation_result),
                     "evaluation": evaluation_result,
+                    "complexity": complexity,
                 }, ensure_ascii=False) + "\n"
             yield json.dumps({"type": "complete"}) + "\n"
         except (
@@ -627,15 +644,22 @@ wikkit.WORKFLOWS["content-review"] = review_workflow
 async def thumbnail(request: Request, sid: int) -> Response:
     try:
         uid, pid = await selected_draft(request)
-        data = await content.store().graphic(uid, pid, sid)
-        if data is None:
+        graphic = await content.store().thumbnail_source(uid, pid, sid)
+        if graphic is None:
             raise HTTPException(404, "Source graphic not found")
-
-        preview = await run_in_threadpool(source_processing.image_thumbnail, data)
+        data, mimetype = graphic
+        if mimetype == "image/svg+xml":
+            preview = data
+        else:
+            preview = await run_in_threadpool(source_processing.image_thumbnail, data)
+            mimetype = "image/png"
     except STORAGE_ERRORS:
         logger.exception("Could not load source thumbnail %s", sid)
         raise HTTPException(503, "The source thumbnail could not be loaded.") from None
-    return Response(preview, media_type="image/png", headers={"Cache-Control": "private, no-store"})
+    return Response(preview, media_type=mimetype, headers={
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+    })
 
 
 @router.get("/{sid}/image")
@@ -651,5 +675,6 @@ async def graphic_image(request: Request, sid: int) -> Response:
     data, mimetype = source
     return Response(
         data, media_type=mimetype,
-        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+                 "Content-Security-Policy": "default-src 'none'; sandbox"},
     )

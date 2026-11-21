@@ -276,6 +276,11 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.word_interval = 0
         self.word_deviation = 0
         self.prompt_on_connect = True
+        self.dimension_entry_on_connect = False
+        self.messages = []
+        dimension_pairs = json.loads(
+            (Path(__file__).resolve().parent.parent / "stipulations" / "sizes.json").read_text()
+        )["poster_dimension_pairs"]
         client = TestClient(app)
         self.addCleanup(client.close)
 
@@ -284,6 +289,7 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
             if path == "/layout/dimensions":
                 rendered = wikkit.render_page(
                     request, "layout/dimensions.html", "layout-dimensions",
+                    dimension_pairs=dimension_pairs,
                 )
                 await route.fulfill(body=rendered.body, content_type="text/html")
             elif path.startswith("/static/"):
@@ -303,7 +309,13 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
             }}}))
 
             def receive(message) -> None:
-                if self.prompt_on_connect and json.loads(message).get("page") == "layout-dimensions":
+                self.messages.append(message)
+                if (self.prompt_on_connect and message.startswith("{")
+                        and json.loads(message).get("page") == "layout-dimensions"):
+                    if self.dimension_entry_on_connect:
+                        socket.send(json.dumps({
+                            "command": {"does": "dimension-entry", "payload": True},
+                        }))
                     socket.send(json.dumps({
                         "say": "<p>Enter your poster height x width.</p>",
                         "command": {"does": "request-response"},
@@ -316,6 +328,195 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_standard_page_loads_common_script(self) -> None:
         await self.page.goto("http://wikkit.test/layout/dimensions")
         self.assertEqual(await self.page.evaluate("numberToWords(3)"), "three")
+        self.assertEqual(self.errors, [])
+
+    async def test_dimension_entry_command_during_page_startup(self) -> None:
+        self.dimension_entry_on_connect = True
+        console_errors = []
+        self.page.on("console", lambda message: console_errors.append(message.text)
+                     if message.type == "error" else None)
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await expect(self.page.locator("#dimension-accept")).to_be_enabled()
+        await self.page.locator("#chatlog").get_by_text("Enter your poster height x width.").wait_for()
+        self.assertEqual(self.errors, [])
+        self.assertFalse(any("Wikkit command failed" in message for message in console_errors))
+
+    async def test_dimension_picker_selection_before_dimension_entry(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.locator("#chatlog").get_by_text("Enter your poster height x width.").wait_for()
+        choice = self.page.get_by_role("button", name="36 by 24 in, width by height")
+        await choice.click(timeout=2000)
+        await expect(choice).to_have_attribute("aria-pressed", "true")
+        await self.page.get_by_role("button", name="portrait", exact=True).click()
+        choice = self.page.get_by_role("button", name="24 by 36 in, width by height")
+        await choice.click(timeout=2000)
+        await expect(choice).to_have_attribute("aria-pressed", "true")
+        await expect(self.page.locator("#chatinput")).to_be_empty()
+        await expect(self.page.locator("#dimension-accept")).to_be_disabled()
+        self.assertNotIn("36 in x 24 in", self.messages)
+
+        self.socket.send(json.dumps({"command": {"does": "dimension-entry", "payload": True}}))
+        await expect(self.page.locator("#dimension-accept")).to_be_enabled()
+        await expect(self.page.locator("#chatinput")).to_have_text("36 in x 24 in")
+        await expect(choice).to_have_attribute("aria-pressed", "true")
+        await self.page.locator("#dimension-accept").click()
+        await self.page.wait_for_function(
+            "() => document.querySelector('#chatlog .user')?.textContent === '36 in x 24 in'"
+        )
+        self.assertIn("36 in x 24 in", self.messages)
+        self.socket.send(json.dumps({"command": {"does": "dimension-entry", "payload": False}}))
+        await expect(self.page.locator("#dimension-accept")).to_be_disabled()
+        await choice.click(timeout=2000)
+        await expect(choice).to_have_attribute("aria-pressed", "true")
+        await expect(self.page.locator("#chatinput")).to_be_empty()
+        self.assertEqual(self.errors, [])
+
+    async def test_all_dimension_sizes_selectable_without_workflow_command(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        sizes = self.page.locator("#dimension-sizes button")
+        for unit in ("in", "cm", "mm"):
+            await self.page.get_by_role("button", name=unit, exact=True).click()
+            for orientation in ("landscape", "portrait"):
+                await self.page.get_by_role("button", name=orientation, exact=True).click()
+                for index in range(await sizes.count()):
+                    choice = sizes.nth(index)
+                    await choice.click(timeout=2000)
+                    await expect(choice).to_have_attribute("aria-pressed", "true")
+        await expect(self.page.locator("#chatinput")).to_be_empty()
+        await expect(self.page.locator("#dimension-accept")).to_be_disabled()
+        self.assertEqual(self.errors, [])
+
+    async def test_dimension_picker_filters_and_submits_to_wikkit(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        accept = self.page.locator("#dimension-accept")
+        await expect(accept).to_be_disabled()
+        self.socket.send(json.dumps({"command": {"does": "dimension-entry", "payload": True}}))
+        await expect(accept).to_be_enabled()
+        sizes = self.page.locator("#dimension-sizes button")
+        choice = self.page.get_by_role("button", name="36 by 24 in, width by height")
+        await choice.click()
+        await expect(choice).to_have_attribute("aria-pressed", "true")
+        await expect(self.page.locator("#chatinput")).to_have_text("24 in x 36 in")
+        self.assertNotIn("24 in x 36 in", self.messages)
+        await accept.click()
+        await self.page.wait_for_function(
+            "() => document.querySelector('#chatlog .user')?.textContent === '24 in x 36 in'"
+        )
+        self.assertIn("24 in x 36 in", self.messages)
+
+        self.socket.send(json.dumps({"command": {"does": "dimension-entry", "payload": False}}))
+        await expect(accept).to_be_disabled()
+        self.socket.send(json.dumps({"command": {"does": "dimension-entry", "payload": True}}))
+        self.socket.send(json.dumps({"command": {"does": "request-response"}}))
+        await expect(accept).to_be_enabled()
+        await self.page.get_by_role("button", name="cm", exact=True).click()
+        await expect(sizes).to_have_count(0)
+        await expect(self.page.locator("#dimension-empty")).to_be_visible()
+        await self.page.get_by_role("button", name="portrait", exact=True).click()
+        choice = self.page.get_by_role("button", name="70 by 100 cm, width by height")
+        await choice.click()
+        await expect(self.page.locator("#chatinput")).to_have_text("100 cm x 70 cm")
+        await self.page.get_by_role("button", name="mm", exact=True).click()
+        await expect(self.page.locator("#chatinput")).to_be_empty()
+        choice = self.page.get_by_role("button", name="700 by 1000 mm, width by height")
+        await choice.click()
+        await expect(self.page.locator("#chatinput")).to_have_text("1000 mm x 700 mm")
+        await accept.click()
+        await self.page.wait_for_function(
+            "() => [...document.querySelectorAll('#chatlog .user')].some(el => el.textContent === '1000 mm x 700 mm')"
+        )
+        self.assertIn("1000 mm x 700 mm", self.messages)
+        self.assertEqual(self.errors, [])
+
+    async def test_dimension_picker_deselects_when_chat_input_is_edited(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        self.socket.send(json.dumps({"command": {"does": "dimension-entry", "payload": True}}))
+        choice = self.page.get_by_role("button", name="36 by 24 in, width by height")
+        await choice.click()
+        await expect(choice).to_have_attribute("aria-pressed", "true")
+        await self.page.locator("#chatinput").fill("36 in x 48 in")
+        await expect(choice).to_have_attribute("aria-pressed", "false")
+        await self.page.locator("#chatinput").press("Enter")
+        await self.page.wait_for_function(
+            "() => document.querySelector('#chatlog .user')?.textContent === '36 in x 48 in'"
+        )
+        self.assertIn("36 in x 48 in", self.messages)
+        self.assertEqual(self.errors, [])
+
+    async def test_every_dimension_size_can_be_selected(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        self.socket.send(json.dumps({"command": {"does": "dimension-entry", "payload": True}}))
+        sizes = self.page.locator("#dimension-sizes button")
+        await expect(self.page.locator("#dimension-accept")).to_be_enabled()
+        for unit in ("in", "cm", "mm"):
+            await self.page.get_by_role("button", name=unit, exact=True).click()
+            for orientation in ("landscape", "portrait"):
+                await self.page.get_by_role("button", name=orientation, exact=True).click()
+                for index in range(await sizes.count()):
+                    choice = sizes.nth(index)
+                    width, height_and_unit = (await choice.inner_text()).split(" × ")
+                    height, label_unit = height_and_unit.split()
+                    await choice.click(timeout=2000)
+                    await expect(choice).to_have_attribute("aria-pressed", "true")
+                    await expect(self.page.locator("#chatinput")).to_have_text(
+                        f"{height} {label_unit} x {width} {label_unit}"
+                    )
+                    self.assertNotEqual(
+                        await choice.evaluate("(button) => getComputedStyle(button).outlineStyle"), "none"
+                    )
+                    await choice.click(timeout=2000)
+                    self.assertNotEqual(
+                        await choice.evaluate("(button) => getComputedStyle(button).outlineStyle"), "none"
+                    )
+        self.assertEqual(self.errors, [])
+
+    async def test_dimension_sizes_are_accessible_above_chat_on_small_screen(self) -> None:
+        await self.page.set_viewport_size({"width": 390, "height": 844})
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        self.socket.send(json.dumps({"command": {"does": "dimension-entry", "payload": True}}))
+        await expect(self.page.locator("#dimension-accept")).to_be_enabled()
+        sizes = self.page.locator("#dimension-sizes button")
+        for index in range(await sizes.count()):
+            choice = sizes.nth(index)
+            await choice.evaluate("""button => {
+                const menuBottom = document.querySelector(".basic-menu").getBoundingClientRect().bottom;
+                window.scrollBy(0, button.getBoundingClientRect().top - menuBottom - 8);
+            }""")
+            await choice.click(timeout=2000)
+            await expect(choice).to_have_attribute("aria-pressed", "true")
+        self.assertEqual(self.errors, [])
+
+    async def test_dimension_picker_shows_exact_source_sizes_and_proportions(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        self.socket.send(json.dumps({"command": {"does": "dimension-entry", "payload": True}}))
+        await expect(self.page.locator("#dimension-accept")).to_be_enabled()
+        pairs = json.loads(
+            (Path(__file__).resolve().parent.parent / "stipulations" / "sizes.json").read_text()
+        )["poster_dimension_pairs"]
+        for unit in ("in", "cm", "mm"):
+            await self.page.get_by_role("button", name=unit, exact=True).click()
+            for orientation in ("landscape", "portrait"):
+                await self.page.get_by_role("button", name=orientation, exact=True).click()
+                expected = []
+                for pair in pairs:
+                    for width, height, source_unit, *_ in pair:
+                        if (source_unit == "in") != (unit == "in"):
+                            continue
+                        if not (width > height if orientation == "landscape" else height > width):
+                            continue
+                        factor = 1 if source_unit == unit else 10 if unit == "mm" else 0.1
+                        expected.append((width * factor, height * factor))
+                rectangles = await self.page.locator(".dimension-size").evaluate_all("""buttons =>
+                    buttons.map(button => ({
+                        label: button.getAttribute('aria-label'),
+                        width: parseFloat(button.firstElementChild.style.width),
+                        height: parseFloat(button.firstElementChild.style.height),
+                    }))
+                """)
+                self.assertEqual(len(rectangles), len(expected))
+                for rectangle, (width, height) in zip(rectangles, expected):
+                    self.assertEqual(rectangle["label"], f"{width:g} by {height:g} {unit}, width by height")
+                    self.assertAlmostEqual(rectangle["width"] / rectangle["height"], width / height, places=5)
         self.assertEqual(self.errors, [])
 
     async def test_chatbot_resizes_from_every_edge_and_corner(self) -> None:
@@ -371,6 +572,49 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(moved["y"], restored["y"] + 20, delta=1)
         self.assertEqual(moved["width"], restored["width"])
         self.assertEqual(moved["height"], restored["height"])
+        self.assertEqual(self.errors, [])
+
+    async def test_chatlog_resizes_without_overlapping_input_during_transitions(self) -> None:
+        self.prompt_on_connect = False
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        for height in (448, 192, 120):
+            with self.subTest(height=height):
+                samples = await self.page.evaluate("""async height => {
+                    const bot = document.querySelector('#chatbot');
+                    const log = document.querySelector('#chatlog');
+                    const input = document.querySelector('#chatinput');
+                    Object.assign(bot.style, {height: `${height}px`, minHeight: '0'});
+                    log.textContent = 'A long conversation. '.repeat(100);
+                    input.textContent = 'A long response. '.repeat(40);
+                    const sample = () => {
+                        const logRect = log.getBoundingClientRect();
+                        const inputRect = input.getBoundingClientRect();
+                        const botRect = bot.getBoundingClientRect();
+                        return {logBottom: logRect.bottom, logHeight: logRect.height,
+                                inputTop: inputRect.top, inputHeight: inputRect.height,
+                                inputBottom: inputRect.bottom, botBottom: botRect.bottom};
+                    };
+                    const transitions = [];
+                    for (const command of ['close-input', 'open-input']) {
+                        await window.wikkit.execute({does: command});
+                        const frames = [];
+                        const start = performance.now();
+                        do {
+                            await new Promise(requestAnimationFrame);
+                            frames.push(sample());
+                        } while (performance.now() - start < 600);
+                        transitions.push(frames);
+                    }
+                    return transitions;
+                }""", height)
+                for command, frames in zip(("close-input", "open-input"), samples):
+                    self.assertGreater(len(frames), 2)
+                    for frame in frames:
+                        self.assertLessEqual(frame["logBottom"], frame["inputTop"] + 0.1)
+                        self.assertLessEqual(frame["inputBottom"], frame["botBottom"] + 0.1)
+                    direction = 1 if command == "close-input" else -1
+                    self.assertGreater(direction * (frames[-1]["logHeight"] - frames[0]["logHeight"]), 1)
+                    self.assertGreater(direction * (frames[0]["inputHeight"] - frames[-1]["inputHeight"]), 1)
         self.assertEqual(self.errors, [])
 
     async def test_chatbot_resize_limits_keep_opposite_edges_fixed(self) -> None:

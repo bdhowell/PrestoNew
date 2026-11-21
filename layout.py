@@ -2,10 +2,12 @@
 
 import logging
 import html
+import json
 import math
 import os
 import re
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import psycopg
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -500,12 +502,23 @@ async def available_graphics(
     try:
         poster = await owned(request, pid, draft=True)
         sources = await content.store().graphic_sources(uid_for(request), poster.pid)
-    except STORAGE_ERRORS:
+        candidates = graphics.suitable_graphics(section, sources)
+        available = []
+        for item in candidates:
+            if item.mimetype in ("image/png", "image/jpeg"):
+                source = await content.store().graphic_source(uid_for(request), poster.pid, item.sid)
+                if source is None:
+                    raise ValueError(f"Graphic source {item.sid} is no longer available.")
+                complexity = await run_in_threadpool(graphics.image_complexity, source[0])
+                if complexity["too_complex"]:
+                    continue
+            available.append(item)
+    except (*STORAGE_ERRORS, ValueError):
         logger.exception("Could not load poster graphics for section %s", section)
         raise HTTPException(503, "Your graphics could not be loaded. Please try again.") from None
     return JSONResponse({
         "ok": True,
-        "graphics": [asdict(item) for item in graphics.suitable_graphics(section, sources)],
+        "graphics": [asdict(item) for item in available],
     }, headers=PRIVATE)
 
 
@@ -737,7 +750,11 @@ async def dimensions_page(request: Request) -> Response:
     if poster.purchased:
         return RedirectResponse(f"/posters/{poster.pid}/open", status_code=303)
     await common.resume(request)
-    return render_page(request, "layout/dimensions.html", "layout-dimensions", poster=poster)
+    sizes = json.loads((Path(__file__).resolve().parent / "stipulations" / "sizes.json").read_text())
+    return render_page(
+        request, "layout/dimensions.html", "layout-dimensions", poster=poster,
+        dimension_pairs=sizes["poster_dimension_pairs"],
+    )
 
 
 @router.post("/dimensions")
@@ -805,10 +822,9 @@ async def dimensions_workflow(bot: Chatbot) -> None:
                     f"<p>Okay, {name}, {conference} has a maximum poster height of "
                     f"{rules.max_height / SCALE[rules.units]:g} {rules.units} and width of "
                     f"{rules.max_width / SCALE[rules.units]:g} {rules.units}.</p>"
-                    "<p>Do you want to set your poster dimensions to these maximum values? "
+                    "<p>I can set your poster dimensions to these maximum values or you can specify your own."
                     "You can always change them later.</p>"
                     '<button class="action" data-sends="ok">Set the dimensions to maximum</button>'
-                    '<button class="action" data-sends="cancel">I want to set my dimensions</button>'
                 )
                 if (clean_response(reply) or {}).get("response") in ("yes", "idk"):
                     width, height = rules.max_width, rules.max_height
@@ -819,7 +835,9 @@ async def dimensions_workflow(bot: Chatbot) -> None:
             while True:
                 units = rules.units
                 if width is None or height is None:
+                    await bot.send({"command": {"does": "dimension-entry", "payload": True}})
                     reply = await bot.request_response(prompt)
+                    await bot.send({"command": {"does": "dimension-entry", "payload": False}})
                     if (clean_response(reply) or {}).get("response") == "idk":
                         if rules.max_width is None or rules.max_height is None:
                             prompt = "<p>No maximum dimensions are available. Please enter height x width and units.</p>"

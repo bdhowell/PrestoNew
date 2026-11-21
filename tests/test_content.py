@@ -17,6 +17,7 @@ from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from google.api_core.exceptions import Forbidden, NotFound, ServiceUnavailable
+from PIL import Image
 from starlette.requests import HTTPConnection
 
 import content
@@ -28,6 +29,11 @@ from routers import content as routes
 from tests.test_posters import DRAFT, ROOT
 
 ITEM = content.Source(1, "<paper>.pdf", "application/pdf", 12, "2026-10-25")
+
+def sample_png():
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 32), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 class ContentRouteTests(unittest.TestCase):
@@ -276,16 +282,38 @@ class ContentRouteTests(unittest.TestCase):
         from PIL import Image
         buffer = io.BytesIO()
         Image.new("RGB", (1000, 500)).save(buffer, format="JPEG")
-        self.sources.graphic.return_value = buffer.getvalue()
+        self.sources.thumbnail_source.return_value = (buffer.getvalue(), "image/jpeg")
         response = self.client.get("/content/1/thumbnail")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["cache-control"], "private, no-store")
         with Image.open(io.BytesIO(response.content)) as image:
             self.assertEqual(image.size, (160, 80))
             self.assertEqual(image.format, "PNG")
-        self.sources.graphic.assert_awaited_once_with(7, 11, 1)
-        self.sources.graphic.return_value = None
+        self.sources.thumbnail_source.assert_awaited_once_with(7, 11, 1)
+        self.sources.thumbnail_source.return_value = None
         self.assertEqual(self.client.get("/content/99/thumbnail").status_code, 404)
+
+    def test_svg_thumbnail_is_owner_checked_and_sandboxed(self) -> None:
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"/>'
+        self.sources.thumbnail_source.return_value = (svg, "image/svg+xml")
+        response = self.client.get("/content/1/thumbnail")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, svg)
+        self.assertEqual(response.headers["content-type"], "image/svg+xml")
+        self.assertIn("sandbox", response.headers["content-security-policy"])
+        self.sources.thumbnail_source.assert_awaited_once_with(7, 11, 1)
+        self.assertFalse(replace(ITEM, mimetype="image/svg+xml", width=40, height=20).ill_sized)
+
+    def test_tiff_thumbnail_is_reencoded_as_png(self) -> None:
+        from PIL import Image
+        image = io.BytesIO()
+        Image.new("RGB", (200, 100)).save(image, format="TIFF")
+        self.sources.thumbnail_source.return_value = (image.getvalue(), "image/tiff")
+        response = self.client.get("/content/1/thumbnail")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/png")
+        with Image.open(io.BytesIO(response.content)) as preview:
+            self.assertEqual(preview.size, (160, 80))
 
     def test_graphic_evaluation_page_shows_counts_and_uses_selected_poster(self) -> None:
         self.sources.evaluation_sources.return_value = [
@@ -329,7 +357,7 @@ class ContentRouteTests(unittest.TestCase):
             [("materials and methods", "<p>Experimental methods</p>"),
              ("results", "<p>Observed results</p>")], [],
         )
-        self.sources.graphic_source.return_value = (b"image-bytes", "image/png")
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
         self.sources.save_graphic_evaluation.return_value = True
         evaluation_result = {
             "image_analysis": {
@@ -364,6 +392,8 @@ class ContentRouteTests(unittest.TestCase):
             ["uploaded", "extracted"],
         )
         self.assertEqual(events[2]["source"]["type"], "tables")
+        self.assertEqual(events[2]["complexity"]["score"], 0)
+        self.assertFalse(events[2]["complexity"]["too_complex"])
         self.assertEqual(
             events[2]["source"]["table_html"], "<table><tr><td>Data</td></tr></table>",
         )
@@ -410,14 +440,108 @@ class ContentRouteTests(unittest.TestCase):
         self.sources.source_text.return_value = content.SourceText(
             1, "Original research context", "fingerprint", 27,
         )
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
         self.posters.content.return_value = ([], [])
         with patch.object(routes.openai, "OpenAI") as openai_client:
             response = self.client.post("/content/evaluate/11", json={})
         events = [json.loads(line) for line in response.text.splitlines()]
         self.assertEqual([event["type"] for event in events], ["start", "already-evaluated"])
         openai_client.assert_not_called()
-        self.sources.graphic_source.assert_not_awaited()
+        self.sources.graphic_source.assert_awaited_once_with(7, 11, 1)
         self.sources.save_graphic_evaluation.assert_not_awaited()
+
+    def test_cached_complex_graphic_is_reported_without_reassessment(self) -> None:
+        import cv2
+        import numpy as np
+
+        evaluation_result = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {},
+        }
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "saved.png", "image/png", None, evaluation_result, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        image = np.random.default_rng(12).integers(0, 256, (100, 100), dtype=np.uint8)
+        _, encoded = cv2.imencode(".png", image)
+        self.sources.graphic_source.return_value = (encoded.tobytes(), "image/png")
+        with patch.dict(os.environ, {"IMAGE_COMPLEXITY_THRESHOLD": "0.01"}), \
+                patch.object(routes.openai, "OpenAI") as client:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual([event["type"] for event in events], ["start", "result", "complete"])
+        self.assertTrue(events[1]["complexity"]["too_complex"])
+        client.assert_not_called()
+        self.sources.save_graphic_evaluation.assert_not_awaited()
+
+    def test_graphic_evaluation_reports_invalid_raster(self) -> None:
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "bad.png", "image/png", None, None, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (b"invalid", "image/png")
+        with patch.object(routes.openai, "OpenAI"), self.assertLogs("routers.content", "ERROR"):
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[-1]["type"], "error")
+        self.sources.save_graphic_evaluation.assert_not_awaited()
+
+    def test_new_complex_graphic_keeps_relevance_assessment(self) -> None:
+        import cv2
+        import numpy as np
+
+        evaluation_result = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {},
+        }
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "new.png", "image/png", None, None, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.save_graphic_evaluation.return_value = True
+        image = np.random.default_rng(12).integers(0, 256, (100, 100), dtype=np.uint8)
+        _, encoded = cv2.imencode(".png", image)
+        self.sources.graphic_source.return_value = (encoded.tobytes(), "image/png")
+        with patch.dict(os.environ, {"IMAGE_COMPLEXITY_THRESHOLD": "0.01"}), \
+                patch.object(routes.openai, "OpenAI"), \
+                patch.object(routes.graphic_evaluation, "evaluate_image",
+                             return_value=Mock(model_dump=Mock(return_value=evaluation_result))):
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual([event["type"] for event in events], ["start", "progress", "result", "complete"])
+        self.assertTrue(events[2]["complexity"]["too_complex"])
+        self.assertEqual(events[2]["evaluation"], evaluation_result)
+        self.assertEqual(self.sources.save_graphic_evaluation.await_args.args[3], evaluation_result)
+
+    def test_jpeg_chart_is_scored_again_after_png_normalization(self) -> None:
+        import cv2
+        import numpy as np
+
+        evaluation_result = {
+            "image_analysis": {"classification": "chart", "math_expressions": []},
+            "evaluations": {},
+        }
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "chart.jpg", "image/jpeg", None, None, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.save_graphic_evaluation.return_value = True
+        image = np.random.default_rng(12).integers(0, 256, (100, 100), dtype=np.uint8)
+        _, jpeg = cv2.imencode(".jpg", image)
+        self.sources.graphic_source.side_effect = [(jpeg.tobytes(), "image/jpeg"), (sample_png(), "image/png")]
+        with patch.dict(os.environ, {"IMAGE_COMPLEXITY_THRESHOLD": "0.01"}), \
+                patch.object(routes.openai, "OpenAI"), \
+                patch.object(routes.graphic_evaluation, "evaluate_image",
+                             return_value=Mock(model_dump=Mock(return_value=evaluation_result))):
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[2]["complexity"]["score"], 0)
+        self.assertFalse(events[2]["complexity"]["too_complex"])
+        self.assertEqual(self.sources.graphic_source.await_count, 2)
 
     def test_graphic_evaluation_recalculates_saved_results_without_latex_field(self) -> None:
         legacy_result = {
@@ -441,7 +565,7 @@ class ContentRouteTests(unittest.TestCase):
             1, "Original research context", "fingerprint", 27,
         )
         self.posters.content.return_value = ([], [])
-        self.sources.graphic_source.return_value = (b"image-bytes", "image/png")
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
         self.sources.save_graphic_evaluation.return_value = True
         with patch.object(routes.openai, "OpenAI"), patch.object(
             routes.graphic_evaluation, "evaluate_image",
@@ -480,7 +604,7 @@ class ContentRouteTests(unittest.TestCase):
             1, "Original research context", "fingerprint", 27,
         )
         self.posters.content.return_value = ([], [])
-        self.sources.graphic_source.return_value = (b"image-bytes", "image/png")
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
         self.sources.save_graphic_evaluation.return_value = True
         with patch.object(routes.openai, "OpenAI"), patch.object(
             routes.graphic_evaluation, "evaluate_image",
@@ -494,7 +618,8 @@ class ContentRouteTests(unittest.TestCase):
         self.assertEqual(events[1]["source"]["sid"], 1)
         self.assertEqual(events[3]["source"]["sid"], 2)
         evaluate.assert_called_once()
-        self.sources.graphic_source.assert_awaited_once_with(7, 11, 2)
+        self.assertEqual([call.args for call in self.sources.graphic_source.await_args_list],
+                         [(7, 11, 1), (7, 11, 2)])
         self.sources.save_graphic_evaluation.assert_awaited_once_with(
             7, 11, 2, evaluation_result, expected_hash,
         )
@@ -518,7 +643,7 @@ class ContentRouteTests(unittest.TestCase):
             1, "Original research context", "fingerprint", 27,
         )
         self.posters.content.return_value = ([], [])
-        self.sources.graphic_source.return_value = (b"image-bytes", "image/png")
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
 
         async def save_result(uid, pid, sid, result, fingerprint):
             self.sources.evaluation_sources.return_value[sid - 1] = content.GraphicEvaluationSource(
@@ -553,7 +678,8 @@ class ContentRouteTests(unittest.TestCase):
         self.assertEqual([event["type"] for event in events], [
             "start", "result", "progress", "result", "complete",
         ])
-        self.sources.graphic_source.assert_awaited_once_with(7, 11, 2)
+        self.assertEqual([call.args for call in self.sources.graphic_source.await_args_list],
+                         [(7, 11, 1), (7, 11, 2)])
         evaluate.assert_called_once()
 
     def test_source_image_route_is_owner_checked_and_private(self) -> None:
@@ -1313,6 +1439,64 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(convert.call_args.kwargs["describe_pictures"])
             self.assertTrue(convert.call_args.kwargs["extract_chart_data"])
             self.assertTrue(convert.call_args.kwargs["enrich_formulas"])
+
+    def test_docling_svg_is_stored_as_vector_source(self) -> None:
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory:
+            svg = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 36"/>'
+            (Path(directory) / "figure.svg").write_bytes(svg)
+            image = io.BytesIO()
+            Image.new("RGB", (144, 72)).save(image, format="PNG")
+            (Path(directory) / "figure.png").write_bytes(image.getvalue())
+            manifest = {
+                "output_directory": directory, "warnings": [], "source_texts": [],
+                "elements": [{"kind": "picture", "caption_refs": [], "annotations": [],
+                              "text": None, "assets": ["figure.svg"],
+                              "raster_assets": ["figure.png"]}],
+            }
+            with patch.dict(os.environ, {"DOCLING_SERVICE_URL": "https://converter.invalid"}), \
+                    patch.object(source_processing.docxtractor, "extract_document", return_value=manifest):
+                result = source_processing.extract("research.pdf", b"%PDF-1.7")
+            asset = result.assets[0]
+            self.assertEqual((asset.mimetype, asset.kind, asset.width, asset.height),
+                             ("image/svg+xml", "svg", 96, 48))
+            self.assertTrue(asset.filename.endswith(".svg"))
+            self.assertEqual(asset.data, svg)
+            self.assertEqual(asset.description_image, image.getvalue())
+
+    async def test_svg_description_uses_raster_crop_and_stores_svg(self) -> None:
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 36"/>'
+        asset = source_processing.Asset("figure.svg", svg, "image/svg+xml", "svg",
+                                        width=96, height=48, description_image=b"raster")
+        connection = AsyncMock()
+        connection.execute.return_value.fetchone.side_effect = [(11,), ("paper.pdf", "uri", "mixed", False)]
+        store = content.SourceStore()
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                patch.object(content, "SourceFiles") as files, \
+                patch.object(content.processing, "extract", return_value=source_processing.Processed(assets=[asset])), \
+                patch.object(content.processing, "describe_image", AsyncMock(return_value="A figure")) as describe, \
+                patch.object(store, "_asset_kind", AsyncMock(return_value="mixed")), \
+                patch.object(store, "_insert_source", AsyncMock()) as insert:
+            files.return_value.read.return_value = b"pdf"
+            await store.extract(7, 11, 1)
+        describe.assert_awaited_once_with(b"raster")
+        self.assertEqual(asset.description, "A figure")
+        self.assertEqual(insert.call_args.args[4].data, svg)
+
+    async def test_svg_without_description_or_raster_fails_explicitly(self) -> None:
+        asset = source_processing.Asset("figure.svg", b"<svg/>", "image/svg+xml", "svg",
+                                        width=96, height=48)
+        connection = AsyncMock()
+        connection.execute.return_value.fetchone.side_effect = [(11,), ("paper.pdf", "uri", "mixed", False)]
+        store = content.SourceStore()
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                patch.object(content, "SourceFiles") as files, \
+                patch.object(content.processing, "extract", return_value=source_processing.Processed(assets=[asset])), \
+                patch.object(content.processing, "describe_image", AsyncMock()) as describe:
+            files.return_value.read.return_value = b"pdf"
+            with self.assertRaisesRegex(source_processing.ProcessingError, "raster crop is unavailable"):
+                await store.extract(7, 11, 1)
+        describe.assert_not_awaited()
 
     async def test_apple_documents_always_use_docling_native_conversion(self) -> None:
         manifest = {"output_directory": "/tmp", "warnings": [], "source_texts": [], "elements": []}

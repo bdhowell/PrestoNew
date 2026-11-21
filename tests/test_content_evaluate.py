@@ -120,6 +120,33 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
                         self.assertAlmostEqual(current["left"], previous["left"], delta=1)
                         self.assertAlmostEqual(current["width"], previous["width"], delta=1)
 
+    async def test_complexity_overrides_relevance_and_explains_verdict(self) -> None:
+        section = {
+            "rating": "highly", "explanation": "", "supported_elements": [],
+            "limitations": [], "suggested_improvements": [],
+        }
+        await self.load_page([
+            {"type": "start", "total": 1, "uploaded": 1, "extracted": 0},
+            {
+                "type": "result",
+                "source": {"sid": 1, "category": "uploaded", "filename": "detailed.png"},
+                "complexity": {"score": 0.2, "threshold": 0.1, "too_complex": True},
+                "evaluation": {
+                    "image_analysis": {
+                        "classification": "image", "math_expressions": [], "description": "Detailed image",
+                    },
+                    "evaluations": {"materials_and_methods": section, "results": section},
+                },
+            },
+            {"type": "complete"},
+        ])
+        await self.page.locator("#continue-review").wait_for(state="visible")
+        self.assertEqual(await self.page.locator(".evaluation-verdict").text_content(),
+                         "Not suitable for the poster.")
+        self.assertIn("too complex", await self.page.locator(".graphic-evaluation").inner_text())
+        self.assertEqual(await self.page.locator("#evaluation-status").text_content(),
+                         "Evaluation complete: zero suitable and one not suitable.")
+
     async def test_math_expressions_are_rendered_as_latex(self) -> None:
         await self.page.set_content("""
             <script id="evaluation-poster" type="application/json">{"pid":11}</script>

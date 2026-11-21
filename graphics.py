@@ -2,12 +2,15 @@
 
 import base64
 import html
+import math
+import os
 import re
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 import cv2
 import lxml.etree as etree
+import numpy as np
 from lxml import html as dom
 
 import content
@@ -24,6 +27,30 @@ PLACEMENTS = frozenset({
     "free", "top-left", "top-center", "top-right", "left-middle", "right-middle",
     "bottom-left", "bottom-center", "bottom-right",
 })
+
+
+def image_complexity(data: bytes) -> dict[str, float | bool]:
+    """Score a PNG or JPEG with blurred Canny edge density and an area penalty."""
+    try:
+        threshold = float(os.environ.get("IMAGE_COMPLEXITY_THRESHOLD", "0.5"))
+        power = float(os.environ.get("IMAGE_COMPLEXITY_PENALTY_POWER", "0.15"))
+    except ValueError as error:
+        raise ValueError("Image complexity settings must be numbers.") from error
+    if not math.isfinite(threshold) or not 0 <= threshold <= 1:
+        raise ValueError("IMAGE_COMPLEXITY_THRESHOLD must be between 0 and 1.")
+    if not math.isfinite(power) or power < 0:
+        raise ValueError("IMAGE_COMPLEXITY_PENALTY_POWER must be nonnegative and finite.")
+    try:
+        image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            raise ValueError("The image could not be decoded for complexity evaluation.")
+        height, width = image.shape
+        edges = cv2.Canny(cv2.GaussianBlur(image, (3, 3), 0), 50, 150)
+        area = width * height
+        score = float(np.count_nonzero(edges) / area / max((area / 10000.0) ** power, 1.0))
+    except (cv2.error, OverflowError) as error:
+        raise ValueError("The image could not be evaluated for complexity.") from error
+    return {"score": score, "threshold": threshold, "too_complex": score > threshold}
 
 
 def qr_png(url: str) -> bytes:

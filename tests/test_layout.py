@@ -555,6 +555,10 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('data-page="layout-dimensions"', response.text)
         self.assertIn('id="dimension-correction" hidden', response.text)
+        document = html.fromstring(response.text)
+        pairs = json.loads(document.get_element_by_id("dimension-picker").get("data-sizes"))
+        self.assertIn([[70, 100, "cm"]], pairs)
+        self.assertIn([[24, 36, "in"], [36, 24, "in"]], pairs)
         self.assertIs(wikkit.WORKFLOWS["layout-dimensions"], routes.dimensions_workflow)
         self.store.set_resumption.assert_awaited_once_with(
             7, 11, "http://testserver/layout/dimensions?xyzzy=arpa",
@@ -594,6 +598,20 @@ class LayoutRouteTests(unittest.TestCase):
                 response = self.client.post("/layout/dimensions", json={"dimensions": dimensions})
                 self.assertEqual(response.status_code, 200)
         self.assertEqual(self.store.set_dimensions.await_count, 2)
+
+    def test_dimension_picker_values_match_wikkit_parser(self) -> None:
+        pairs = json.loads(
+            (Path(__file__).resolve().parent.parent / "stipulations" / "sizes.json").read_text()
+        )["poster_dimension_pairs"]
+        for pair in pairs:
+            for width, height, units, *_ in pair:
+                for display_units in (("cm", "mm") if units in ("cm", "mm") else ("in",)):
+                    factor = routes.SCALE[units] / routes.SCALE[display_units]
+                    text = f"{height * factor:g} {display_units} x {width * factor:g} {display_units}"
+                    parsed_width, parsed_height, parsed_units = routes.parse_dimensions(text, "cm")
+                    self.assertAlmostEqual(parsed_width, width * routes.SCALE[units])
+                    self.assertAlmostEqual(parsed_height, height * routes.SCALE[units])
+                    self.assertEqual(parsed_units, display_units)
 
     def test_dimension_updates_preserve_fractional_dimensions(self) -> None:
         response = self.client.post("/layout/dimensions", json={"dimensions": "36.5 in x 48 in"})
@@ -793,6 +811,8 @@ class DimensionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 121.92, 91.44, "in")
         self.assertIn("&lt;Meeting&gt;", self.bot.request_response.await_args.args[0])
         self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/content/upload")
+        self.assertFalse(any(call.args[0].get("command", {}).get("does") == "dimension-entry"
+                             for call in self.bot.send.await_args_list))
 
     async def test_accept_maximum_and_idk_use_cm_and_correct_display_units(self) -> None:
         self.store.conference_details.return_value = ("Meeting", {
@@ -803,6 +823,8 @@ class DimensionWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.bot.request_response.return_value = reply
             await routes.dimensions_workflow(self.bot)
             self.store.set_dimensions.assert_awaited_once_with(7, 11, 121.92, 91.44, "in")
+            self.assertFalse(any(call.args[0].get("command", {}).get("does") == "dimension-entry"
+                                 for call in self.bot.send.await_args_list))
 
     async def test_declining_maxima_allows_custom_dimensions(self) -> None:
         self.store.conference_details.return_value = ("Meeting", {
@@ -811,6 +833,9 @@ class DimensionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.bot.request_response.side_effect = ["cancel", "140 x 100 cm"]
         await routes.dimensions_workflow(self.bot)
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 100, 140, "cm")
+        commands = [call.args[0]["command"] for call in self.bot.send.await_args_list
+                    if call.args[0].get("command", {}).get("does") == "dimension-entry"]
+        self.assertEqual([command["payload"] for command in commands], [True, False])
 
     async def test_invalid_input_shows_correction_and_retries_until_valid(self) -> None:
         self.bot.request_response.side_effect = ["idk", "nonsense", "10 cm x 100 cm", "100 cm x 150 cm"]

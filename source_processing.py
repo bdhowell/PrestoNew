@@ -8,6 +8,7 @@ import math
 import os
 import tempfile
 import zipfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,11 +27,11 @@ class ProcessingError(RuntimeError):
     """A configured converter or model could not process a source."""
 
 
-REDUCED_FEATURE_NOTICE = (
-    "Temporary reduced-feature document conversion is enabled. Docling formula "
-    "enrichment, picture descriptions and chart-data extraction are disabled. "
-    "Text, tables, available image crops and picture classification are still processed."
-)
+# REDUCED_FEATURE_NOTICE = (
+#     "Temporary reduced-feature document conversion is enabled. Docling formula "
+#     "enrichment, picture descriptions and chart-data extraction are disabled. "
+#     "Text, tables, available image crops and picture classification are still processed."
+# )
 
 
 def enrichment_enabled() -> bool:
@@ -50,6 +51,7 @@ class Asset:
     description: str = ""
     width: int | None = None
     height: int | None = None
+    description_image: bytes | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -70,6 +72,22 @@ def image_dimensions(data: bytes) -> tuple[int, int]:
             return image.size
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
         raise ValueError("The image cannot be decoded safely.") from error
+
+
+def svg_dimensions(data: bytes) -> tuple[int, int]:
+    try:
+        root = ET.fromstring(data)
+        if root.tag != "{http://www.w3.org/2000/svg}svg":
+            raise ValueError("Invalid SVG root")
+        viewbox = [float(value) for value in root.attrib["viewBox"].replace(",", " ").split()]
+        if len(viewbox) != 4 or not all(math.isfinite(value) for value in viewbox):
+            raise ValueError("Invalid SVG viewBox")
+        width, height = viewbox[2:]
+        if width <= 0 or height <= 0:
+            raise ValueError("Invalid SVG dimensions")
+        return math.ceil(width * 96 / 72), math.ceil(height * 96 / 72)
+    except (ET.ParseError, KeyError, ValueError, OverflowError) as error:
+        raise ProcessingError("The converter returned an invalid SVG asset.") from error
 
 
 def image_as_png(data: bytes) -> bytes:
@@ -147,8 +165,8 @@ def extract(filename: str, data: bytes) -> Processed:
             text="\n\n".join(item["text"] for item in manifest["source_texts"]),
             warnings=list(manifest["warnings"]),
         )
-        if not enrich:
-            result.warnings.append(REDUCED_FEATURE_NOTICE)
+        # if not enrich:
+        #     result.warnings.append(REDUCED_FEATURE_NOTICE)
         texts = {item["id"]: item["text"] for item in manifest["source_texts"]}
         table_html = []
         root = Path(manifest["output_directory"]).resolve()
@@ -193,15 +211,26 @@ def extract(filename: str, data: bytes) -> Processed:
                 ) + "</table>"
                 table_html.append(text)
             assets = element.get("assets", [])
+            raster_assets = element.get("raster_assets", [])
             for index, relative in enumerate(assets):
                 path = (root / relative).resolve()
                 if not path.is_relative_to(root):
                     raise ProcessingError("The converter returned an invalid asset path.")
                 asset_data = path.read_bytes()
-                width, height = image_dimensions(asset_data)
+                is_svg = path.suffix.lower() == ".svg"
+                width, height = svg_dimensions(asset_data) if is_svg else image_dimensions(asset_data)
+                extension = ".svg" if is_svg else ".png"
+                mimetype = "image/svg+xml" if is_svg else "image/png"
+                description_image = None
+                if is_svg and index < len(raster_assets) and raster_assets[index]:
+                    raster_path = (root / raster_assets[index]).resolve()
+                    if not raster_path.is_relative_to(root):
+                        raise ProcessingError("The converter returned an invalid asset path.")
+                    description_image = raster_path.read_bytes()
                 result.assets.append(Asset(
-                    f"{Path(filename).stem}-{element['kind']}-{number}-{index + 1}.png",
-                    asset_data, "image/png", kind, text, description, width, height,
+                    f"{Path(filename).stem}-{element['kind']}-{number}-{index + 1}{extension}",
+                    asset_data, mimetype, "svg" if is_svg and kind == "image" else kind,
+                    text, description, width, height, description_image,
                 ))
             if not assets and text:
                 extension = ".tex" if kind == "math expression" else ".txt"

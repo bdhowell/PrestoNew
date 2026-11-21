@@ -75,6 +75,15 @@ psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-image-cl
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/auto-fit.sql
 ```
 
+### Poster dimensions
+
+On the dimensions page, choose units and orientation to browse sizes from
+`stipulations/sizes.json`. Metric sizes are also available in millimeters
+(10 mm per cm). Only sizes in the selected orientation are shown; square sizes
+are excluded. Select a rectangle to fill Wikkit's input, then choose OK or press
+Enter. Wikkit checks the dimensions against the poster and conference rules.
+The picker becomes available when Wikkit asks for dimensions.
+
 ### Poster auto-fit
 
 After profiling, the editor queues overflowing editable sections one at a time
@@ -149,7 +158,8 @@ Application and rollback compare saved section contents under a database lock.
 Pending editor changes are saved before rollback or application.
 
 The graphics evaluation page skips to `/layout/edit` when every graphic has
-current assessments for its Materials and Methods and Results sections.
+current assessments for its Materials and Methods and Results sections and none
+exceeds the image complexity threshold.
 Otherwise, it evaluates pending graphics and offers the section review page
 when finished. `/content/evaluate` is its own resumption page: returning after
 an interruption reuses current assessments and finishes the remaining graphics.
@@ -158,6 +168,12 @@ and Results sections, including criteria, supported elements, limitations, and
 suggested improvements, linked to the image source; the conference is optional.
 Interrupted connections are retried automatically twice before offering a manual
 retry; saved assessments are reused on each attempt.
+PNG and JPEG graphics are also scored using blurred Canny edge density with an
+area penalty. `IMAGE_COMPLEXITY_THRESHOLD` defaults to `0.5` and
+`IMAGE_COMPLEXITY_PENALTY_POWER` defaults to `0.15`; scores strictly above the
+threshold are marked unsuitable and omitted from the editor's suggested
+graphics. Scores are recalculated from source bytes so configuration changes
+also apply to existing assessments. Existing placed graphics remain editable.
 Classified charts are normalized and stored as PNG images. For a classified
 math-expression image, each extracted LaTeX expression is stored in `source.text`
 on its own child source record, while the original image remains available.

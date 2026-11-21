@@ -748,7 +748,7 @@ Write a local function that takes a Python text or binary object and produces a 
   logo/moreinfo/QR-code kinds.
 - PDF, DOCX, PPTX, Markdown and Pages use the configured Docling service. Picture
   export uses `referenced` mode; the official service client materializes the
-  resource bundle, preserving images for local PNG extraction. Embedded image
+  resource bundle, preserving images for local crop extraction. Embedded image
   export is not requested from the service. Picture descriptions/classification,
   chart extraction and formula enrichment are
   enabled. This work runs on the separate `/content/extract` reading page after
@@ -762,7 +762,14 @@ Write a local function that takes a Python text or binary object and produces a 
   affected conversion logs a warning. There is no automatic feature downgrade
   or success fallback after a failed conversion. Set it back to `true` and
   re-upload affected documents to obtain the missing enrichments.
-  Generated PNG assets retain source parent IDs, descriptions and dimensions.
+  PDF picture provenance regions are converted with Poppler `pdftocairo` and
+  pypdfium2: pure-vector crops are stored as SVG, while crops containing images
+  use the Docling PNG. Other document formats and tables/formulas retain PNG crops.
+  Conversion errors are reported as warnings and fall back to PNG. Generated
+  assets retain source parent IDs, descriptions and dimensions; SVGs are exempt
+  from low-raster-resolution warnings. A Docling PNG crop is also used to
+  describe an SVG when it has no caption or description; if that crop is
+  unavailable, extraction fails explicitly instead of storing an undescribed image.
   If a crop is unavailable, formula/table text is retained with an icon, and
   converter warnings are logged rather than inventing a graphic.
 - XLSX/XLSM cells and sheet names are HTML-escaped and stored as tables.
@@ -1337,6 +1344,11 @@ Implementation contract:
   sizes, then request custom input as necessary. `idk` uses complete maximum
   sizes only when available; without them it asks again rather than inventing
   dimensions. All conference bounds are converted to centimeters before validation.
+  The size picker reserves space beside the default chat window on wider screens
+  and allows its choices to be scrolled above the chat window on narrow screens.
+  Sizes and filters remain selectable while waiting for the custom-dimensions
+  prompt. A selected size is staged until that prompt is active, then placed
+  in Wikkit's input; OK submits it only during custom-dimensions entry.
 - Exact conference requirements take precedence over readability minima.
   Otherwise both dimensions must meet the configured minimums. Partial maxima
   and requirements still constrain custom input. Layout validation enforces

@@ -15,6 +15,33 @@ from tests.test_layout import DRAFT, LayoutDatabaseTests, LayoutRouteTests
 
 
 class GraphicsSelectionTests(unittest.TestCase):
+    def test_complexity_matches_canny_formula_and_threshold(self) -> None:
+        image = numpy.random.default_rng(42).integers(0, 256, (150, 200), dtype=numpy.uint8)
+        success, encoded = cv2.imencode(".png", image)
+        self.assertTrue(success)
+        edges = cv2.Canny(cv2.GaussianBlur(image, (3, 3), 0), 50, 150)
+        expected = numpy.count_nonzero(edges) / image.size / (image.size / 10000) ** 0.15
+        with patch.dict(os.environ, {"IMAGE_COMPLEXITY_THRESHOLD": str(expected),
+                                    "IMAGE_COMPLEXITY_PENALTY_POWER": "0.15"}):
+            result = graphics.image_complexity(encoded.tobytes())
+            self.assertAlmostEqual(result["score"], expected)
+            self.assertFalse(result["too_complex"])
+        with patch.dict(os.environ, {"IMAGE_COMPLEXITY_THRESHOLD": str(expected / 2)}):
+            self.assertTrue(graphics.image_complexity(encoded.tobytes())["too_complex"])
+
+    def test_complexity_accepts_jpeg_and_rejects_bad_inputs(self) -> None:
+        success, encoded = cv2.imencode(".jpg", numpy.zeros((20, 20), dtype=numpy.uint8))
+        self.assertTrue(success)
+        self.assertEqual(graphics.image_complexity(encoded.tobytes())["score"], 0)
+        with self.assertRaises(ValueError):
+            graphics.image_complexity(b"not an image")
+        for key, value in (("IMAGE_COMPLEXITY_THRESHOLD", "nan"),
+                           ("IMAGE_COMPLEXITY_THRESHOLD", "1.1"),
+                           ("IMAGE_COMPLEXITY_PENALTY_POWER", "-1")):
+            with self.subTest(key=key, value=value), patch.dict(os.environ, {key: value}):
+                with self.assertRaises(ValueError):
+                    graphics.image_complexity(encoded.tobytes())
+
     def test_math_only_sections_keep_source_order(self) -> None:
         items = [
             content.GraphicSource(1, "image.png"),
@@ -105,6 +132,8 @@ class GraphicsCatalogRouteTests(unittest.TestCase):
             content.GraphicSource(21, "formula.png", type="math", math_expressions=["x^2"]),
             content.GraphicSource(22, "chart.png", assessments={"results": {"rating": "highly"}}),
         ]
+        _, encoded = cv2.imencode(".png", numpy.zeros((20, 20), dtype=numpy.uint8))
+        self.sources.graphic_source.return_value = (encoded.tobytes(), "image/png")
         mocked = patch.object(content, "store", return_value=self.sources)
         mocked.start()
         self.addCleanup(mocked.stop)
@@ -142,6 +171,26 @@ class GraphicsCatalogRouteTests(unittest.TestCase):
 
     def test_storage_errors_are_reported(self) -> None:
         self.sources.graphic_sources.side_effect = psycopg.OperationalError("down")
+        with self.assertLogs("layout", "ERROR"):
+            response = self.client.get("/layout/graphics", params={"pid": 11, "section": "results"})
+        self.assertEqual(response.status_code, 503)
+
+    def test_catalog_omits_complex_raster_but_not_svg(self) -> None:
+        image = numpy.random.default_rng(8).integers(0, 256, (100, 100), dtype=numpy.uint8)
+        _, encoded = cv2.imencode(".png", image)
+        self.sources.graphic_source.return_value = (encoded.tobytes(), "image/png")
+        self.sources.graphic_sources.return_value.append(
+            content.GraphicSource(23, "vector.svg", mimetype="image/svg+xml", type="svg")
+        )
+        with patch.dict(os.environ, {"IMAGE_COMPLEXITY_THRESHOLD": "0.01"}):
+            response = self.client.get("/layout/graphics", params={"pid": 11, "section": "results"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["sid"] for item in response.json()["graphics"]], [23])
+        self.assertCountEqual([call.args for call in self.sources.graphic_source.await_args_list],
+                              [(7, 11, 21), (7, 11, 22)])
+
+    def test_invalid_raster_reports_catalog_error(self) -> None:
+        self.sources.graphic_source.return_value = (b"invalid", "image/png")
         with self.assertLogs("layout", "ERROR"):
             response = self.client.get("/layout/graphics", params={"pid": 11, "section": "results"})
         self.assertEqual(response.status_code, 503)

@@ -47,7 +47,8 @@
         parent.append(section);
     }
 
-    function suitable(evaluation) {
+    function suitable(evaluation, complexity) {
+        if (complexity?.too_complex) return false;
         const threshold = ratings.indexOf("significantly");
         return [
             evaluation.evaluations.materials_and_methods.rating,
@@ -70,7 +71,7 @@
             );
             group.append(element("h2", category === "uploaded" ? "Uploaded graphics" : "Extracted graphics"));
             for (const item of items) {
-                const isSuitable = suitable(item.evaluation);
+                const isSuitable = suitable(item.evaluation, item.complexity);
                 const card = element("article", "", "graphic-evaluation");
                 card.append(element("h3", item.source.filename));
                 if (item.source.type === "tables" && item.source.table_html) {
@@ -89,6 +90,9 @@
                     `Classification: ${item.evaluation.image_analysis.classification}`,
                     "graphic-classification",
                 ));
+                if (item.complexity?.too_complex) {
+                    card.append(element("p", "This raster image is too complex for the poster and will not be suggested in the editor."));
+                }
                 card.append(element(
                     "p",
                     isSuitable ? "Suitable for the poster." : "Not suitable for the poster.",
@@ -149,13 +153,13 @@
             throw new Error(event.detail);
         } else if (event.type === "complete") {
             terminalEventReceived = true;
-            const count = [...results.values()].filter(item => suitable(item.evaluation)).length;
+            const count = [...results.values()].filter(item => suitable(item.evaluation, item.complexity)).length;
             const unsuitable = results.size - count;
             status.textContent = `Evaluation complete: ${numberToWords(count)} suitable and ${numberToWords(unsuitable)} not suitable.`;
             next.hidden = false;
             await window.wikkit.say(
                 `<p>I&rsquo;ve finished evaluating your graphics. ${capitalizeFirstLetter(numberToWords(count))} may be useful for your poster; `
-                    + `${numberToWords(unsuitable)} have only minimal relevance.</p>`,
+                    + `${numberToWords(unsuitable)} are not suitable because of relevance or image complexity.</p>`,
             );
         }
     }

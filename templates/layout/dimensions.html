@@ -3,6 +3,32 @@
 {% block content %}
 <h1>Poster dimensions</h1>
 <p>Tell Wikkit the height and width of your poster.</p>
+<section id="dimension-picker" aria-label="Choose poster dimensions"
+         data-sizes="{{ dimension_pairs|default([])|tojson|forceescape }}">
+    <p>Choose a size, or type your own dimensions into Wikkit.</p>
+    <fieldset id="dimension-picker-controls">
+        <legend>Choose a poster size</legend>
+        <div class="dimension-filters">
+            <div role="group" aria-label="Units" id="dimension-units">
+                <button type="button" data-unit="in" aria-pressed="true">in</button>
+                <button type="button" data-unit="cm" aria-pressed="false">cm</button>
+                <button type="button" data-unit="mm" aria-pressed="false">mm</button>
+            </div>
+            <div role="group" aria-label="Orientation" id="dimension-orientations">
+                <button type="button" data-orientation="landscape" aria-pressed="true">
+                    <span class="orientation-icon landscape" aria-hidden="true"></span> landscape
+                </button>
+                <button type="button" data-orientation="portrait" aria-pressed="false">
+                    <span class="orientation-icon portrait" aria-hidden="true"></span> portrait
+                </button>
+            </div>
+        </div>
+        <div id="dimension-sizes" aria-label="Available poster sizes"></div>
+        <p id="dimension-empty" hidden>No sizes available for these units and orientation.</p>
+        <button id="dimension-accept" type="button" disabled>OK</button>
+    </fieldset>
+    <p id="dimension-picker-status" role="status" aria-live="polite">Choose a size while waiting for Wikkit to ask for dimensions.</p>
+</section>
 <section id="dimension-correction" hidden aria-label="Correct poster dimensions">
     <div id="poster-preview"><span id="poster-size"></span></div>
     <form id="dimension-form">

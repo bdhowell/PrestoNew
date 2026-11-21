@@ -30,6 +30,10 @@ and are discarded when that page unloads.
 Page-specific commands are registered in the `.does` files and override intrinsic commands with the same key
 Pages can also dynamically register or unregister commands at runtime using the same `window.registerWikkitCommands` API.
 
+The chat log and main input share the overlay's available height. As the input
+opens or closes, the log resizes with it; the input can shrink in a short
+overlay instead of overflowing its bottom edge.
+
 # Chatbot Embedded Content Controls
 When chatbot output is rendered in the #chatbot container, look for any HTML controls in the output, such as buttons, selects, input fields, and textareas.
 

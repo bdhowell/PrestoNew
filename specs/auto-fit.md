@@ -218,7 +218,7 @@ After elucidation succeeds, route the user to `/content/evaluate`. Evaluate owne
 
 Persist each image evaluation in the `assessment` rows for its Materials and Methods and Results sections. Use the source and section update timestamps to detect stale assessments; keep the image classification, description, and any extracted math expressions in the existing source metadata and child source records. Apply `schema/source-analysis-cleanup.sql` to existing databases to remove obsolete source-analysis columns.
 
-Wikkit reports per-image progress, then displays uploaded and extracted graphics in separate groups. A graphic is suitable when either its Materials and Methods or Results rating is `significantly`, `highly`, or `definitively`; otherwise it is not suitable. If no eligible graphics exist, Wikkit explains that and redirects to `/conferences/query`.
+Wikkit reports per-image progress, then displays uploaded and extracted graphics in separate groups. A graphic is suitable when either its Materials and Methods or Results rating is `significantly`, `highly`, or `definitively`, and its raster complexity does not exceed `IMAGE_COMPLEXITY_THRESHOLD` (default 0.5). Scores use blurred Canny edge density and an area penalty controlled by `IMAGE_COMPLEXITY_PENALTY_POWER` (default 0.15). Overly complex PNG and JPEG sources are omitted from editor suggestions, including for previously assessed images; existing placements remain editable. If no eligible graphics exist, Wikkit explains that and redirects to `/conferences/query`.
 
 ## Graphics Suitability
 
@@ -738,3 +738,5 @@ This updates outlines without waiting for autosave or server rendering.
 Later saved profiles use live overflow measurements for edited sections so an
 older saved measurement cannot restore a resolved overflow warning.
 ````
+
+===============
