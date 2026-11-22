@@ -177,6 +177,7 @@ class Source:
     kind: str = "mixed"
     extracted: bool = True
     depth: int = 0
+    legibility: float | None = None
 
     @property
     def ill_sized(self) -> bool:
@@ -308,6 +309,9 @@ class SourceStore(PosterStore):
 
         width, height = await run_in_threadpool(processing.image_dimensions, data)
         complexity = await run_in_threadpool(processing.image_complexity_score, data)
+        legibility = await run_in_threadpool(
+            processing.image_legibility_score, data, "image/png",
+        )
         files = SourceFiles()
         written: list[str] = []
         old_uri: str | None = None
@@ -345,9 +349,11 @@ class SourceStore(PosterStore):
                     await connection.execute(
                         "UPDATE source SET filename = 'qrcode.png', mimetype = 'image/png', "
                         "size = %s, height = %s, width = %s, fileid = %s, storage_uri = %s, "
-                        "hash = %s, complexity = %s, text = NULL, extracted = TRUE, updated = now() "
+                        "hash = %s, complexity = %s, legibility = %s, text = NULL, "
+                        "extracted = TRUE, updated = now() "
                         "WHERE sid = %s",
-                        (len(data), height, width, fileid, uri, source_hash(data), complexity, sid),
+                        (len(data), height, width, fileid, uri, source_hash(data),
+                         complexity, legibility, sid),
                     )
                 cursor = await connection.execute(
                     "SELECT content FROM section WHERE pid = %s AND which = 'additional information' FOR UPDATE",
@@ -460,6 +466,9 @@ class SourceStore(PosterStore):
             raise ValueError("Poster thumbnails must be PNG images.")
         width, height = await run_in_threadpool(processing.image_dimensions, data)
         complexity = await run_in_threadpool(processing.image_complexity_score, data)
+        legibility = await run_in_threadpool(
+            processing.image_legibility_score, data, "image/png",
+        )
         files = SourceFiles()
         written: list[str] = []
         old_uri: str | None = None
@@ -512,9 +521,11 @@ class SourceStore(PosterStore):
                         "UPDATE source SET filename = 'thumbnail.png', mimetype = 'image/png', "
                         "size = %s, height = %s, width = %s, fileid = %s, storage_uri = %s, "
                         "hash = %s, parent = NULL, text = NULL, description = NULL, "
-                        "complexity = %s, added = now(), updated = now(), extracted = TRUE "
+                        "complexity = %s, legibility = %s, added = now(), "
+                        "updated = now(), extracted = TRUE "
                         "WHERE sid = %s",
-                        (len(data), height, width, fileid, uri, source_hash(data), complexity, sid),
+                        (len(data), height, width, fileid, uri, source_hash(data),
+                         complexity, legibility, sid),
                     )
         except BaseException:
             for uri in written:
@@ -547,7 +558,8 @@ class SourceStore(PosterStore):
         "s.sid, coalesce(s.filename, parent.filename, 'Untitled source'), s.mimetype, "
         "s.size, s.added::text, s.parent, "
         "CASE WHEN s.kind = 'math expression' THEN s.text ELSE s.description END, "
-        "s.width, s.height, s.kind, CASE WHEN s.kind = 'qrcode' THEN TRUE ELSE s.extracted END"
+        "s.width, s.height, s.kind, CASE WHEN s.kind = 'qrcode' THEN TRUE ELSE s.extracted END, "
+        "s.legibility"
     )
 
     async def list_sources(self, uid: int, pid: int) -> list[Source]:
@@ -559,7 +571,10 @@ class SourceStore(PosterStore):
                 "WHERE p.uid = %s AND p.pid = %s AND s.kind <> 'thumbnail' "
                 "ORDER BY s.added, s.sid", (uid, pid),
             )
-            items = [Source(*row) for row in await cursor.fetchall()]
+            items = [
+                Source(*row[:11], legibility=row[11] if len(row) > 11 else None)
+                for row in await cursor.fetchall()
+            ]
         children: dict[int | None, list[Source]] = {}
         ids = {item.sid for item in items}
         for item in items:
@@ -639,12 +654,16 @@ class SourceStore(PosterStore):
                 if kind in ("image", "logo"):
                     width, height = await run_in_threadpool(processing.image_dimensions, data)
                     complexity = await run_in_threadpool(processing.image_complexity_score, data)
+                    legibility = await run_in_threadpool(
+                        processing.image_legibility_score, data, "image/png",
+                    )
                     result = processing.Processed(
                         width=width, height=height,
                         description=await processing.describe_image(data),
                     )
                 else:
                     complexity = None
+                    legibility = None
                     result = await run_in_threadpool(processing.extract, filename, data)
                 for asset in result.assets:
                     if asset.width is not None and not asset.description:
@@ -665,11 +684,11 @@ class SourceStore(PosterStore):
                 kind = await self._asset_kind(connection, pid, original)
                 await connection.execute(
                     "UPDATE source SET text = %s, description = %s, "
-                    "width = %s, height = %s, kind = %s, complexity = %s, "
+                    "width = %s, height = %s, kind = %s, complexity = %s, legibility = %s, "
                     "extracted = TRUE, updated = now() "
                     "WHERE sid = %s",
                     (result.text or None, result.description or None, result.width,
-                     result.height, kind, complexity, sid),
+                     result.height, kind, complexity, legibility, sid),
                 )
                 for asset in result.assets:
                     await self._insert_source(connection, files, written, pid, asset, sid)
@@ -696,11 +715,19 @@ class SourceStore(PosterStore):
             )
             row = await cursor.fetchone()
             if row is not None:
-                return Source(*row)
+                return Source(*row[:11], legibility=row[11] if len(row) > 11 else None)
         kind = await self._asset_kind(connection, pid, asset) if extracted else asset.kind
         complexity = (
             await run_in_threadpool(processing.image_complexity_score, asset.data)
             if asset.mimetype.startswith("image/") and asset.mimetype != "image/svg+xml"
+            else None
+        )
+        legibility = (
+            await run_in_threadpool(
+                processing.image_legibility_score, asset.data, asset.mimetype,
+                raster_data=asset.description_image,
+            )
+            if asset.mimetype.startswith("image/")
             else None
         )
         fileid = uuid4()
@@ -708,16 +735,17 @@ class SourceStore(PosterStore):
         written.append(uri)
         cursor = await connection.execute(
             "INSERT INTO source (pid, kind, parent, filename, mimetype, size, fileid, hash, "
-            "storage_uri, text, description, width, height, extracted, complexity) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-            "RETURNING sid, filename, mimetype, size, added::text, parent, description, width, height, kind, extracted",
+            "storage_uri, text, description, width, height, extracted, complexity, legibility) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "RETURNING sid, filename, mimetype, size, added::text, parent, description, "
+            "width, height, kind, extracted, legibility",
             (pid, kind, parent, asset.filename, asset.mimetype, len(asset.data), fileid,
              digest, uri, asset.text or None, asset.description or None,
-             asset.width, asset.height, extracted, complexity),
+             asset.width, asset.height, extracted, complexity, legibility),
         )
         row = await cursor.fetchone()
         assert row is not None
-        return Source(*row)
+        return Source(*row[:11], legibility=row[11] if len(row) > 11 else None)
 
     async def _asset_kind(
         self, connection: psycopg.AsyncConnection, pid: int, asset: processing.Asset,
@@ -1100,6 +1128,9 @@ class SourceStore(PosterStore):
                     png_data = await run_in_threadpool(processing.image_as_png, image_data)
                     width, height = await run_in_threadpool(processing.image_dimensions, png_data)
                     complexity = await run_in_threadpool(processing.image_complexity_score, png_data)
+                    legibility = await run_in_threadpool(
+                        processing.image_legibility_score, png_data, "image/png",
+                    )
                     fileid = uuid4()
                     uri = await run_in_threadpool(files.put, fileid, png_data, "image/png")
                     written.append(uri)
@@ -1108,11 +1139,11 @@ class SourceStore(PosterStore):
                     await connection.execute(
                         "UPDATE source SET filename = %s, mimetype = 'image/png', size = %s, "
                         "width = %s, height = %s, fileid = %s, storage_uri = %s, hash = %s, "
-                        "complexity = %s, updated = now() "
+                        "complexity = %s, legibility = %s, updated = now() "
                         "WHERE pid = %s AND sid = %s",
                         (
-                            Path(row[3] or "chart").with_suffix(".png").name,
-                            len(png_data), width, height, fileid, uri, png_hash, complexity, pid, sid,
+                            Path(row[3] or "chart").with_suffix(".png").name, len(png_data),
+                            width, height, fileid, uri, png_hash, complexity, legibility, pid, sid,
                         ),
                     )
 
