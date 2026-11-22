@@ -401,6 +401,59 @@ The module deliberately separates feature extraction from physical-size calculat
 **Testing:** Included unit tests cover cached evaluation, viewing-distance scaling,
 manual annotations, image bounds, aspect ratios, and empty diagrams.
 
+## Command-line interface
+
+Run `bin/python legibility.py diagram.png` to print the minimum-size result as
+JSON. Add `--max-width-mm 400 --max-height-mm 300` to check layout constraints.
+Use `--width-mm 250` instead to print the evaluation at a particular size;
+`--height-mm` may optionally verify its aspect ratio. All dimensions are in
+millimeters. An infeasible result or failed evaluation is reported in the JSON;
+invalid input produces a nonzero exit status.
+
+Every CLI setting has an environment variable; command-line arguments override
+environment values. The image path may instead be supplied via `LEGIBILITY_IMAGE`.
+For example:
+
+```sh
+LEGIBILITY_DISTANCE_MM=1800 LEGIBILITY_LEVEL=standard \
+  bin/python legibility.py diagram.png --required-feature-fraction 0.9
+```
+
+| Option | Environment variable | Default |
+| --- | --- | --- |
+| `--width-mm`, `--height-mm` | `LEGIBILITY_WIDTH_MM`, `LEGIBILITY_HEIGHT_MM` | unset |
+| `--max-width-mm`, `--max-height-mm` | `LEGIBILITY_MAX_WIDTH_MM`, `LEGIBILITY_MAX_HEIGHT_MM` | unset |
+| `--distance-mm` | `LEGIBILITY_DISTANCE_MM` | `914.4` |
+| `--level` | `LEGIBILITY_LEVEL` | `comfortable` |
+| `--visual-acuity` | `LEGIBILITY_VISUAL_ACUITY` | `1.0` |
+| `--required-feature-fraction` | `LEGIBILITY_REQUIRED_FEATURE_FRACTION` | `0.95` |
+| `--critical-features-required` | `LEGIBILITY_CRITICAL_FEATURES_REQUIRED` | `true` |
+| `--contrast-reference` | `LEGIBILITY_CONTRAST_REFERENCE` | `0.45` |
+| `--contrast-floor` | `LEGIBILITY_CONTRAST_FLOOR` | `0.04` |
+| `--max-contrast-penalty` | `LEGIBILITY_MAX_CONTRAST_PENALTY` | `4.0` |
+| `--include-auto` | `LEGIBILITY_INCLUDE_AUTO` | `true` |
+| `--features` | `LEGIBILITY_FEATURES` | unset |
+
+Boolean options accept `true` or `false`. `--features` is a path to a JSON array
+of `FeatureSpec` objects, for example:
+
+```json
+[{"name": "axis label", "bbox": [40, 450, 100, 18],
+  "category": "text", "critical": true, "stroke_px": 2}]
+```
+
+The optional fields `extent_px` and `contrast` are also supported. Use
+`--include-auto false` to analyze only annotated features. Thresholds for each
+`text`, `line`, `symbol`, and `detail` category can be changed with
+`--<category>-stroke-arcmin` and `--<category>-extent-arcmin`, or their
+uppercase underscore equivalents prefixed with `LEGIBILITY_` (for example,
+`LEGIBILITY_TEXT_STROKE_ARCMIN`). Defaults are the `Thresholds` class values.
+When both thresholds for a feature are zero, its infinite visibility margin is
+represented by `null` in evaluation JSON.
+
+These `LEGIBILITY_` CLI settings are separate from the source-processing
+`DIAGRAM_LEGIBILITY_` settings below.
+
 ## Persisted image score
 
 The source-processing pipeline stores `source.legibility` as the fraction of

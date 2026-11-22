@@ -25,8 +25,11 @@ not represented as accurate text detection).
 """
 from __future__ import annotations
 
+import argparse
 from dataclasses import asdict, dataclass, field
+import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
@@ -387,4 +390,113 @@ def minimum_diagram_size(
     return DiagramAnalyzer(image).minimum_size(
         params, max_width_mm=max_width_mm, max_height_mm=max_height_mm,
     )
+
+
+def main() -> None:
+    defaults = ViewingParameters()
+    parser = argparse.ArgumentParser(
+        description='Estimate minimum legible physical sizes for raster scientific diagrams.',
+        epilog='Options can also be set with LEGIBILITY_ environment variables '
+               '(for example, --distance-mm uses LEGIBILITY_DISTANCE_MM). '
+               'Command-line options take precedence.',
+    )
+    parser.add_argument('image', nargs='?', default=os.environ.get('LEGIBILITY_IMAGE'),
+                        help='raster image path (or LEGIBILITY_IMAGE)')
+    parser.add_argument('--width-mm', type=float, default=os.environ.get('LEGIBILITY_WIDTH_MM'),
+                        help='evaluate at this width instead of finding the minimum')
+    parser.add_argument('--height-mm', type=float, default=os.environ.get('LEGIBILITY_HEIGHT_MM'),
+                        help='optional height for evaluation, preserving aspect ratio')
+    parser.add_argument('--max-width-mm', type=float, default=os.environ.get('LEGIBILITY_MAX_WIDTH_MM'))
+    parser.add_argument('--max-height-mm', type=float, default=os.environ.get('LEGIBILITY_MAX_HEIGHT_MM'))
+    parser.add_argument('--distance-mm', type=float,
+                        default=os.environ.get('LEGIBILITY_DISTANCE_MM', defaults.distance_mm))
+    parser.add_argument('--level', choices=tuple(_PRESETS),
+                        default=os.environ.get('LEGIBILITY_LEVEL', defaults.legibility_level))
+    parser.add_argument('--visual-acuity', type=float,
+                        default=os.environ.get('LEGIBILITY_VISUAL_ACUITY', defaults.visual_acuity))
+    parser.add_argument('--required-feature-fraction', type=float, default=os.environ.get(
+        'LEGIBILITY_REQUIRED_FEATURE_FRACTION', defaults.required_feature_fraction))
+    parser.add_argument('--critical-features-required', choices=('true', 'false'), default=os.environ.get(
+        'LEGIBILITY_CRITICAL_FEATURES_REQUIRED', 'true'))
+    parser.add_argument('--contrast-reference', type=float, default=os.environ.get(
+        'LEGIBILITY_CONTRAST_REFERENCE', defaults.contrast_reference))
+    parser.add_argument('--contrast-floor', type=float,
+                        default=os.environ.get('LEGIBILITY_CONTRAST_FLOOR', defaults.contrast_floor))
+    parser.add_argument('--max-contrast-penalty', type=float, default=os.environ.get(
+        'LEGIBILITY_MAX_CONTRAST_PENALTY', defaults.max_contrast_penalty))
+    parser.add_argument('--include-auto', choices=('true', 'false'),
+                        default=os.environ.get('LEGIBILITY_INCLUDE_AUTO', 'true'))
+    parser.add_argument('--features', type=Path, default=os.environ.get('LEGIBILITY_FEATURES'),
+                        help='path to a JSON array of manual feature specifications')
+    for category in ('text', 'line', 'symbol', 'detail'):
+        for kind in ('stroke', 'extent'):
+            parser.add_argument(
+                f'--{category}-{kind}-arcmin', type=float,
+                default=os.environ.get(
+                    f'LEGIBILITY_{category.upper()}_{kind.upper()}_ARCMIN',
+                    getattr(defaults.thresholds, kind)[category],
+                ),
+                help=f'{category} {kind} threshold in arcminutes',
+            )
+    args = parser.parse_args()
+    if not args.image:
+        parser.error('an image path or LEGIBILITY_IMAGE is required')
+    if args.width_mm is None and args.height_mm is not None:
+        parser.error('--height-mm requires --width-mm')
+    if args.width_mm is not None and (args.max_width_mm is not None or args.max_height_mm is not None):
+        parser.error('--max-width-mm and --max-height-mm apply only to minimum-size calculations')
+    for name in ('critical_features_required', 'include_auto'):
+        if getattr(args, name) not in ('true', 'false'):
+            parser.error(f'LEGIBILITY_{name.upper()} must be true or false')
+
+    try:
+        thresholds = Thresholds(
+            stroke={category: getattr(args, f'{category}_stroke_arcmin')
+                    for category in ('text', 'line', 'symbol', 'detail')},
+            extent={category: getattr(args, f'{category}_extent_arcmin')
+                    for category in ('text', 'line', 'symbol', 'detail')},
+        )
+        params = ViewingParameters(
+            distance_mm=args.distance_mm, legibility_level=args.level,
+            visual_acuity=args.visual_acuity,
+            required_feature_fraction=args.required_feature_fraction,
+            critical_features_required=args.critical_features_required == 'true',
+            contrast_reference=args.contrast_reference, contrast_floor=args.contrast_floor,
+            max_contrast_penalty=args.max_contrast_penalty, thresholds=thresholds,
+        )
+        analyzer = DiagramAnalyzer.from_file(
+            args.image, include_auto=args.include_auto == 'true', thresholds=thresholds,
+        )
+        if args.features:
+            features = json.loads(args.features.read_text(encoding='utf-8'))
+            if not isinstance(features, list):
+                raise ValueError('features must be a JSON array')
+            for feature in features:
+                if not isinstance(feature, dict):
+                    raise ValueError('each feature must be a JSON object')
+                bbox = feature.get('bbox')
+                if (not isinstance(feature.get('name'), str) or not isinstance(bbox, list)
+                    or len(bbox) != 4 or any(type(value) is not int for value in bbox)):
+                    raise ValueError('each feature needs a name and a four-integer bbox')
+                if 'critical' in feature and not isinstance(feature['critical'], bool):
+                    raise ValueError('feature critical must be a boolean')
+                for key in ('stroke_px', 'extent_px', 'contrast'):
+                    if key in feature and feature[key] is not None and type(feature[key]) not in (int, float):
+                        raise ValueError(f'feature {key} must be a number')
+                analyzer.add_feature(FeatureSpec(**{**feature, 'bbox': tuple(bbox)}))
+        if args.width_mm is None:
+            result = analyzer.minimum_size(params, max_width_mm=args.max_width_mm,
+                                           max_height_mm=args.max_height_mm).to_dict()
+        else:
+            result = analyzer.evaluate(args.width_mm, params, height_mm=args.height_mm).to_dict()
+            for feature in result['features']:
+                if not math.isfinite(feature['visibility_margin']):
+                    feature['visibility_margin'] = None
+        print(json.dumps(result, indent=2, allow_nan=False))
+    except (ValueError, TypeError, OSError, RuntimeError, OverflowError, cv2.error) as error:
+        parser.error(str(error))
+
+
+if __name__ == '__main__':
+    main()
         
