@@ -148,7 +148,17 @@
     }
 
     async function consumeEvent(event) {
-        if (event.type === "already-evaluated") {
+        if (event.type === "start") {
+            if (event.total > 0) {
+                const count = numberToWords(event.total);
+                status.textContent = `Preparing to evaluate ${event.total} graphic${event.total === 1 ? "" : "s"}.`;
+                await window.wikkit.say(
+                    `<p>I&rsquo;m reviewing ${count} graphic${event.total === 1 ? "" : "s"}.</p>`
+                    + `<p>I&rsquo;m predicting ${event.estimate_word} minutes to evaluate `
+                    + `${event.total === 1 ? "it" : "them"}.</p>`,
+                );
+            }
+        } else if (event.type === "already-evaluated") {
             terminalEventReceived = true;
             window.wikkit.execute({does: "redirect", payload: "/layout/edit"});
         } else if (event.type === "empty") {
@@ -187,10 +197,10 @@
             const count = [...results.values()].filter(item =>
                 suitable(item.evaluation, item.complexity, item.legibility)).length;
             const unsuitable = results.size - count;
-            status.textContent = `Evaluation complete: ${numberToWords(count)} suitable and ${numberToWords(unsuitable)} not suitable.`;
+            status.textContent = `Graphic review complete: ${numberToWords(count)} suitable and ${numberToWords(unsuitable)} not suitable.`;
             next.hidden = false;
             await window.wikkit.say(
-                `<p>I&rsquo;ve finished evaluating your graphics. ${capitalizeFirstLetter(numberToWords(count))} may be useful for your poster; `
+                `<p>I&rsquo;ve finished reviewing your graphics. ${capitalizeFirstLetter(numberToWords(count))} may be useful for your poster; `
                     + `${numberToWords(unsuitable)} are not suitable because of relevance, image complexity, or legibility.</p>`,
             );
         }
@@ -203,7 +213,7 @@
         next.hidden = true;
         terminalEventReceived = false;
         controller = new AbortController();
-        status.textContent = "Wikkit is evaluating your graphics.";
+        status.textContent = "Checking graphics for legibility and complexity.";
         try {
             const response = await fetch(`/content/evaluate/${poster.pid}`, {
                 method: "POST",

@@ -1,7 +1,6 @@
 """Upload, extract and analyze source files for an owner-checked draft."""
 
 import base64
-import html
 import json
 import logging
 import os
@@ -299,35 +298,14 @@ async def evaluate_page(request: Request) -> Response:
     if getattr(request.state, "user_id", None) is None:
         return RedirectResponse("/account/signin", status_code=303)
     try:
-        uid, pid = await selected_draft(request)
-        graphics = await content.store().evaluation_sources(uid, pid)
+        _, pid = await selected_draft(request)
         await common.resume(request)
     except STORAGE_ERRORS:
         logger.exception("Could not load poster graphics for evaluation")
         raise HTTPException(503, "Your graphics could not be loaded. Please try again.") from None
 
-    uploaded = sum(graphic.category == "uploaded" for graphic in graphics)
-    extracted = len(graphics) - uploaded
-    name = html.escape(identity.display_name(request))
-    parts = []
-    if uploaded:
-        parts.append(
-            f"{num2words.num2words(uploaded)} graphic{common.pluralize(uploaded)} you uploaded"
-        )
-    if extracted:
-        parts.append(
-            f"{num2words.num2words(extracted)} graphic{common.pluralize(extracted)} "
-            "I was able to extract from your source text"
-            f"{common.pluralize(extracted)}"
-        )
-    message = (
-        f"<p>Okay, {name}, I&rsquo;m reviewing the {' and '.join(parts)}.</p>"
-        f"<p>Please give me a few minutes to evaluate them&mdash;I&rsquo;m predicting "
-        f"{num2words.num2words(round(len(graphics) / 3, 1))} minutes.</p>"
-        if parts else None
-    )
     return render_page(
-        request, "content/evaluate.html", "content-evaluate", message,
+        request, "content/evaluate.html", "content-evaluate",
         pid=pid,
     )
 
@@ -410,53 +388,56 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
             "table_html": graphic.table_html,
         }
 
-    pending = [
-        graphic for graphic in graphics
-        if not is_current(graphic)
-    ]
     client: openai.OpenAI | None = None
 
     async def events():
         nonlocal client
         try:
-            uploaded = sum(graphic.category == "uploaded" for graphic in graphics)
+            screened = {}
+            pending_sources = {}
+            for graphic in graphics:
+                source = await content.store().graphic_source(uid, pid, graphic.sid)
+                if source is None:
+                    raise ValueError(f"Graphic source {graphic.sid} is no longer available.")
+                complexity = await run_in_threadpool(poster_graphics.image_complexity, source[0])
+                legibility = await run_in_threadpool(
+                    poster_graphics.image_legibility, source[0], source[1],
+                )
+                screened[graphic.sid] = (complexity, legibility)
+                if (
+                    not is_current(graphic)
+                    and not complexity["too_complex"]
+                    and not legibility["below_threshold"]
+                ):
+                    pending_sources[graphic.sid] = source
+            pending = [
+                graphic for graphic in graphics
+                if graphic.sid in pending_sources
+            ]
+            uploaded = sum(graphic.category == "uploaded" for graphic in pending)
             yield json.dumps({
                 "type": "start",
-                "total": len(graphics),
+                "total": len(pending),
                 "uploaded": uploaded,
-                "extracted": len(graphics) - uploaded,
+                "extracted": len(pending) - uploaded,
+                "estimate_word": num2words.num2words(round(len(pending) / 3, 1)),
             }, ensure_ascii=False) + "\n"
             if not graphics:
                 yield json.dumps({"type": "empty"}) + "\n"
                 return
-            cached_complexities = {}
-            cached_legibilities = {}
-            for graphic in graphics:
-                if is_current(graphic):
-                    source = await content.store().graphic_source(uid, pid, graphic.sid)
-                    if source is None:
-                        raise ValueError(f"Graphic source {graphic.sid} is no longer available.")
-                    complexity = await run_in_threadpool(poster_graphics.image_complexity, source[0])
-                    legibility = await run_in_threadpool(
-                        poster_graphics.image_legibility, source[0], source[1],
-                    )
-                    cached_complexities[graphic.sid] = complexity
-                    cached_legibilities[graphic.sid] = legibility
-            if not pending and not any(
-                value["too_complex"] for value in cached_complexities.values()
-            ) and not any(
-                value["below_threshold"] for value in cached_legibilities.values()
+            if not pending and all(
+                is_current(graphic)
+                and not screened[graphic.sid][0]["too_complex"]
+                and not screened[graphic.sid][1]["below_threshold"]
+                for graphic in graphics
             ):
                 yield json.dumps({"type": "already-evaluated"}) + "\n"
                 return
 
             for graphic in graphics:
-                if is_current(graphic):
-                    complexity = cached_complexities[graphic.sid]
-                    legibility = cached_legibilities[graphic.sid]
-                    failed_threshold = (
-                        complexity["too_complex"] or legibility["below_threshold"]
-                    )
+                complexity, legibility = screened[graphic.sid]
+                failed_threshold = complexity["too_complex"] or legibility["below_threshold"]
+                if is_current(graphic) or failed_threshold:
                     yield json.dumps({
                         "type": "result",
                         "source": graphic_source_payload(graphic, graphic.evaluation),
@@ -465,33 +446,16 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                         "legibility": legibility,
                     }, ensure_ascii=False) + "\n"
 
-            for index, graphic in enumerate(graphics, start=1):
-                if graphic not in pending:
-                    continue
+            for index, graphic in enumerate(pending, start=1):
+                data, mimetype = pending_sources[graphic.sid]
+                complexity, legibility = screened[graphic.sid]
                 yield json.dumps({
                     "type": "progress",
                     "current": index,
-                    "total": len(graphics),
+                    "total": len(pending),
                     "current_word": num2words.num2words(index),
-                    "total_word": num2words.num2words(len(graphics)),
+                    "total_word": num2words.num2words(len(pending)),
                 }) + "\n"
-                source = await content.store().graphic_source(uid, pid, graphic.sid)
-                if source is None:
-                    raise ValueError(f"Graphic source {graphic.sid} is no longer available.")
-                data, mimetype = source
-                complexity = await run_in_threadpool(poster_graphics.image_complexity, data)
-                legibility = await run_in_threadpool(
-                    poster_graphics.image_legibility, data, mimetype,
-                )
-                if complexity["too_complex"] or legibility["below_threshold"]:
-                    yield json.dumps({
-                        "type": "result",
-                        "source": graphic_source_payload(graphic, None),
-                        "evaluation": None,
-                        "complexity": complexity,
-                        "legibility": legibility,
-                    }, ensure_ascii=False) + "\n"
-                    continue
                 if client is None:
                     client = openai.OpenAI()
                 image_url = f"data:{mimetype};base64,{base64.b64encode(data).decode('ascii')}"

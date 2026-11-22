@@ -160,9 +160,11 @@ Pending editor changes are saved before rollback or application.
 
 The graphics evaluation page skips to `/layout/edit` when every graphic has
 current assessments for its Materials and Methods and Results sections and none
-exceeds the image complexity threshold.
-Otherwise, it evaluates pending graphics and offers the section review page
-when finished. `/content/evaluate` is its own resumption page: returning after
+fails the complexity or legibility thresholds. Otherwise, it screens graphics
+before reporting the evaluation count and estimated time. Only pending graphics
+that pass both thresholds are sent for evaluation; rejected graphics are shown
+as unsuitable without an assessment. It offers the section review page when
+finished. `/content/evaluate` is its own resumption page: returning after
 an interruption reuses current assessments and finishes the remaining graphics.
 Each image evaluation is recorded in `assessment` for its Materials and Methods
 and Results sections, including criteria, supported elements, limitations, and

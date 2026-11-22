@@ -78,7 +78,8 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             }
 
         await self.load_page([
-            {"type": "start", "total": 2, "uploaded": 1, "extracted": 1},
+            {"type": "start", "total": 2, "uploaded": 1, "extracted": 1,
+             "estimate_word": "zero point seven"},
             {"type": "progress", "current": 1, "total": 2, "current_word": "one", "total_word": "two"},
             result(12, "extracted", "extracted.png", "weakly", "weakly"),
             {"type": "progress", "current": 2, "total": 2, "current_word": "two", "total_word": "two"},
@@ -124,10 +125,12 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             "Classification: chart", "Classification: chart",
         ])
         self.assertEqual(await self.page.locator("#evaluation-status").text_content(),
-                         "Evaluation complete: one suitable and one not suitable.")
+                         "Graphic review complete: one suitable and one not suitable.")
         self.assertFalse(await self.page.locator("#continue-review").is_hidden())
         self.assertEqual(await self.page.evaluate("commands"), [])
         self.assertIn("graphic one of two.", await self.page.evaluate("messages.join(' ')"))
+        self.assertIn("reviewing two graphics", await self.page.evaluate("messages.join(' ')"))
+        self.assertIn("predicting zero point seven minutes", await self.page.evaluate("messages.join(' ')"))
         for width in (1280, 375):
             with self.subTest(width=width):
                 await self.page.set_viewport_size({"width": width, "height": 800})
@@ -149,7 +152,8 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             "limitations": [], "suggested_improvements": [],
         }
         await self.load_page([
-            {"type": "start", "total": 1, "uploaded": 1, "extracted": 0},
+            {"type": "start", "total": 1, "uploaded": 1, "extracted": 0,
+             "estimate_word": "zero point three"},
             {
                 "type": "result",
                 "source": {"sid": 1, "category": "uploaded", "filename": "detailed.png"},
@@ -171,7 +175,7 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             await self.page.locator(".graphic-evaluation").inner_text(),
         )
         self.assertEqual(await self.page.locator("#evaluation-status").text_content(),
-                         "Evaluation complete: zero suitable and one not suitable.")
+                         "Graphic review complete: zero suitable and one not suitable.")
 
     async def test_legibility_below_threshold_overrides_relevance_and_explains_verdict(self) -> None:
         section = {
@@ -179,7 +183,8 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             "limitations": [], "suggested_improvements": [],
         }
         await self.load_page([
-            {"type": "start", "total": 1, "uploaded": 1, "extracted": 0},
+            {"type": "start", "total": 1, "uploaded": 1, "extracted": 0,
+             "estimate_word": "zero point three"},
             {
                 "type": "result",
                 "source": {"sid": 1, "category": "uploaded", "filename": "illegible.png"},
@@ -202,10 +207,12 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             await self.page.locator(".graphic-evaluation").inner_text(),
         )
         self.assertEqual(await self.page.locator("#evaluation-status").text_content(),
-                         "Evaluation complete: zero suitable and one not suitable.")
+                         "Graphic review complete: zero suitable and one not suitable.")
 
     async def test_threshold_failure_is_reported_without_evaluation_details(self) -> None:
         await self.load_page([
+            {"type": "start", "total": 0, "uploaded": 0, "extracted": 0,
+             "estimate_word": "zero"},
             {
                 "type": "result",
                 "source": {"sid": 1, "category": "uploaded", "filename": "too-complex.png"},
@@ -223,6 +230,7 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Not evaluated because this image did not meet", await card.inner_text())
         self.assertEqual(await card.locator("section").count(), 0)
         self.assertEqual(await card.locator("img").get_attribute("alt"), "too-complex.png")
+        self.assertNotIn("predicting", await self.page.evaluate("messages.join(' ')"))
 
     async def test_math_expressions_are_rendered_as_latex(self) -> None:
         await self.page.set_content("""
@@ -310,7 +318,7 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_already_evaluated_graphics_redirect_to_layout(self) -> None:
         await self.load_page([
-            {"type": "start", "total": 2, "uploaded": 1, "extracted": 1},
+            {"type": "start", "total": 0, "uploaded": 0, "extracted": 0},
             {"type": "already-evaluated"},
         ])
         self.assertEqual(await self.page.evaluate("commands"), [
@@ -329,7 +337,7 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         ])
 
     async def test_interrupted_stream_automatically_resumes(self) -> None:
-        await self.load_page([{"type": "start", "total": 1, "uploaded": 1, "extracted": 0}])
+        await self.load_page([{"type": "start", "total": 0, "uploaded": 0, "extracted": 0}])
         await self.page.evaluate("""() => {
             window.fetch = async () => new Response(
                 JSON.stringify({type: 'already-evaluated'}) + '\\n',
@@ -343,7 +351,8 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.page.locator("#retry-evaluation").is_hidden())
 
     async def test_repeated_interruptions_offer_friendly_manual_retry(self) -> None:
-        await self.load_page([{"type": "start", "total": 1, "uploaded": 1, "extracted": 0}])
+        await self.load_page([{"type": "start", "total": 1, "uploaded": 1, "extracted": 0,
+                               "estimate_word": "zero point three"}])
         await self.page.locator("#retry-evaluation").wait_for(state="visible")
         self.assertEqual(await self.page.evaluate("requestCount"), 3)
         message = await self.page.locator("#evaluation-status").text_content()

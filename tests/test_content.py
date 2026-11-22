@@ -327,32 +327,19 @@ class ContentRouteTests(unittest.TestCase):
         with Image.open(io.BytesIO(response.content)) as preview:
             self.assertEqual(preview.size, (160, 80))
 
-    def test_graphic_evaluation_page_shows_counts_and_uses_selected_poster(self) -> None:
+    def test_graphic_evaluation_page_prepares_without_unfiltered_counts(self) -> None:
         self.sources.evaluation_sources.return_value = [
             content.GraphicEvaluationSource(1, "upload.png", "image/png", None, None, None),
             content.GraphicEvaluationSource(2, "extract.png", "image/png", 1, None, None),
         ]
         response = self.client.get("/content/evaluate")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("one graphic you uploaded", response.text)
-        self.assertIn("one graphic I was able to extract", response.text)
-        self.assertIn("predicting zero point seven minutes.", response.text)
+        self.assertNotIn("predicting", response.text)
         self.assertIn('/static/graphics/wikkitmeasuring.png', response.text)
         self.assertIn('alt="Wikkit measuring a graphic"', response.text)
         self.assertIn("/static/javascript/pages/content-evaluate.js", response.text)
         self.assertIn('"pid": 11', response.text)
-        self.sources.evaluation_sources.assert_awaited_once_with(7, 11)
-
-    def test_graphic_evaluation_estimate_rounds_before_converting_to_words(self) -> None:
-        for count, estimate in ((1, "zero point three"), (3, "one"), (4, "one point three")):
-            with self.subTest(count=count):
-                self.sources.evaluation_sources.return_value = [
-                    content.GraphicEvaluationSource(index, "upload.png", "image/png", None, None, None)
-                    for index in range(count)
-                ]
-                response = self.client.get("/content/evaluate")
-                self.assertEqual(response.status_code, 200)
-                self.assertIn(f"predicting {estimate} minutes.", response.text)
+        self.sources.evaluation_sources.assert_not_awaited()
 
     def test_graphic_evaluation_streams_persists_and_groups_source_results(self) -> None:
         self.sources.evaluation_sources.return_value = [
@@ -401,6 +388,7 @@ class ContentRouteTests(unittest.TestCase):
         )
         self.assertEqual(events[0], {
             "type": "start", "total": 2, "uploaded": 1, "extracted": 1,
+            "estimate_word": "zero point seven",
         })
         self.assertEqual(
             [events[index]["source"]["category"] for index in (2, 4)],
@@ -441,6 +429,78 @@ class ContentRouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/content/evaluate/11", content="").status_code, 415)
         self.uid = None
         self.assertEqual(self.client.post("/content/evaluate/11", json={}).status_code, 401)
+
+    def test_prefilter_counts_only_pending_images_that_pass_both_thresholds(self) -> None:
+        saved = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {},
+        }
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "saved.png", "image/png", None, saved, None),
+            content.GraphicEvaluationSource(2, "complex.png", "image/png", None, None, None),
+            content.GraphicEvaluationSource(3, "illegible.png", "image/png", 1, None, None),
+            content.GraphicEvaluationSource(4, "valid.png", "image/png", 1, None, None),
+            content.GraphicEvaluationSource(5, "upload.png", "image/png", None, None, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.side_effect = lambda uid, pid, sid: (bytes([sid]), "image/png")
+        self.sources.save_graphic_evaluation.return_value = True
+
+        def complexity(data):
+            return {"score": 0.6 if data == b"\x02" else 0.1, "threshold": 0.5,
+                    "too_complex": data == b"\x02"}
+
+        def legibility(data, mimetype):
+            return {"score": 0.8 if data == b"\x03" else 1.0, "threshold": 0.95,
+                    "below_threshold": data == b"\x03"}
+
+        with patch.object(routes.poster_graphics, "image_complexity", side_effect=complexity), \
+                patch.object(routes.poster_graphics, "image_legibility", side_effect=legibility), \
+                patch.object(routes.openai, "OpenAI"), \
+                patch.object(routes.graphic_evaluation, "evaluate_image",
+                             return_value=Mock(model_dump=Mock(return_value=saved))) as evaluate:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[0], {
+            "type": "start", "total": 2, "uploaded": 1, "extracted": 1,
+            "estimate_word": "zero point seven",
+        })
+        progress = [event for event in events if event["type"] == "progress"]
+        self.assertEqual([(event["current"], event["total"]) for event in progress], [(1, 2), (2, 2)])
+        self.assertEqual(evaluate.call_count, 2)
+        self.assertEqual([call.args[2] for call in self.sources.save_graphic_evaluation.await_args_list],
+                         [4, 5])
+        rejected = [event for event in events if event["type"] == "result"
+                    and event["source"]["sid"] in (2, 3)]
+        self.assertEqual(len(rejected), 2)
+        self.assertTrue(all(event["evaluation"] is None for event in rejected))
+
+    def test_prefilter_estimate_uses_rounded_pending_count(self) -> None:
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+        self.sources.save_graphic_evaluation.return_value = True
+        evaluation = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {},
+        }
+        with patch.object(routes.poster_graphics, "image_legibility", return_value={
+            "score": 1.0, "threshold": 0.95, "below_threshold": False,
+        }), patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.graphic_evaluation, "evaluate_image",
+            return_value=Mock(model_dump=Mock(return_value=evaluation)),
+        ):
+            for count, estimate in ((1, "zero point three"), (3, "one"), (4, "one point three")):
+                with self.subTest(count=count):
+                    self.sources.evaluation_sources.return_value = [
+                        content.GraphicEvaluationSource(index, "upload.png", "image/png", None, None, None)
+                        for index in range(count)
+                    ]
+                    response = self.client.post("/content/evaluate/11", json={})
+                    start = json.loads(response.text.splitlines()[0])
+                    self.assertEqual(start["total"], count)
+                    self.assertEqual(start["estimate_word"], estimate)
 
     def test_graphic_evaluation_skips_to_layout_for_current_saved_results(self) -> None:
         evaluation_result = {
@@ -550,9 +610,10 @@ class ContentRouteTests(unittest.TestCase):
             response = self.client.post("/content/evaluate/11", json={})
         events = [json.loads(line) for line in response.text.splitlines()]
         self.assertEqual([event["type"] for event in events],
-                         ["start", "progress", "result", "complete"])
-        self.assertTrue(events[2]["complexity"]["too_complex"])
-        self.assertIsNone(events[2]["evaluation"])
+                         ["start", "result", "complete"])
+        self.assertEqual(events[0]["total"], 0)
+        self.assertTrue(events[1]["complexity"]["too_complex"])
+        self.assertIsNone(events[1]["evaluation"])
         client.assert_not_called()
         evaluate.assert_not_called()
         self.sources.save_graphic_evaluation.assert_not_awaited()
@@ -573,9 +634,10 @@ class ContentRouteTests(unittest.TestCase):
         ) as evaluate:
             response = self.client.post("/content/evaluate/11", json={})
         events = [json.loads(line) for line in response.text.splitlines()]
-        self.assertEqual(events[2]["type"], "result")
-        self.assertIsNone(events[2]["evaluation"])
-        self.assertTrue(events[2]["legibility"]["below_threshold"])
+        self.assertEqual(events[0]["total"], 0)
+        self.assertEqual(events[1]["type"], "result")
+        self.assertIsNone(events[1]["evaluation"])
+        self.assertTrue(events[1]["legibility"]["below_threshold"])
         client.assert_not_called()
         evaluate.assert_not_called()
         self.sources.save_graphic_evaluation.assert_not_awaited()
