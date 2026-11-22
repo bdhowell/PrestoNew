@@ -1,3 +1,4 @@
+import base64
 import io
 import os
 from html.parser import HTMLParser
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 import psycopg
 from psycopg import sql
 from PIL import Image
+from playwright.sync_api import sync_playwright
 
 import content
 import identity
@@ -204,6 +206,37 @@ class DumpRouteTests(unittest.TestCase):
         response = self.client.get("/system/dump/11/image")
         self.assertEqual(response.content, svg)
         self.assertIn("sandbox", response.headers["content-security-policy"])
+
+    def test_image_preview_displays_at_native_size_with_horizontal_scroll(self) -> None:
+        self.session["user_id"] = 7
+        self.dump_source.return_value = (True, {
+            "sid": 11, "kind": "image", "mimetype": "image/png", "storage_uri": "/image",
+        })
+        markup = self.client.get("/system/dump?sid=11").text
+        css = (Path(__file__).resolve().parent.parent / "static/css/pages/system-dump.css").read_text()
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            try:
+                page = browser.new_page(viewport={"width": 500, "height": 700})
+                for width, height in ((1200, 400), (100, 40)):
+                    image = io.BytesIO()
+                    Image.new("RGB", (width, height)).save(image, "PNG")
+                    data = base64.b64encode(image.getvalue()).decode()
+                    page.set_content(markup.replace(
+                        "/system/dump/11/image", f"data:image/png;base64,{data}",
+                    ))
+                    page.add_style_tag(content=css)
+                    result = page.locator(".image-preview").evaluate("""image => ({
+                        width: image.getBoundingClientRect().width,
+                        height: image.getBoundingClientRect().height,
+                        container: image.parentElement.clientWidth,
+                        scrollWidth: image.parentElement.scrollWidth
+                    })""")
+                    self.assertEqual((result["width"], result["height"]), (width, height))
+                    if width > result["container"]:
+                        self.assertGreater(result["scrollWidth"], result["container"])
+            finally:
+                browser.close()
 
     def test_thumbnail_raster_and_svg_responses(self) -> None:
         self.session["user_id"] = 7

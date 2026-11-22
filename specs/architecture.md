@@ -1137,8 +1137,9 @@ HTML page, including its text and storage URI, but not the contents of any
 externally stored file. Text retains its line breaks and tabs; literal backslash
 sequences are not decoded. Table sources with table markup in their text also
 show a sanitized table preview while preserving the original text below.
-Image media types show a larger responsive preview via `GET /system/dump/{sid}/image`,
-which independently checks the current superuser flag, regardless of the
+Image media types show an actual-size preview via `GET /system/dump/{sid}/image`,
+with horizontal scrolling when the image is wider than the page. That endpoint
+independently checks the current superuser flag, regardless of the
 source's classification or poster ownership. The original image is served except
 that TIFF is converted to PNG for browser compatibility. Missing image files are
 reported in the page or by the image endpoint. The original thumbnail endpoint

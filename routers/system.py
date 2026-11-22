@@ -139,7 +139,10 @@ class SystemStore(posters.PosterStore):
                 "WHERE s.pid = %s AND s.kind <> 'thumbnail' "
                 "ORDER BY s.added, s.sid", (pid,),
             )
-            return [content.Source(*row) for row in await cursor.fetchall()]
+            return [
+                content.Source(*row[:11], legibility=row[11] if len(row) > 11 else None)
+                for row in await cursor.fetchall()
+            ]
 
     async def catalog_graphic(self, pid: int, sid: int) -> tuple[bytes, str] | None:
         connection = await self._connect()

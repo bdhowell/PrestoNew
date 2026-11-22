@@ -19,10 +19,8 @@ pre {
     overflow-wrap: anywhere;
 }
 
-.image-preview {
-    display: block;
-    max-width: min(100%, 900px);
-    height: auto;
+.image-preview-scroll {
+    overflow-x: auto;
 }
 
 .table-preview {

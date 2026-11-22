@@ -11,6 +11,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal, cast
 
 import openai
 import cv2
@@ -23,6 +24,7 @@ from docling.service_client.exceptions import DoclingServiceClientError
 
 import docxtractor
 import posters
+from diagram_legibility import DiagramAnalyzer, Thresholds, ViewingParameters
 
 
 class ProcessingError(RuntimeError):
@@ -93,6 +95,112 @@ def image_complexity_score(data: bytes) -> float:
         return float(np.count_nonzero(edges) / area / max((area / 10000.0) ** power, 1.0))
     except (cv2.error, OverflowError) as error:
         raise ValueError("The image could not be evaluated for complexity.") from error
+
+
+def image_legibility_score(
+    data: bytes, mimetype: str, *, raster_data: bytes | None = None,
+) -> float:
+    """Score image feature visibility using configured size and viewing conditions.
+
+    SVG assets are evaluated from the raster crop paired with the original
+    vector asset by document extraction, while their intrinsic vector width
+    determines the physical display size. DIAGRAM_LEGIBILITY_* environment
+    settings control the display DPI, viewing distance and visibility model.
+    """
+    is_svg = mimetype == "image/svg+xml"
+    if is_svg:
+        if raster_data is None:
+            raise ValueError("A raster rendering is required to score an SVG asset.")
+        display_width_px, _ = svg_dimensions(data)
+        image_data = raster_data
+    else:
+        display_width_px, _ = image_dimensions(data)
+        image_data = data
+    image = cv2.imdecode(np.frombuffer(image_data, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise ValueError("The image could not be decoded for legibility evaluation.")
+    params, target_angle, display_dpi = _diagram_legibility_parameters()
+    display_width_mm = display_width_px * 25.4 / display_dpi
+    categories = ("text", "line", "symbol", "detail")
+    thresholds = Thresholds(
+        stroke={category: target_angle for category in categories},
+        extent={category: target_angle for category in categories},
+    )
+    try:
+        evaluation = DiagramAnalyzer(image).evaluate(
+            display_width_mm,
+            ViewingParameters(
+                distance_mm=params.distance_mm,
+                legibility_level=params.legibility_level,
+                visual_acuity=params.visual_acuity,
+                required_feature_fraction=params.required_feature_fraction,
+                critical_features_required=params.critical_features_required,
+                contrast_reference=params.contrast_reference,
+                contrast_floor=params.contrast_floor,
+                max_contrast_penalty=params.max_contrast_penalty,
+                thresholds=thresholds,
+            ),
+        )
+    except (cv2.error, OverflowError) as error:
+        raise ValueError("The image could not be evaluated for legibility.") from error
+    return evaluation.score
+
+
+def _diagram_legibility_parameters() -> tuple[ViewingParameters, float, float]:
+    def number(name: str, default: float) -> float:
+        try:
+            value = float(os.environ.get(name, str(default)))
+        except ValueError as error:
+            raise ProcessingError(f"{name} must be a number.") from error
+        if not math.isfinite(value) or value <= 0:
+            raise ProcessingError(f"{name} must be finite and positive.")
+        return value
+
+    distance = number("DIAGRAM_LEGIBILITY_VIEWING_DISTANCE", 36.0)
+    unit = os.environ.get("DIAGRAM_LEGIBILITY_VIEWING_DISTANCE_UNIT", "inches").lower()
+    if unit == "inches":
+        distance_mm = distance * 25.4
+    elif unit == "centimeters":
+        distance_mm = distance * 10
+    else:
+        raise ProcessingError(
+            "DIAGRAM_LEGIBILITY_VIEWING_DISTANCE_UNIT must be inches or centimeters."
+        )
+
+    level_value = os.environ.get("DIAGRAM_LEGIBILITY_LEVEL", "comfortable").lower()
+    levels = ("minimum", "standard", "comfortable", "high")
+    if level_value not in levels:
+        raise ProcessingError(f"DIAGRAM_LEGIBILITY_LEVEL must be one of {', '.join(levels)}.")
+    level = cast(Literal["minimum", "standard", "comfortable", "high"], level_value)
+
+    fraction = number("DIAGRAM_LEGIBILITY_REQUIRED_FEATURE_FRACTION", 0.95)
+    if fraction > 1:
+        raise ProcessingError(
+            "DIAGRAM_LEGIBILITY_REQUIRED_FEATURE_FRACTION must be at most 1."
+        )
+    critical_value = os.environ.get(
+        "DIAGRAM_LEGIBILITY_CRITICAL_FEATURES_REQUIRED", "true",
+    ).lower()
+    if critical_value not in ("true", "false"):
+        raise ProcessingError(
+            "DIAGRAM_LEGIBILITY_CRITICAL_FEATURES_REQUIRED must be true or false."
+        )
+
+    params = ViewingParameters(
+        distance_mm=distance_mm,
+        legibility_level=level,
+        visual_acuity=number("DIAGRAM_LEGIBILITY_VISUAL_ACUITY", 1.0),
+        required_feature_fraction=fraction,
+        critical_features_required=critical_value == "true",
+        contrast_reference=number("DIAGRAM_LEGIBILITY_CONTRAST_REFERENCE", 0.45),
+        contrast_floor=number("DIAGRAM_LEGIBILITY_CONTRAST_FLOOR", 0.04),
+        max_contrast_penalty=number("DIAGRAM_LEGIBILITY_MAX_CONTRAST_PENALTY", 4.0),
+    )
+    return (
+        params,
+        number("DIAGRAM_LEGIBILITY_TARGET_FEATURE_ANGLE_ARCMIN", 5.0),
+        number("DIAGRAM_LEGIBILITY_DISPLAY_DPI", 96.0),
+    )
 
 
 def svg_dimensions(data: bytes) -> tuple[int, int]:

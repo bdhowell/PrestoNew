@@ -823,11 +823,15 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         store = content.SourceStore()
         connection = AsyncMock()
         connection.execute.return_value.fetchall.return_value = [
-            (1, "file.md", "text/markdown", 4, "now"),
+            (1, "file.md", "text/markdown", 4, "now", None, None, None, None,
+             "text", True, 0.75),
         ]
         with patch.object(store, "_connect", AsyncMock(return_value=connection)):
             items = await store.list_sources(7, 11)
-        self.assertEqual(items, [content.Source(1, "file.md", "text/markdown", 4, "now")])
+        self.assertEqual(items, [
+            content.Source(1, "file.md", "text/markdown", 4, "now",
+                           kind="text", legibility=0.75),
+        ])
         statement, params = connection.execute.call_args.args
         self.assertIn("p.uid = %s AND p.pid = %s", statement)
         self.assertIn("ORDER BY s.added, s.sid", statement)
@@ -1035,12 +1039,15 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
                 patch.object(content, "SourceFiles", return_value=files), \
                 patch.object(content.processing, "image_dimensions", return_value=(640, 480)), \
-                patch.object(content.processing, "image_complexity_score", return_value=0.25):
+                patch.object(content.processing, "image_complexity_score", return_value=0.25), \
+                patch.object(content.processing, "image_legibility_score", return_value=0.8):
             self.assertTrue(await store.save_thumbnail(
                 7, 11, b"\x89PNG\r\n\x1a\nimage", (updated, None),
             ))
         statement, params = connection.execute.await_args_list[-1].args
         self.assertNotIn("evaluation", statement)
+        self.assertIn("legibility = %s", statement)
+        self.assertEqual(params[-2], 0.8)
         self.assertEqual(params[-1], 22)
         files.delete.assert_called_once_with("/sources/old-thumbnail")
 
@@ -1271,13 +1278,14 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                 files.put.return_value = "/sources/logo"
                 asset = source_processing.Asset("logo.png", b"image", "image/png", "image",
                                                 description="A logo", width=300, height=300)
-                with patch.object(content.processing, "image_complexity_score", return_value=0.25):
+                with patch.object(content.processing, "image_complexity_score", return_value=0.25), \
+                        patch.object(content.processing, "image_legibility_score", return_value=0.8):
                     result = await store._insert_source(connection, files, [], 11, asset, None)
                 self.assertEqual(result.kind, expected_kind)
                 self.assertEqual(connection.execute.await_args_list[-1].args[1][1], expected_kind)
                 statement, params = connection.execute.await_args_list[-1].args
-                self.assertIn("extracted, complexity)", statement)
-                self.assertEqual(params[-1], 0.25)
+                self.assertIn("complexity, legibility)", statement)
+                self.assertEqual(params[-2:], (0.25, 0.8))
                 if expected_kind == "logo":
                     self.assertIn("UPDATE source SET kind = 'image'", connection.execute.await_args_list[2].args[0])
 
@@ -1330,7 +1338,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                     content.processing.summarize.assert_not_awaited()
                     statement, params = connection.execute.await_args_list[-1].args
                     self.assertIn("extracted = TRUE", statement)
-                    self.assertEqual(params, ("text", None, None, None, "text", None, 1))
+                    self.assertEqual(params, ("text", None, None, None, "text", None, None, 1))
 
     async def test_failed_conversion_keeps_original_for_retry(self) -> None:
         store = content.SourceStore()

@@ -13,7 +13,9 @@
         <section aria-labelledby="image-preview-heading">
             <h2 id="image-preview-heading">Image preview</h2>
             {% if has_image_file %}
-            <img class="image-preview" src="/system/dump/{{ sid }}/image" alt="Image of source {{ sid }}">
+            <div class="image-preview-scroll" role="region" aria-label="Image preview" tabindex="0">
+                <img class="image-preview" src="/system/dump/{{ sid }}/image" alt="Image of source {{ sid }}">
+            </div>
             {% else %}
             <p>No stored image file is available.</p>
             {% endif %}

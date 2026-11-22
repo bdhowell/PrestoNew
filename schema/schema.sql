@@ -148,6 +148,7 @@ CREATE TABLE source (
     height      INTEGER,
     width       INTEGER,
     complexity  REAL,
+    legibility  REAL, -- fraction of detected features visible at default viewing conditions
     fileid      UUID,
     storage_uri TEXT, -- absolute local path or gs://bucket/key for an original upload
     hash        TEXT, -- prevents repeatedly extracted the same item
