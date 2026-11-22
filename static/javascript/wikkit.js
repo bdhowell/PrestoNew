@@ -241,6 +241,7 @@
         let closed = false;
         let reminderTimer = null;
         let requestingResponse = false;
+        let reminderShown = false;
         let pageResponse = null;
         let memoryRequestId = 0;
         let responseVersion = 0;
@@ -363,10 +364,10 @@
 
         function resetReminder() {
             clearTimeout(reminderTimer);
-            if (requestingResponse) {
+            if (requestingResponse && !reminderShown) {
                 reminderTimer = setTimeout(() => {
+                    reminderShown = true;
                     sayText("Are you still there? Let me know if you need help.", "notice");
-                    resetReminder();
                 }, reminderInterval);
             }
         }
@@ -375,6 +376,7 @@
             showChat();
             openInput();
             requestingResponse = true;
+            reminderShown = false;
             resetReminder();
         }
 
