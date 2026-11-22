@@ -354,9 +354,9 @@ This gives you a parameterized model that is both computationally efficient and 
 
 # Python module for diagram legibility
 
-There is a Python module, `diagram_legibility.py`, that estimates the **minimum acceptable physical dimensions of a scientific diagram** at a configurable viewing distance.
+There is a Python module, `legibility.py`, that estimates the **minimum acceptable physical dimensions of a scientific diagram** at a configurable viewing distance.
 
-**diagram_legibility.py**
+**legibility.py**
 
 Python module · 21 KB
 
@@ -381,7 +381,7 @@ The module provides:
 ## **Example**
 
 ```
-from diagram_legibility import (    DiagramAnalyzer,    ViewingParameters)analyzer = DiagramAnalyzer.from_file("diagram.png")params = ViewingParameters(    distance_mm=914.4,    legibility_level="comfortable",    visual_acuity=1.0,    required_feature_fraction=0.95,    critical_features_required=True)result = analyzer.minimum_size(    params,    max_width_mm=400,    max_height_mm=300)print(result.to_dict())
+from legibility import (    DiagramAnalyzer,    ViewingParameters)analyzer = DiagramAnalyzer.from_file("diagram.png")params = ViewingParameters(    distance_mm=914.4,    legibility_level="comfortable",    visual_acuity=1.0,    required_feature_fraction=0.95,    critical_features_required=True)result = analyzer.minimum_size(    params,    max_width_mm=400,    max_height_mm=300)print(result.to_dict())
 ```
 
 The same analyzer can evaluate a diagram at any proposed width:

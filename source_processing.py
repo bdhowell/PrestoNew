@@ -24,7 +24,7 @@ from docling.service_client.exceptions import DoclingServiceClientError
 
 import docxtractor
 import posters
-from diagram_legibility import DiagramAnalyzer, Thresholds, ViewingParameters
+from legibility import DiagramAnalyzer, Thresholds, ViewingParameters
 
 
 class ProcessingError(RuntimeError):

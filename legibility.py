@@ -11,7 +11,7 @@ All physical dimensions/distances are millimeters. Angles are arcminutes.
 
 Typical use::
 
-    from diagram_legibility import DiagramAnalyzer, ViewingParameters, FeatureSpec
+    from legibility import DiagramAnalyzer, ViewingParameters, FeatureSpec
     analyzer = DiagramAnalyzer.from_file('figure.png')
     analyzer.add_feature(FeatureSpec('axis-labels', (40, 450, 100, 18),
                                      category='text', critical=True))

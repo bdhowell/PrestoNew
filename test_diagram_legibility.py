@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 import pytest
 
-from diagram_legibility import (DiagramAnalyzer, FeatureSpec, ViewingParameters,
+from legibility import (DiagramAnalyzer, FeatureSpec, ViewingParameters,
                                 minimum_diagram_size)
 from source_processing import (ProcessingError, _diagram_legibility_parameters,
                                image_legibility_score)
