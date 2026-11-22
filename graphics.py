@@ -230,7 +230,15 @@ def suitable_graphics(section: str, graphics: list[GraphicSource]) -> list[Graph
 
     candidates = [
         graphic for graphic in graphics
-        if graphic.type in GRAPHIC_TYPES and graphic.kind != "qrcode"
+        if (
+            graphic.type in GRAPHIC_TYPES
+            and graphic.kind != "qrcode"
+            and any(
+                graphic.assessments.get(assessed_section, {}).get("rating")
+                in RATINGS[RATINGS.index("significantly"):]
+                for assessed_section in ASSESSED_SECTIONS
+            )
+        )
     ]
 
     def order(graphic: GraphicSource) -> tuple[int, int]:

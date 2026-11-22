@@ -193,11 +193,13 @@ after five seconds without further scrolling. The return uses a 600ms animation
 with jQuery-style swing easing; interacting with the graphic interrupts it.
 
 In the layout editor, select a section and use Image to choose from that
-poster's sources. Methods and Results offer supported graphics ordered by type
-and section assessment; Abstract, Introduction, Conclusion, and Future Plans
-offer math expressions. Literature Cited and Acknowledgements do not accept
-graphics. Additional Information accepts a single locally generated QR code;
-replacing it updates the stored source and section together.
+poster's sources. Methods and Results offer supported graphics rated at least
+`significantly` in either assessed section, ordered by type and section
+assessment; over-complex raster images are omitted. Abstract, Introduction,
+Conclusion, and Future Plans offer math expressions. Literature Cited and
+Acknowledgements do not accept graphics. Additional Information accepts a
+single locally generated QR code; replacing it updates the stored source and
+section together.
 
 Click an inserted graphic to show its resize handles and Move control. Drag
 near a section edge to select a snap placement, or into the text for free

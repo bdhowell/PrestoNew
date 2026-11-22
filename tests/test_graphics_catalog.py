@@ -78,13 +78,16 @@ class GraphicsSelectionTests(unittest.TestCase):
         items = [
             content.GraphicSource(1, "low.png", assessments={"results": {"rating": "weakly"}}),
             content.GraphicSource(2, "high.png", assessments={"results": {"rating": "highly"}}),
-            content.GraphicSource(3, "other.svg", type="svg"),
+            content.GraphicSource(
+                3, "other.svg", type="svg",
+                assessments={"materials and methods": {"rating": "significantly"}},
+            ),
             content.GraphicSource(4, "unrated.png"),
             content.GraphicSource(5, "qr.png", kind="qrcode"),
             content.GraphicSource(6, "unknown", type="unsupported"),
         ]
-        self.assertEqual([item.sid for item in graphics.suitable_graphics("results", items)], [3, 2, 1, 4])
-        self.assertEqual([item.sid for item in graphics.suitable_graphics("materials and methods", items)], [3, 1, 2, 4])
+        self.assertEqual([item.sid for item in graphics.suitable_graphics("results", items)], [3, 2])
+        self.assertEqual([item.sid for item in graphics.suitable_graphics("materials and methods", items)], [3, 2])
 
     def test_restricted_sections_are_rejected(self) -> None:
         for section in ("additional information", "literature cited", "acknowledgements", "title"):
@@ -214,12 +217,30 @@ class GraphicsCatalogRouteTests(unittest.TestCase):
 
     def test_catalog_uses_stored_complexity_without_loading_image(self) -> None:
         self.sources.graphic_sources.return_value = [
-            content.GraphicSource(22, "chart.png", complexity=0.1),
+            content.GraphicSource(
+                22, "chart.png", complexity=0.1,
+                assessments={"results": {"rating": "significantly"}},
+            ),
         ]
         response = self.client.get("/layout/graphics", params={"pid": 11, "section": "results"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual([item["sid"] for item in response.json()["graphics"]], [22])
         self.sources.graphic_source.assert_not_awaited()
+
+    def test_catalog_omits_graphics_without_a_suitable_assessment(self) -> None:
+        self.sources.graphic_sources.return_value = [
+            content.GraphicSource(21, "unrated.png"),
+            content.GraphicSource(22, "weak.png", assessments={
+                "materials and methods": {"rating": "weakly"},
+                "results": {"rating": "somewhat"},
+            }),
+            content.GraphicSource(23, "suitable.png", assessments={
+                "materials and methods": {"rating": "highly"},
+            }),
+        ]
+        response = self.client.get("/layout/graphics", params={"pid": 11, "section": "results"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["sid"] for item in response.json()["graphics"]], [23])
 
     def test_saving_graphics_checks_owner_source_and_section(self) -> None:
         self.store.save_section.return_value = True
