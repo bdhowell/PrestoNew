@@ -34,6 +34,16 @@
     object-fit: contain;
 }
 
+.evaluation-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+}
+
+.evaluation-metrics p {
+    margin: 0;
+}
+
 .graphic-table {
     max-width: 100%;
     overflow-x: auto;

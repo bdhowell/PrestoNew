@@ -39,11 +39,28 @@ def complexity_threshold() -> float:
     return threshold
 
 
+def legibility_threshold() -> float:
+    try:
+        threshold = float(os.environ.get("DIAGRAM_LEGIBILITY_THRESHOLD", "0.95"))
+    except ValueError as error:
+        raise ValueError("Diagram legibility settings must be numbers.") from error
+    if not math.isfinite(threshold) or not 0 <= threshold <= 1:
+        raise ValueError("DIAGRAM_LEGIBILITY_THRESHOLD must be between 0 and 1.")
+    return threshold
+
+
 def image_complexity(data: bytes) -> dict[str, float | bool]:
     """Score a raster image with blurred Canny edge density and an area penalty."""
     threshold = complexity_threshold()
     score = processing.image_complexity_score(data)
     return {"score": score, "threshold": threshold, "too_complex": score > threshold}
+
+
+def image_legibility(data: bytes, mimetype: str) -> dict[str, float | bool]:
+    """Score an image's legibility and compare it with the poster threshold."""
+    threshold = legibility_threshold()
+    score = processing.image_legibility_score(data, mimetype)
+    return {"score": score, "threshold": threshold, "below_threshold": score < threshold}
 
 
 def qr_png(url: str) -> bytes:

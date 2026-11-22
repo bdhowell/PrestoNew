@@ -106,13 +106,25 @@ class ContentRouteTests(unittest.TestCase):
         self.assertNotIn("Rich Text Format", response.text)
 
     def test_reduced_conversion_notice_is_visible_on_page_and_upload_response(self) -> None:
-        with patch.dict(os.environ, {"DOCLING_ENABLE_ENRICHMENT": "false"}):
+        for value in ("yes", "true"):
+            with self.subTest(value=value), patch.dict(os.environ, {
+                "DOCLING_ENABLE_ENRICHMENT": "false", "REDUCED_FEATURE_NOTIFICATION": value,
+            }):
+                page = self.client.get("/content/upload")
+                response = self.upload(filename=f"{value}.pdf")
+                self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, page.text)
+                self.assertEqual(response.status_code, 201)
+                self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, response.json()["say"])
+        with patch.dict(os.environ, {
+            "DOCLING_ENABLE_ENRICHMENT": "false", "REDUCED_FEATURE_NOTIFICATION": "no",
+        }):
             page = self.client.get("/content/upload")
-            response = self.upload()
-        self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, page.text)
-        self.assertEqual(response.status_code, 201)
-        self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, response.json()["say"])
-        with patch.dict(os.environ, {"DOCLING_ENABLE_ENRICHMENT": "true"}):
+            response = self.upload(filename="quiet.pdf")
+        self.assertNotIn(source_processing.REDUCED_FEATURE_NOTICE, page.text)
+        self.assertNotIn(source_processing.REDUCED_FEATURE_NOTICE, response.json()["say"])
+        with patch.dict(os.environ, {
+            "DOCLING_ENABLE_ENRICHMENT": "true", "REDUCED_FEATURE_NOTIFICATION": "yes",
+        }):
             self.assertNotIn(source_processing.REDUCED_FEATURE_NOTICE, self.client.get("/content/upload").text)
 
     def test_upload_returns_metadata_and_passes_owner_checked_poster(self) -> None:
@@ -372,6 +384,9 @@ class ContentRouteTests(unittest.TestCase):
         }
         client = Mock()
         with patch.object(routes.openai, "OpenAI", return_value=client) as openai_client, \
+                patch.object(routes.poster_graphics, "image_legibility", return_value={
+                    "score": 1.0, "threshold": 0.95, "below_threshold": False,
+                }), \
                 patch.object(
                     routes.graphic_evaluation, "evaluate_image",
                     return_value=Mock(model_dump=Mock(return_value=evaluation_result)),
@@ -442,7 +457,10 @@ class ContentRouteTests(unittest.TestCase):
         )
         self.sources.graphic_source.return_value = (sample_png(), "image/png")
         self.posters.content.return_value = ([], [])
-        with patch.object(routes.openai, "OpenAI") as openai_client:
+        with patch.object(
+            routes.poster_graphics, "image_legibility",
+            return_value={"score": 1.0, "threshold": 0.95, "below_threshold": False},
+        ), patch.object(routes.openai, "OpenAI") as openai_client:
             response = self.client.post("/content/evaluate/11", json={})
         events = [json.loads(line) for line in response.text.splitlines()]
         self.assertEqual([event["type"] for event in events], ["start", "already-evaluated"])
@@ -472,6 +490,33 @@ class ContentRouteTests(unittest.TestCase):
         events = [json.loads(line) for line in response.text.splitlines()]
         self.assertEqual([event["type"] for event in events], ["start", "result", "complete"])
         self.assertTrue(events[1]["complexity"]["too_complex"])
+        self.assertIsNone(events[1]["evaluation"])
+        client.assert_not_called()
+        self.sources.save_graphic_evaluation.assert_not_awaited()
+
+    def test_cached_low_legibility_graphic_is_reported_without_reassessment(self) -> None:
+        evaluation_result = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {},
+        }
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(
+                1, "saved.png", "image/png", None, evaluation_result, None,
+            ),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+        with patch.object(routes.poster_graphics, "image_complexity", return_value={
+            "score": 0.1, "threshold": 0.5, "too_complex": False,
+        }), patch.object(routes.poster_graphics, "image_legibility", return_value={
+            "score": 0.8, "threshold": 0.95, "below_threshold": True,
+        }), patch.object(routes.openai, "OpenAI") as client:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual([event["type"] for event in events], ["start", "result", "complete"])
+        self.assertTrue(events[1]["legibility"]["below_threshold"])
+        self.assertIsNone(events[1]["evaluation"])
         client.assert_not_called()
         self.sources.save_graphic_evaluation.assert_not_awaited()
 
@@ -488,33 +533,52 @@ class ContentRouteTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "error")
         self.sources.save_graphic_evaluation.assert_not_awaited()
 
-    def test_new_complex_graphic_keeps_relevance_assessment(self) -> None:
-        import cv2
-        import numpy as np
-
-        evaluation_result = {
-            "image_analysis": {"classification": "image", "math_expressions": []},
-            "evaluations": {},
-        }
+    def test_new_complex_graphic_is_not_evaluated_or_saved(self) -> None:
         self.sources.evaluation_sources.return_value = [
             content.GraphicEvaluationSource(1, "new.png", "image/png", None, None, None),
         ]
         self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
         self.posters.content.return_value = ([], [])
-        self.sources.save_graphic_evaluation.return_value = True
-        image = np.random.default_rng(12).integers(0, 256, (100, 100), dtype=np.uint8)
-        _, encoded = cv2.imencode(".png", image)
-        self.sources.graphic_source.return_value = (encoded.tobytes(), "image/png")
-        with patch.dict(os.environ, {"IMAGE_COMPLEXITY_THRESHOLD": "0.01"}), \
-                patch.object(routes.openai, "OpenAI"), \
-                patch.object(routes.graphic_evaluation, "evaluate_image",
-                             return_value=Mock(model_dump=Mock(return_value=evaluation_result))):
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+        with patch.object(routes.poster_graphics, "image_complexity", return_value={
+            "score": 0.2, "threshold": 0.1, "too_complex": True,
+        }), patch.object(routes.poster_graphics, "image_legibility", return_value={
+            "score": 1.0, "threshold": 0.95, "below_threshold": False,
+        }), patch.object(routes.openai, "OpenAI") as client, patch.object(
+            routes.graphic_evaluation, "evaluate_image",
+        ) as evaluate:
             response = self.client.post("/content/evaluate/11", json={})
         events = [json.loads(line) for line in response.text.splitlines()]
-        self.assertEqual([event["type"] for event in events], ["start", "progress", "result", "complete"])
+        self.assertEqual([event["type"] for event in events],
+                         ["start", "progress", "result", "complete"])
         self.assertTrue(events[2]["complexity"]["too_complex"])
-        self.assertEqual(events[2]["evaluation"], evaluation_result)
-        self.assertEqual(self.sources.save_graphic_evaluation.await_args.args[3], evaluation_result)
+        self.assertIsNone(events[2]["evaluation"])
+        client.assert_not_called()
+        evaluate.assert_not_called()
+        self.sources.save_graphic_evaluation.assert_not_awaited()
+
+    def test_new_low_legibility_graphic_is_not_evaluated_or_saved(self) -> None:
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "new.png", "image/png", None, None, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+        with patch.object(routes.poster_graphics, "image_complexity", return_value={
+            "score": 0.1, "threshold": 0.5, "too_complex": False,
+        }), patch.object(routes.poster_graphics, "image_legibility", return_value={
+            "score": 0.8, "threshold": 0.95, "below_threshold": True,
+        }), patch.object(routes.openai, "OpenAI") as client, patch.object(
+            routes.graphic_evaluation, "evaluate_image",
+        ) as evaluate:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[2]["type"], "result")
+        self.assertIsNone(events[2]["evaluation"])
+        self.assertTrue(events[2]["legibility"]["below_threshold"])
+        client.assert_not_called()
+        evaluate.assert_not_called()
+        self.sources.save_graphic_evaluation.assert_not_awaited()
 
     def test_jpeg_chart_is_scored_again_after_png_normalization(self) -> None:
         import cv2
@@ -533,7 +597,12 @@ class ContentRouteTests(unittest.TestCase):
         image = np.random.default_rng(12).integers(0, 256, (100, 100), dtype=np.uint8)
         _, jpeg = cv2.imencode(".jpg", image)
         self.sources.graphic_source.side_effect = [(jpeg.tobytes(), "image/jpeg"), (sample_png(), "image/png")]
-        with patch.dict(os.environ, {"IMAGE_COMPLEXITY_THRESHOLD": "0.01"}), \
+        with patch.object(routes.poster_graphics, "image_complexity", side_effect=[
+            {"score": 0.001, "threshold": 0.01, "too_complex": False},
+            {"score": 0, "threshold": 0.01, "too_complex": False},
+        ]), patch.object(routes.poster_graphics, "image_legibility", return_value={
+            "score": 1.0, "threshold": 0.95, "below_threshold": False,
+        }), \
                 patch.object(routes.openai, "OpenAI"), \
                 patch.object(routes.graphic_evaluation, "evaluate_image",
                              return_value=Mock(model_dump=Mock(return_value=evaluation_result))):
@@ -568,6 +637,10 @@ class ContentRouteTests(unittest.TestCase):
         self.sources.graphic_source.return_value = (sample_png(), "image/png")
         self.sources.save_graphic_evaluation.return_value = True
         with patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.poster_graphics, "image_legibility", return_value={
+                "score": 1.0, "threshold": 0.95, "below_threshold": False,
+            },
+        ), patch.object(
             routes.graphic_evaluation, "evaluate_image",
             return_value=Mock(model_dump=Mock(return_value=evaluation_result)),
         ) as evaluate:
@@ -607,6 +680,10 @@ class ContentRouteTests(unittest.TestCase):
         self.sources.graphic_source.return_value = (sample_png(), "image/png")
         self.sources.save_graphic_evaluation.return_value = True
         with patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.poster_graphics, "image_legibility", return_value={
+                "score": 1.0, "threshold": 0.95, "below_threshold": False,
+            },
+        ), patch.object(
             routes.graphic_evaluation, "evaluate_image",
             return_value=Mock(model_dump=Mock(return_value=evaluation_result)),
         ) as evaluate:
@@ -654,6 +731,10 @@ class ContentRouteTests(unittest.TestCase):
         self.sources.save_graphic_evaluation.side_effect = save_result
         parsed = Mock(model_dump=Mock(return_value=evaluation_result))
         with patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.poster_graphics, "image_legibility", return_value={
+                "score": 1.0, "threshold": 0.95, "below_threshold": False,
+            },
+        ), patch.object(
             routes.graphic_evaluation, "evaluate_image",
             side_effect=[parsed, RuntimeError("Interrupted")],
         ), self.assertLogs("routers.content", "ERROR"):
@@ -671,6 +752,10 @@ class ContentRouteTests(unittest.TestCase):
         )
         self.sources.graphic_source.reset_mock()
         with patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.poster_graphics, "image_legibility", return_value={
+                "score": 1.0, "threshold": 0.95, "below_threshold": False,
+            },
+        ), patch.object(
             routes.graphic_evaluation, "evaluate_image", return_value=parsed,
         ) as evaluate:
             response = self.client.post("/content/evaluate/11", json={})
@@ -1529,12 +1614,19 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         }
         with patch.dict(os.environ, {
             "DOCLING_SERVICE_URL": "https://converter.invalid", "DOCLING_ENABLE_ENRICHMENT": "false",
+            "REDUCED_FEATURE_NOTIFICATION": "yes",
         }), patch.object(source_processing.docxtractor, "extract_document", return_value=manifest) as convert:
             result = source_processing.extract("research.pdf", b"%PDF-1.7")
         for option in ("describe_pictures", "extract_chart_data", "enrich_formulas"):
             self.assertIs(convert.call_args.kwargs[option], False)
         self.assertEqual(result.text, "Research evidence")
         self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, result.warnings)
+        with patch.dict(os.environ, {
+            "DOCLING_SERVICE_URL": "https://converter.invalid", "DOCLING_ENABLE_ENRICHMENT": "false",
+            "REDUCED_FEATURE_NOTIFICATION": "false",
+        }), patch.object(source_processing.docxtractor, "extract_document", return_value=manifest):
+            result = source_processing.extract("research.pdf", b"%PDF-1.7")
+        self.assertNotIn(source_processing.REDUCED_FEATURE_NOTICE, result.warnings)
 
     def test_enrichment_defaults_to_enabled_and_rejects_invalid_settings(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

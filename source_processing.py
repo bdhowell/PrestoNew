@@ -31,11 +31,11 @@ class ProcessingError(RuntimeError):
     """A configured converter or model could not process a source."""
 
 
-# REDUCED_FEATURE_NOTICE = (
-#     "Temporary reduced-feature document conversion is enabled. Docling formula "
-#     "enrichment, picture descriptions and chart-data extraction are disabled. "
-#     "Text, tables, available image crops and picture classification are still processed."
-# )
+REDUCED_FEATURE_NOTICE = (
+    "Temporary reduced-feature document conversion is enabled. Docling formula "
+    "enrichment, picture descriptions and chart-data extraction are disabled. "
+    "Text, tables, available image crops and picture classification are still processed."
+)
 
 
 def enrichment_enabled() -> bool:
@@ -43,6 +43,10 @@ def enrichment_enabled() -> bool:
     if value not in ("true", "false"):
         raise ProcessingError("DOCLING_ENABLE_ENRICHMENT must be true or false.")
     return value == "true"
+
+
+def reduced_feature_notification_enabled() -> bool:
+    return os.environ.get("REDUCED_FEATURE_NOTIFICATION", "").strip().lower() in {"yes", "true"}
 
 
 @dataclass
@@ -294,8 +298,8 @@ def extract(filename: str, data: bytes) -> Processed:
             text="\n\n".join(item["text"] for item in manifest["source_texts"]),
             warnings=list(manifest["warnings"]),
         )
-        # if not enrich:
-        #     result.warnings.append(REDUCED_FEATURE_NOTICE)
+        if not enrich and reduced_feature_notification_enabled():
+            result.warnings.append(REDUCED_FEATURE_NOTICE)
         texts = {item["id"]: item["text"] for item in manifest["source_texts"]}
         table_html = []
         root = Path(manifest["output_directory"]).resolve()

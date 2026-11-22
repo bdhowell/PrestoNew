@@ -176,6 +176,10 @@ edge density with an area penalty; the score is stored in `source.complexity`.
 threshold are omitted from the editor's suggested graphics. Threshold changes
 apply immediately to stored scores; penalty-power changes affect newly processed
 images. Existing placed graphics remain editable.
+During poster evaluation, images with legibility scores below
+`DIAGRAM_LEGIBILITY_THRESHOLD` (default `0.95`) are also marked unsuitable, with
+the score and threshold shown as the reason. Complexity remains a maximum-score
+check: scores above `IMAGE_COMPLEXITY_THRESHOLD` make the image unsuitable.
 Classified charts are normalized and stored as PNG images. For a classified
 math-expression image, each extracted LaTeX expression is stored in `source.text`
 on its own child source record, while the original image remains available.

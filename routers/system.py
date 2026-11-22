@@ -219,6 +219,7 @@ async def dump(
     response = templates.TemplateResponse(
         request, "system/dump.html",
         {"sid": sid, "fields": fields, "table_preview": table_preview,
+         "legibility": source.get("legibility"),
          "image_source": isinstance(source.get("mimetype"), str)
          and source["mimetype"].startswith("image/"),
          "has_image_file": bool(source.get("storage_uri"))},

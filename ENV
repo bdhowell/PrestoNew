@@ -46,6 +46,7 @@ POSTER_ATTACHMENT_MAX_MB=40 # megabytes
 DOCLING_SERVICE_URL="https://api.aws-c1.dcls.saas.ibm.com/20261027-2135-4822-40ab-411460ff8b44"
 DOCLING_SERVICE_API_KEY=""
 DOCLING_ENABLE_ENRICHMENT=false
+REDUCED_FEATURE_NOTIFICATION="yes"
 # Formula enrichment (do_formula_enrichment) — recognizes mathematical formulas and produces LaTeX.
 # Picture descriptions (do_picture_description) — generates textual descriptions of images.
 # Chart-data extraction (do_chart_extraction) — extracts structured data from charts.
@@ -78,5 +79,6 @@ DIAGRAM_LEGIBILITY_CONTRAST_REFERENCE=0.45
 DIAGRAM_LEGIBILITY_CONTRAST_FLOOR=0.04
 DIAGRAM_LEGIBILITY_MAX_CONTRAST_PENALTY=4.0
 DIAGRAM_LEGIBILITY_DISPLAY_DPI=96.0
+DIAGRAM_LEGIBILITY_THRESHOLD=0.7
 
 POSTER_PRICE=29.95

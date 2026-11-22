@@ -47,8 +47,8 @@
         parent.append(section);
     }
 
-    function suitable(evaluation, complexity) {
-        if (complexity?.too_complex) return false;
+    function suitable(evaluation, complexity, legibility) {
+        if (!evaluation || complexity?.too_complex || legibility?.below_threshold) return false;
         const threshold = ratings.indexOf("significantly");
         return [
             evaluation.evaluations.materials_and_methods.rating,
@@ -71,7 +71,8 @@
             );
             group.append(element("h2", category === "uploaded" ? "Uploaded graphics" : "Extracted graphics"));
             for (const item of items) {
-                const isSuitable = suitable(item.evaluation, item.complexity);
+                const isSuitable = suitable(item.evaluation, item.complexity, item.legibility);
+                const evaluation = item.evaluation;
                 const card = element("article", "", "graphic-evaluation");
                 card.append(element("h3", item.source.filename));
                 if (item.source.type === "tables" && item.source.table_html) {
@@ -81,35 +82,65 @@
                 } else {
                     const image = document.createElement("img");
                     image.src = `/content/${item.source.sid}/image`;
-                    image.alt = item.evaluation.image_analysis.description || item.source.filename;
+                    image.alt = evaluation?.image_analysis.description || item.source.filename;
                     image.loading = "lazy";
                     card.append(image);
                 }
+                const metrics = element("div", "", "evaluation-metrics");
+                for (const [label, metric] of [
+                    ["Complexity", item.complexity],
+                    ["Legibility", item.legibility],
+                ]) {
+                    if (typeof metric?.score === "number") {
+                        metrics.append(element("p", `${label}: ${(metric.score * 100).toFixed(1)}%`));
+                    }
+                }
+                if (metrics.childElementCount) card.append(metrics);
                 card.append(element(
                     "p",
-                    `Classification: ${item.evaluation.image_analysis.classification}`,
+                    evaluation
+                        ? `Classification: ${evaluation.image_analysis.classification}`
+                        : "Classification: not evaluated",
                     "graphic-classification",
                 ));
                 if (item.complexity?.too_complex) {
-                    card.append(element("p", "This raster image is too complex for the poster and will not be suggested in the editor."));
+                    card.append(element(
+                        "p",
+                        `Complexity score (${(item.complexity.score * 100).toFixed(1)}%) exceeds the poster threshold (${(item.complexity.threshold * 100).toFixed(1)}%); this image is not suitable for the poster.`,
+                    ));
+                }
+                if (item.legibility?.below_threshold) {
+                    card.append(element(
+                        "p",
+                        `Legibility score (${(item.legibility.score * 100).toFixed(1)}%) is below the poster threshold (${(item.legibility.threshold * 100).toFixed(1)}%); this image is not suitable for the poster.`,
+                    ));
+                }
+                if (!evaluation) {
+                    card.append(element(
+                        "p",
+                        "Not evaluated because this image did not meet the complexity or legibility threshold.",
+                        "evaluation-skipped",
+                    ));
                 }
                 card.append(element(
                     "p",
                     isSuitable ? "Suitable for the poster." : "Not suitable for the poster.",
                     `evaluation-verdict ${isSuitable ? "suitable" : "not-suitable"}`,
                 ));
-                card.append(element("p", item.evaluation.image_analysis.description));
-                const expressions = item.evaluation.image_analysis.math_expressions || [];
-                if (expressions.length) {
-                    card.append(element("h4", "Math expressions"));
-                    for (const expression of expressions) {
-                        const formula = element("p", `\\[${expression}\\]`, "graphic-math");
-                        card.append(formula);
-                        window.mathJaxSource.typeset(formula);
+                if (evaluation) {
+                    card.append(element("p", evaluation.image_analysis.description));
+                    const expressions = evaluation.image_analysis.math_expressions || [];
+                    if (expressions.length) {
+                        card.append(element("h4", "Math expressions"));
+                        for (const expression of expressions) {
+                            const formula = element("p", `\\[${expression}\\]`, "graphic-math");
+                            card.append(formula);
+                            window.mathJaxSource.typeset(formula);
+                        }
                     }
+                    renderSection(card, "Materials and Methods", evaluation.evaluations.materials_and_methods);
+                    renderSection(card, "Results", evaluation.evaluations.results);
                 }
-                renderSection(card, "Materials and Methods", item.evaluation.evaluations.materials_and_methods);
-                renderSection(card, "Results", item.evaluation.evaluations.results);
                 group.append(card);
             }
             output.append(group);
@@ -153,13 +184,14 @@
             throw new Error(event.detail);
         } else if (event.type === "complete") {
             terminalEventReceived = true;
-            const count = [...results.values()].filter(item => suitable(item.evaluation, item.complexity)).length;
+            const count = [...results.values()].filter(item =>
+                suitable(item.evaluation, item.complexity, item.legibility)).length;
             const unsuitable = results.size - count;
             status.textContent = `Evaluation complete: ${numberToWords(count)} suitable and ${numberToWords(unsuitable)} not suitable.`;
             next.hidden = false;
             await window.wikkit.say(
                 `<p>I&rsquo;ve finished evaluating your graphics. ${capitalizeFirstLetter(numberToWords(count))} may be useful for your poster; `
-                    + `${numberToWords(unsuitable)} are not suitable because of relevance or image complexity.</p>`,
+                    + `${numberToWords(unsuitable)} are not suitable because of relevance, image complexity, or legibility.</p>`,
             );
         }
     }

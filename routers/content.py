@@ -50,10 +50,13 @@ FORMATS_MESSAGE = (
 STORAGE_ERRORS = (psycopg.Error, OSError, GoogleAPIError, GoogleAuthError, openai.OpenAIError, source_processing.ProcessingError)
 
 
-# def conversion_notice() -> str:
-#     if source_processing.enrichment_enabled():
-#         return ""
-#     return f"<p>{source_processing.REDUCED_FEATURE_NOTICE}</p>"
+def conversion_notice() -> str:
+    if (
+        source_processing.enrichment_enabled()
+        or not source_processing.reduced_feature_notification_enabled()
+    ):
+        return ""
+    return f"<p>{source_processing.REDUCED_FEATURE_NOTICE}</p>"
 
 
 def size_warning(items: list[content.Source]) -> str:
@@ -104,8 +107,7 @@ async def upload_page(request: Request) -> Response:
         raise HTTPException(503, "Your source files could not be loaded. Please try again.") from None
     return render_page(
         request, "content/upload.html", "content-upload",
-        # (INTRO if not items else "") + FORMATS_MESSAGE + conversion_notice() + size_warning(items),
-        (INTRO if not items else "") + FORMATS_MESSAGE + size_warning(items),
+        (INTRO if not items else "") + FORMATS_MESSAGE + conversion_notice() + size_warning(items),
         items=items, accept=",".join(content.FORMATS),
     )
 
@@ -144,8 +146,7 @@ async def upload_file(request: Request) -> JSONResponse:
         raise HTTPException(503, "Your file could not be saved. Please try again.") from None
     return JSONResponse({
         "ok": True, "item": item_json(item), "items": [item_json(source) for source in items],
-        # "say": conversion_notice() + size_warning(items),
-        "say": size_warning(items),
+        "say": conversion_notice() + size_warning(items),
     }, status_code=201)
 
 @router.post("/finished")
@@ -182,8 +183,8 @@ async def extract_page(request: Request) -> Response:
         request, "content/extract.html", "content-extract",
         f"<p>{identity.display_name(request)}, your content has finished uploading.</p>"
         "<p>I&rsquo;m reading through it now, extracting the text, tables, and images "
-        "I can use for your poster. Please keep this page open while I work.</p>",
-        # + conversion_notice(),
+        "I can use for your poster. Please keep this page open while I work.</p>"
+        + conversion_notice(),
         pending=[{"sid": item.sid, "filename": item.filename}
                  for item in items if item.parent is None and not item.extracted],
     )
@@ -413,13 +414,10 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
         graphic for graphic in graphics
         if not is_current(graphic)
     ]
-    try:
-        client = openai.OpenAI() if pending else None
-    except openai.OpenAIError:
-        logger.exception("Could not initialize graphic evaluation for poster %s", pid)
-        raise HTTPException(503, "Your graphics could not be evaluated. Please try again.") from None
+    client: openai.OpenAI | None = None
 
     async def events():
+        nonlocal client
         try:
             uploaded = sum(graphic.category == "uploaded" for graphic in graphics)
             yield json.dumps({
@@ -432,24 +430,39 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                 yield json.dumps({"type": "empty"}) + "\n"
                 return
             cached_complexities = {}
+            cached_legibilities = {}
             for graphic in graphics:
                 if is_current(graphic):
                     source = await content.store().graphic_source(uid, pid, graphic.sid)
                     if source is None:
                         raise ValueError(f"Graphic source {graphic.sid} is no longer available.")
                     complexity = await run_in_threadpool(poster_graphics.image_complexity, source[0])
+                    legibility = await run_in_threadpool(
+                        poster_graphics.image_legibility, source[0], source[1],
+                    )
                     cached_complexities[graphic.sid] = complexity
-            if not pending and not any(value["too_complex"] for value in cached_complexities.values()):
+                    cached_legibilities[graphic.sid] = legibility
+            if not pending and not any(
+                value["too_complex"] for value in cached_complexities.values()
+            ) and not any(
+                value["below_threshold"] for value in cached_legibilities.values()
+            ):
                 yield json.dumps({"type": "already-evaluated"}) + "\n"
                 return
 
             for graphic in graphics:
                 if is_current(graphic):
+                    complexity = cached_complexities[graphic.sid]
+                    legibility = cached_legibilities[graphic.sid]
+                    failed_threshold = (
+                        complexity["too_complex"] or legibility["below_threshold"]
+                    )
                     yield json.dumps({
                         "type": "result",
                         "source": graphic_source_payload(graphic, graphic.evaluation),
-                        "evaluation": graphic.evaluation,
-                        "complexity": cached_complexities[graphic.sid],
+                        "evaluation": None if failed_threshold else graphic.evaluation,
+                        "complexity": complexity,
+                        "legibility": legibility,
                     }, ensure_ascii=False) + "\n"
 
             for index, graphic in enumerate(graphics, start=1):
@@ -467,6 +480,20 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                     raise ValueError(f"Graphic source {graphic.sid} is no longer available.")
                 data, mimetype = source
                 complexity = await run_in_threadpool(poster_graphics.image_complexity, data)
+                legibility = await run_in_threadpool(
+                    poster_graphics.image_legibility, data, mimetype,
+                )
+                if complexity["too_complex"] or legibility["below_threshold"]:
+                    yield json.dumps({
+                        "type": "result",
+                        "source": graphic_source_payload(graphic, None),
+                        "evaluation": None,
+                        "complexity": complexity,
+                        "legibility": legibility,
+                    }, ensure_ascii=False) + "\n"
+                    continue
+                if client is None:
+                    client = openai.OpenAI()
                 image_url = f"data:{mimetype};base64,{base64.b64encode(data).decode('ascii')}"
                 result = await run_in_threadpool(
                     graphic_evaluation.evaluate_image,
@@ -491,11 +518,15 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                     if normalized is None:
                         raise ValueError(f"Graphic source {graphic.sid} is no longer available.")
                     complexity = await run_in_threadpool(poster_graphics.image_complexity, normalized[0])
+                    legibility = await run_in_threadpool(
+                        poster_graphics.image_legibility, normalized[0], normalized[1],
+                    )
                 yield json.dumps({
                     "type": "result",
                     "source": graphic_source_payload(graphic, evaluation_result),
                     "evaluation": evaluation_result,
                     "complexity": complexity,
+                    "legibility": legibility,
                 }, ensure_ascii=False) + "\n"
             yield json.dumps({"type": "complete"}) + "\n"
         except (

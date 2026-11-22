@@ -50,6 +50,8 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             return {
                 "type": "result",
                 "source": {"sid": sid, "category": category, "filename": filename},
+                "complexity": {"score": 0.125, "threshold": 0.5, "too_complex": False},
+                "legibility": {"score": 0.875, "threshold": 0.5, "below_threshold": False},
                 "evaluation": {
                     "image_analysis": {
                         "classification": "chart",
@@ -93,6 +95,27 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertEqual(await self.page.locator(".graphic-evaluation h3").all_text_contents(), [
             "uploaded.png", "extracted.png",
+        ])
+        self.assertEqual(await self.page.locator(".evaluation-metrics").all_text_contents(), [
+            "Complexity: 12.5%Legibility: 87.5%",
+            "Complexity: 12.5%Legibility: 87.5%",
+        ])
+        self.assertEqual(await self.page.locator(".graphic-evaluation").evaluate_all("""cards =>
+            cards.map(card => {
+                const children = [...card.children];
+                const imageIndex = children.findIndex(child => child.matches("img"));
+                const metricsIndex = children.findIndex(child => child.matches(".evaluation-metrics"));
+                const verdictIndex = children.findIndex(child => child.matches(".evaluation-verdict"));
+                const metrics = card.querySelector(".evaluation-metrics");
+                return {
+                    afterImage: metricsIndex === imageIndex + 1,
+                    beforeVerdict: metricsIndex < verdictIndex,
+                    columns: getComputedStyle(metrics).gridTemplateColumns.split(" ").length,
+                };
+            })
+        """), [
+            {"afterImage": True, "beforeVerdict": True, "columns": 2},
+            {"afterImage": True, "beforeVerdict": True, "columns": 2},
         ])
         self.assertEqual(await self.page.locator(".evaluation-verdict").all_text_contents(), [
             "Suitable for the poster.", "Not suitable for the poster.",
@@ -143,9 +166,63 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("#continue-review").wait_for(state="visible")
         self.assertEqual(await self.page.locator(".evaluation-verdict").text_content(),
                          "Not suitable for the poster.")
-        self.assertIn("too complex", await self.page.locator(".graphic-evaluation").inner_text())
+        self.assertIn(
+            "Complexity score (20.0%) exceeds the poster threshold (10.0%)",
+            await self.page.locator(".graphic-evaluation").inner_text(),
+        )
         self.assertEqual(await self.page.locator("#evaluation-status").text_content(),
                          "Evaluation complete: zero suitable and one not suitable.")
+
+    async def test_legibility_below_threshold_overrides_relevance_and_explains_verdict(self) -> None:
+        section = {
+            "rating": "highly", "explanation": "", "supported_elements": [],
+            "limitations": [], "suggested_improvements": [],
+        }
+        await self.load_page([
+            {"type": "start", "total": 1, "uploaded": 1, "extracted": 0},
+            {
+                "type": "result",
+                "source": {"sid": 1, "category": "uploaded", "filename": "illegible.png"},
+                "complexity": {"score": 0.1, "threshold": 0.5, "too_complex": False},
+                "legibility": {"score": 0.8, "threshold": 0.95, "below_threshold": True},
+                "evaluation": {
+                    "image_analysis": {
+                        "classification": "image", "math_expressions": [], "description": "Detailed image",
+                    },
+                    "evaluations": {"materials_and_methods": section, "results": section},
+                },
+            },
+            {"type": "complete"},
+        ])
+        await self.page.locator("#continue-review").wait_for(state="visible")
+        self.assertEqual(await self.page.locator(".evaluation-verdict").text_content(),
+                         "Not suitable for the poster.")
+        self.assertIn(
+            "Legibility score (80.0%) is below the poster threshold (95.0%)",
+            await self.page.locator(".graphic-evaluation").inner_text(),
+        )
+        self.assertEqual(await self.page.locator("#evaluation-status").text_content(),
+                         "Evaluation complete: zero suitable and one not suitable.")
+
+    async def test_threshold_failure_is_reported_without_evaluation_details(self) -> None:
+        await self.load_page([
+            {
+                "type": "result",
+                "source": {"sid": 1, "category": "uploaded", "filename": "too-complex.png"},
+                "complexity": {"score": 0.2, "threshold": 0.1, "too_complex": True},
+                "legibility": {"score": 1.0, "threshold": 0.95, "below_threshold": False},
+                "evaluation": None,
+            },
+            {"type": "complete"},
+        ])
+        card = self.page.locator(".graphic-evaluation")
+        self.assertEqual(await card.locator(".evaluation-verdict").text_content(),
+                         "Not suitable for the poster.")
+        self.assertEqual(await card.locator(".graphic-classification").text_content(),
+                         "Classification: not evaluated")
+        self.assertIn("Not evaluated because this image did not meet", await card.inner_text())
+        self.assertEqual(await card.locator("section").count(), 0)
+        self.assertEqual(await card.locator("img").get_attribute("alt"), "too-complex.png")
 
     async def test_math_expressions_are_rendered_as_latex(self) -> None:
         await self.page.set_content("""

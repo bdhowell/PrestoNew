@@ -27,10 +27,18 @@
             <div class="table-preview">{{ table_preview | safe }}</div>
         </section>
         {% endif %}
+        {% if legibility is not none %}
+        <section aria-labelledby="legibility-heading">
+            <h2 id="legibility-heading">Legibility</h2>
+            <p>{{ legibility }}</p>
+        </section>
+        {% endif %}
         <dl>
             {% for name, value in fields.items() %}
+            {% if name != "legibility" %}
             <dt>{{ name }}</dt>
             <dd><pre><code>{{ value }}</code></pre></dd>
+            {% endif %}
             {% endfor %}
         </dl>
     </main>

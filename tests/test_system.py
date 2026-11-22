@@ -71,10 +71,13 @@ class DumpRouteTests(unittest.TestCase):
             "embedding": None,
             "extracted": True,
             "size": 0,
+            "legibility": 0.75,
         })
         response = self.client.get("/system/dump?sid=11")
         self.assertEqual(response.status_code, 200)
         self.assertIn("<h1>Source 11</h1>", response.text)
+        self.assertIn('<h2 id="legibility-heading">Legibility</h2>', response.text)
+        self.assertIn("<p>0.75</p>", response.text)
         self.assertIn("&lt;script&gt;unsafe&lt;/script&gt;", response.text)
         self.assertNotIn("<script>unsafe", response.text)
         self.assertIn('<link rel="stylesheet" href="/static/css/pages/system-dump.css">', response.text)
@@ -109,6 +112,14 @@ class DumpRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["x-content-type-options"], "nosniff")
         self.assertIn("default-src 'none'", response.headers["content-security-policy"])
         self.dump_source.assert_awaited_once_with(7, 11)
+
+    def test_legibility_is_omitted_when_unavailable(self) -> None:
+        self.session["user_id"] = 7
+        self.dump_source.return_value = (True, {"sid": 11, "legibility": None})
+        response = self.client.get("/system/dump?sid=11")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('id="legibility-heading"', response.text)
+        self.assertNotIn("<dt>legibility</dt>", response.text)
 
     def test_non_superusers_missing_sources_and_database_errors(self) -> None:
         self.session["user_id"] = 7

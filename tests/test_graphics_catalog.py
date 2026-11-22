@@ -15,6 +15,24 @@ from tests.test_layout import DRAFT, LayoutDatabaseTests, LayoutRouteTests
 
 
 class GraphicsSelectionTests(unittest.TestCase):
+    def test_legibility_threshold_is_configurable_and_inclusive(self) -> None:
+        with patch.dict(os.environ, {"DIAGRAM_LEGIBILITY_THRESHOLD": "0.8"}):
+            with patch.object(content.processing, "image_legibility_score", return_value=0.8):
+                result = graphics.image_legibility(b"image", "image/png")
+        self.assertEqual(result, {
+            "score": 0.8, "threshold": 0.8, "below_threshold": False,
+        })
+        with patch.dict(os.environ, {"DIAGRAM_LEGIBILITY_THRESHOLD": "0.9"}):
+            with patch.object(content.processing, "image_legibility_score", return_value=0.8):
+                result = graphics.image_legibility(b"image", "image/png")
+        self.assertTrue(result["below_threshold"])
+        for value in ("nan", "1.1"):
+            with self.subTest(value=value), patch.dict(
+                os.environ, {"DIAGRAM_LEGIBILITY_THRESHOLD": value},
+            ):
+                with self.assertRaises(ValueError):
+                    graphics.legibility_threshold()
+
     def test_complexity_matches_canny_formula_and_threshold(self) -> None:
         image = numpy.random.default_rng(42).integers(0, 256, (150, 200), dtype=numpy.uint8)
         success, encoded = cv2.imencode(".png", image)
