@@ -19,20 +19,45 @@
                                and option == available_templates[0]) %}checked{% endif %}>
                 <span class="template-card-title">{{ option | capitalize }}</span>
                 <span class="template-preview" style="--poster-aspect: {{ '%.5f' | format(poster.width / poster.height) }}">
-                    <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                        <rect x="4" y="4" width="92" height="10" rx="1"></rect>
-                        <rect x="4" y="17" width="21" height="63" rx="1"></rect>
-                        <rect x="28" y="17" width="44" height="63" rx="1"></rect>
-                        {% if option == "arena" %}
-                        <rect x="75" y="17" width="21" height="63" rx="1"></rect>
-                        <rect x="4" y="83" width="92" height="13" rx="1"></rect>
-                        {% else %}
-                        <rect x="75" y="17" width="21" height="19" rx="1"></rect>
-                        <rect x="75" y="39" width="21" height="19" rx="1"></rect>
-                        <rect x="75" y="61" width="21" height="19" rx="1"></rect>
-                        <rect x="4" y="83" width="92" height="13" rx="1"></rect>
-                        {% endif %}
-                    </svg>
+                    <span class="sample-poster" aria-hidden="true">
+                        <span class="sample-header">
+                            <span class="sample-title">Title</span>
+                            <span class="sample-authors">Authors</span>
+                        </span>
+                        <span class="sample-layout {% if option == 'arena' %}sample-arena{% else %}sample-central{% endif %}">
+                            {% if option == "arena" %}
+                            <span class="sample-column">
+                                <span class="sample-section">Introduction</span>
+                                <span class="sample-section">Materials and Methods</span>
+                            </span>
+                            <span class="sample-column">
+                                <span class="sample-section">Results</span>
+                            </span>
+                            <span class="sample-column">
+                                <span class="sample-section">Conclusion</span>
+                            </span>
+                            <span class="sample-footer">
+                                <span class="sample-section">Literature Cited</span>
+                                <span class="sample-section">Acknowledgements</span>
+                                <span class="sample-section">Additional Information</span>
+                            </span>
+                            {% else %}
+                            <span class="sample-column">
+                                <span class="sample-section">Introduction</span>
+                                <span class="sample-section">Materials and Methods</span>
+                            </span>
+                            <span class="sample-column">
+                                <span class="sample-section">Results</span>
+                            </span>
+                            <span class="sample-column sample-column-stacked">
+                                <span class="sample-section">Conclusion</span>
+                                <span class="sample-section">Literature Cited</span>
+                                <span class="sample-section">Acknowledgements</span>
+                                <span class="sample-section">Additional Information</span>
+                            </span>
+                            {% endif %}
+                        </span>
+                    </span>
                 </span>
                 {% if poster.template == option %}
                 <span class="template-current-label">

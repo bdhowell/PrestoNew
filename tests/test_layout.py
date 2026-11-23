@@ -598,6 +598,11 @@ class LayoutRouteTests(unittest.TestCase):
         preview = current[0].xpath('.//span[@class="template-preview"]')[0]
         self.assertIn("0.75000", preview.get("style"))
         self.assertEqual(
+            current[0].xpath('.//span[contains(@class, "sample-section")]/text()'),
+            ["Introduction", "Materials and Methods", "Results", "Conclusion",
+             "Literature Cited", "Acknowledgements", "Additional Information"],
+        )
+        self.assertEqual(
             document.get_element_by_id("template-selection").xpath('.//a[@href]/@href'),
             ["/layout/dimensions?from=editor"],
         )
