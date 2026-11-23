@@ -20,7 +20,7 @@
     display: grid;
     justify-items: center;
     gap: 0.75rem;
-    width: min(100%, 30rem);
+    width: min(100%, 34rem);
     padding: 1rem;
     border: 2px solid currentColor;
     border-radius: 0.5rem;
@@ -53,7 +53,7 @@
 
 .template-preview {
     display: block;
-    width: min(100%, 28rem, calc(22rem * var(--poster-aspect)));
+    width: min(100%, 32rem, calc(30rem * var(--poster-aspect)));
     aspect-ratio: var(--poster-aspect);
 }
 
@@ -72,7 +72,8 @@
 .sample-header,
 .sample-layout,
 .sample-column,
-.sample-footer {
+.sample-footer,
+.sample-section-group {
     display: grid;
     min-width: 0;
     min-height: 0;
@@ -107,7 +108,18 @@
 .sample-column-stacked {
     grid-row: 1 / -1;
     grid-column: 3;
-    grid-template-rows: repeat(4, minmax(0, 1fr));
+    grid-template-rows: 1fr 3fr;
+}
+
+.sample-section-group {
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+    gap: 0;
+}
+
+.sample-section-group .sample-section + .sample-section {
+    border-top: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
 }
 
 .sample-arena .sample-column:nth-child(2) {
@@ -150,6 +162,13 @@
     text-align: center;
     overflow-wrap: anywhere;
     overflow: hidden;
+}
+
+.sample-section-acknowledgements {
+    overflow-wrap: normal;
+    word-break: normal;
+    hyphens: manual;
+    overflow: visible;
 }
 
 .template-current-label {

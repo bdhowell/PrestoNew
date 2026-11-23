@@ -596,7 +596,7 @@ input[name="height"] {
 .section-parent[data-orientation="vertical"],
 .section-parent:where([style*="column"]) {
     flex-direction: column;
-    gap: var(--gutter);
+    gap: 0;
     border: none;
 }
 
@@ -606,6 +606,16 @@ input[name="height"] {
 .section-parent[data-orientation="vertical"] > .section,
 .section-parent:where([style*="column"]) > .section {
     border: var(--border-width) solid var(--border-color);
+}
+
+.section-parent.vertical > .section + .section,
+.section-parent.column > .section + .section,
+.section-parent[data-direction="vertical"] > .section + .section,
+.section-parent[data-orientation="vertical"] > .section + .section,
+.section-parent:where([style*="column"]) > .section + .section {
+    border-top: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
 }
 
 .content {

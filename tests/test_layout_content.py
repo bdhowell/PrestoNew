@@ -158,6 +158,36 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
             "el => getComputedStyle(el).paddingTop",
         ), "48px")
 
+    async def test_vertical_section_groups_are_contiguous_with_single_separators(self) -> None:
+        await self.page.set_content("""<div class="section-parent vertical">
+            <div class="section">Citations</div>
+            <div class="section">Acknowledgements</div>
+            <div class="section">Information</div>
+        </div>""")
+        await self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
+        children = await self.page.locator(".section-parent > .section").evaluate_all(
+            """sections => sections.map(section => {
+                const bounds = section.getBoundingClientRect();
+                const style = getComputedStyle(section);
+                return {
+                    top: bounds.top,
+                    bottom: bounds.bottom,
+                    borderTop: style.borderTopWidth,
+                    borderBottom: style.borderBottomWidth,
+                };
+            })""",
+        )
+        self.assertEqual(
+            await self.page.locator(".section-parent").evaluate(
+                "el => getComputedStyle(el).gap",
+            ),
+            "0px",
+        )
+        for previous, current in zip(children, children[1:]):
+            self.assertAlmostEqual(previous["bottom"], current["top"], delta=0.1)
+            self.assertEqual(current["borderTop"], "0px")
+            self.assertNotEqual(previous["borderBottom"], "0px")
+
     async def asyncSetUp(self) -> None:
         playwright = await async_playwright().start()
         self.addAsyncCleanup(playwright.stop)

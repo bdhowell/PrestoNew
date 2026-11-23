@@ -600,7 +600,18 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertEqual(
             current[0].xpath('.//span[contains(@class, "sample-section")]/text()'),
             ["Introduction", "Materials and Methods", "Results", "Conclusion",
-             "Literature Cited", "Acknowledgements", "Additional Information"],
+             "Literature Cited", "Ack\u00adnowl\u00adedg\u00adements", "Additional Information"],
+        )
+        acknowledgements = current[0].xpath(
+            './/span[contains(@class, "sample-section-acknowledgements")]',
+        )[0]
+        self.assertEqual(acknowledgements.text, "Ack\u00adnowl\u00adedg\u00adements")
+        self.assertEqual(acknowledgements.get("lang"), "en")
+        section_group = current[0].xpath('.//span[@class="sample-section-group"]')
+        self.assertEqual(len(section_group), 1)
+        self.assertEqual(
+            section_group[0].xpath('./span[contains(@class, "sample-section")]/text()'),
+            ["Literature Cited", "Ack\u00adnowl\u00adedg\u00adements", "Additional Information"],
         )
         self.assertEqual(
             document.get_element_by_id("template-selection").xpath('.//a[@href]/@href'),
