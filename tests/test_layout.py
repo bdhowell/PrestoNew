@@ -564,6 +564,18 @@ class LayoutRouteTests(unittest.TestCase):
             7, 11, "http://testserver/layout/dimensions?xyzzy=arpa",
         )
 
+    def test_editor_dimensions_page_exposes_current_values_and_return_workflow(self) -> None:
+        document = html.fromstring(self.client.get("/layout/dimensions?from=editor").text)
+        self.assertEqual(document.xpath("//body/@data-page"), ["layout-dimensions-edit"])
+        self.assertEqual(json.loads(document.get_element_by_id("dimension-picker").get("data-current")), {
+            "width": 36, "height": 48, "units": "in",
+        })
+        self.assertIn("36 x 48 in", document.get_element_by_id("current-dimensions").text_content())
+        self.assertEqual(document.get_element_by_id("return-to-poster").text_content(), "Return to Poster")
+        self.assertIs(wikkit.WORKFLOWS["layout-dimensions-edit"], routes.dimensions_edit_workflow)
+        ordinary = html.fromstring(self.client.get("/layout/dimensions").text)
+        self.assertFalse(ordinary.xpath('//*[@id="return-to-poster" or @id="current-dimensions"]'))
+
     def test_resumed_dimensions_page_restores_its_own_resumption_marker(self) -> None:
         response = self.client.get("/layout/dimensions?tag=a%2Fb&tag=two&xyzzy=arpa")
         self.assertEqual(response.status_code, 200)
@@ -607,6 +619,16 @@ class LayoutRouteTests(unittest.TestCase):
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 121.92, 91.44, "in")
         self.assertEqual(response.json()["preview"], {"height": 36, "width": 48, "units": "in"})
         self.assertEqual(response.json()["redirect"], "/content/upload")
+
+    def test_editor_dimension_updates_return_to_poster(self) -> None:
+        response = self.client.post(
+            "/layout/dimensions", json={"dimensions": "36 in x 48 in", "from_editor": True},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["redirect"], "/layout/edit")
+        self.assertEqual(self.client.post(
+            "/layout/dimensions", json={"dimensions": "36 in x 48 in", "from_editor": "true"},
+        ).status_code, 422)
 
     def test_dimension_updates_can_preserve_a_selected_template(self) -> None:
         response = self.client.post(
@@ -841,6 +863,28 @@ class DimensionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 121.92, 91.44, "in")
         self.assertIn("&lt;Meeting&gt;", self.bot.request_response.await_args.args[0])
         self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/content/upload")
+
+    async def test_editor_return_does_not_change_required_dimensions(self) -> None:
+        self.store.conference_details.return_value = ("Meeting", {
+            "required_poster_width": 48, "required_poster_height": 36, "poster_units": "in",
+        })
+        self.bot.request_response.return_value = "return"
+        await routes.dimensions_edit_workflow(self.bot)
+        self.assertIn('data-sends="return">Return to Poster</button>', self.bot.request_response.await_args.args[0])
+        self.store.set_dimensions.assert_not_awaited()
+        self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/layout/edit")
+
+    async def test_editor_workflow_retries_and_can_return_or_save(self) -> None:
+        for replies, saved in ((["invalid", "return"], False), (["invalid", "36 in x 48 in"], True)):
+            with self.subTest(replies=replies):
+                self.store.set_dimensions.reset_mock()
+                self.bot.request_response.reset_mock()
+                self.bot.send.reset_mock()
+                self.bot.request_response.side_effect = replies
+                await routes.dimensions_edit_workflow(self.bot)
+                self.assertIn('data-sends="return"', self.bot.request_response.await_args.args[0])
+                self.assertEqual(self.store.set_dimensions.await_count, int(saved))
+                self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/layout/edit")
 
     async def test_accept_maximum_and_idk_use_cm_and_correct_display_units(self) -> None:
         self.store.conference_details.return_value = ("Meeting", {

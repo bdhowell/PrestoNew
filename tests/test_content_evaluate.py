@@ -21,8 +21,10 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             <p id="evaluation-status"></p>
             <div id="graphic-evaluations"></div>
             <button id="retry-evaluation" hidden>Try again</button>
-            <a id="continue-review" href="/content/review" hidden>Continue</a>
+            <button id="continue-review" data-sends="ok" hidden>Continue to Poster</button>
         """)
+        await self.page.evaluate("document.body.classList.add('wikkit-page')")
+        await self.page.add_style_tag(path=str(ROOT / "static/css/main.css"))
         await self.page.add_style_tag(path=str(ROOT / "static/css/pages/content-evaluate.css"))
         await self.page.evaluate("""events => {
             window.messages = [];
@@ -31,6 +33,7 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             window.wikkit = {
                 say: message => { messages.push(message); return Promise.resolve(); },
                 execute: command => commands.push(command),
+                requestResponse: () => new Promise(resolve => { window.answerWikkit = resolve; }),
             };
             window.fetch = async (url, options) => {
                 window.requestCount++;
@@ -316,17 +319,15 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             getComputedStyle(parent).font
         """))
 
-    async def test_already_evaluated_graphics_redirect_to_layout(self) -> None:
+    async def test_already_evaluated_graphics_offer_review(self) -> None:
         await self.load_page([
             {"type": "start", "total": 0, "uploaded": 0, "extracted": 0},
             {"type": "already-evaluated"},
         ])
-        self.assertEqual(await self.page.evaluate("commands"), [
-            {"does": "redirect", "payload": "/layout/edit"},
-        ])
-        self.assertTrue(await self.page.locator("#continue-review").is_hidden())
+        await self.page.locator("#continue-review").wait_for(state="visible")
+        self.assertEqual(await self.page.evaluate("commands"), [])
         self.assertTrue(await self.page.locator("#retry-evaluation").is_hidden())
-        self.assertEqual(await self.page.evaluate("messages"), [])
+        self.assertIn('data-sends="ok">Continue to Poster</button>', await self.page.evaluate("messages.join(' ')"))
 
     async def test_no_graphics_message_redirects_to_conference_query(self) -> None:
         await self.load_page([{"type": "start", "total": 0, "uploaded": 0, "extracted": 0},
@@ -343,11 +344,8 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
                 JSON.stringify({type: 'already-evaluated'}) + '\\n',
             );
         }""")
-        await self.page.wait_for_function("commands.length === 1")
-        self.assertEqual(await self.page.evaluate("commands"), [
-            {"does": "redirect", "payload": "/layout/edit"},
-        ])
-        self.assertEqual(await self.page.evaluate("messages"), [])
+        await self.page.locator("#continue-review").wait_for(state="visible")
+        self.assertEqual(await self.page.evaluate("commands"), [])
         self.assertTrue(await self.page.locator("#retry-evaluation").is_hidden())
 
     async def test_repeated_interruptions_offer_friendly_manual_retry(self) -> None:
@@ -366,8 +364,72 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             );
         }""")
         await self.page.locator("#retry-evaluation").click()
-        await self.page.wait_for_function("commands.length === 1")
+        await self.page.locator("#continue-review").wait_for(state="visible")
         self.assertTrue(await self.page.locator("#retry-evaluation").is_hidden())
+
+    async def test_completion_waits_for_wikkit_response_before_review(self) -> None:
+        await self.load_page([{"type": "complete"}])
+        await self.page.wait_for_function("typeof window.answerWikkit === 'function'")
+        self.assertTrue(await self.page.locator("#retry-evaluation").is_hidden())
+        self.assertTrue(await self.page.locator("#continue-review").is_visible())
+        self.assertEqual(await self.page.evaluate("commands"), [])
+        self.assertIn('<button data-sends="ok">Continue to Poster</button>',
+                      await self.page.evaluate("messages.join(' ')"))
+        await self.page.evaluate("window.answerWikkit('ok')")
+        await self.page.wait_for_function("commands.length === 1")
+        self.assertEqual(await self.page.evaluate("commands"), [
+            {"does": "redirect", "payload": "/content/review"},
+        ])
+
+    async def test_page_button_continues_to_review(self) -> None:
+        await self.page.route("https://evaluate.test/**", lambda route: route.fulfill(body="Review"))
+        await self.page.goto("https://evaluate.test/")
+        await self.load_page([{"type": "complete"}])
+        await self.page.locator("#continue-review").click()
+        await self.page.wait_for_url("https://evaluate.test/content/review")
+
+    async def test_processing_error_shows_retry_but_not_continue(self) -> None:
+        await self.load_page([{"type": "error", "detail": "A graphic could not be evaluated."}])
+        await self.page.locator("#retry-evaluation").wait_for(state="visible")
+        self.assertTrue(await self.page.locator("#continue-review").is_hidden())
+        self.assertEqual(await self.page.evaluate("commands"), [])
+
+    async def test_real_wikkit_button_waits_for_success_and_opens_review(self) -> None:
+        await self.page.route("https://evaluate.test/**", lambda route: route.fulfill(body="Review"))
+        await self.page.goto("https://evaluate.test/")
+        await self.page.set_content("""
+            <body class="wikkit-page" data-wikkit-offline="true" data-page="content-evaluate">
+                <script id="evaluation-poster" type="application/json">{"pid":11}</script>
+                <p id="evaluation-status"></p><div id="graphic-evaluations"></div>
+                <button id="retry-evaluation" hidden>Try again</button>
+                <button id="continue-review" data-sends="ok" hidden>Continue to Poster</button>
+            </body>
+        """)
+        for css in ("main.css", "router.css", "pages/content-evaluate.css"):
+            await self.page.add_style_tag(path=str(ROOT / "static/css" / css))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+        await self.page.evaluate("""async () => {
+            window.wikkit = connect(() => {});
+            await window.wikkit.execute({does: "configure", payload: {
+                CHAT_WORD_INTERVAL: 0, CHAT_WORD_DEVIATION: 0,
+            }});
+            window.fetch = () => new Promise(resolve => {
+                window.finishEvaluation = () => resolve(new Response('{"type":"complete"}\\n'));
+            });
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/common.js"))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/pages/content-evaluate.js"))
+        self.assertTrue(await self.page.locator("#retry-evaluation").is_hidden())
+        self.assertTrue(await self.page.locator("#continue-review").is_hidden())
+        self.assertEqual(await self.page.locator('#chatlog button[data-sends="ok"]').count(), 0)
+        await self.page.evaluate("window.finishEvaluation()")
+        await self.page.locator("#continue-review").wait_for(state="visible")
+        button = self.page.locator('#chatlog button[data-sends="ok"]')
+        await button.wait_for(state="visible")
+        self.assertEqual(await button.text_content(), "Continue to Poster")
+        self.assertEqual(self.page.url, "https://evaluate.test/")
+        await button.click()
+        await self.page.wait_for_url("https://evaluate.test/content/review")
 
 
 if __name__ == "__main__":

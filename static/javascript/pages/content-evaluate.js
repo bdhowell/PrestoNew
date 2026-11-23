@@ -10,6 +10,7 @@
     let running = false;
     let leaving = false;
     let terminalEventReceived = false;
+    let completionMessage = null;
     let controller = null;
     class EvaluationInterruptedError extends Error {}
     function rethrowConnectionError(error) {
@@ -160,7 +161,8 @@
             }
         } else if (event.type === "already-evaluated") {
             terminalEventReceived = true;
-            window.wikkit.execute({does: "redirect", payload: "/layout/edit"});
+            status.textContent = "Graphic review complete.";
+            completionMessage = "<p>I&rsquo;ve finished reviewing your graphics.</p>";
         } else if (event.type === "empty") {
             terminalEventReceived = true;
             await window.wikkit.say(
@@ -198,11 +200,22 @@
                 suitable(item.evaluation, item.complexity, item.legibility)).length;
             const unsuitable = results.size - count;
             status.textContent = `Graphic review complete: ${numberToWords(count)} suitable and ${numberToWords(unsuitable)} not suitable.`;
-            next.hidden = false;
-            await window.wikkit.say(
-                `<p>I&rsquo;ve finished reviewing your graphics. ${capitalizeFirstLetter(numberToWords(count))} may be useful for your poster; `
-                    + `${numberToWords(unsuitable)} are not suitable because of relevance, image complexity, or legibility.</p>`,
-            );
+            completionMessage = `<p>I&rsquo;ve finished reviewing your graphics. ${capitalizeFirstLetter(numberToWords(count))} may be useful for your poster; `
+                + `${numberToWords(unsuitable)} are not suitable because of relevance, image complexity, or legibility.</p>`;
+        }
+    }
+
+    async function promptForReview(message) {
+        try {
+            await window.wikkit.say(message + '<button data-sends="ok">Continue to Poster</button>');
+            if (leaving) return;
+            await window.wikkit.requestResponse();
+            if (!leaving) await window.wikkit.execute({does: "redirect", payload: "/content/review"});
+        } catch (error) {
+            if (!leaving) {
+                console.error("Wikkit could not continue to poster review", error);
+                status.textContent = "Graphic review complete. Use Continue to Poster below.";
+            }
         }
     }
 
@@ -212,6 +225,7 @@
         retry.hidden = true;
         next.hidden = true;
         terminalEventReceived = false;
+        completionMessage = null;
         controller = new AbortController();
         status.textContent = "Checking graphics for legibility and complexity.";
         try {
@@ -249,6 +263,10 @@
             if (!terminalEventReceived) {
                 throw new EvaluationInterruptedError("Evaluation connection ended without a completion event.");
             }
+            if (completionMessage !== null) {
+                next.hidden = false;
+                void promptForReview(completionMessage);
+            }
         } catch (error) {
             if (!leaving && error.name !== "AbortError") {
                 if (error instanceof EvaluationInterruptedError) {
@@ -282,6 +300,7 @@
     }
 
     retry.addEventListener("click", () => evaluate());
+    next.addEventListener("click", () => window.location.assign("/content/review"));
     window.addEventListener("pagehide", () => {
         leaving = true;
         controller?.abort();

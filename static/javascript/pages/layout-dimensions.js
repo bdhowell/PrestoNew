@@ -12,16 +12,37 @@
     const sizeList = document.querySelector("#dimension-sizes");
     const empty = document.querySelector("#dimension-empty");
     const pairs = JSON.parse(picker.dataset.sizes);
-    let units = "in";
-    let orientation = "landscape";
+    const fromEditor = picker.dataset.fromEditor === "true";
+    const current = picker.dataset.current ? JSON.parse(picker.dataset.current) : null;
+    let units = current?.units || "in";
+    let orientation = current ? (current.width > current.height ? "landscape"
+        : current.height > current.width ? "portrait" : "square") : "landscape";
+    const currentOrientation = orientation;
     let active;
     let timer;
+
+    document.querySelector("#return-to-poster")?.addEventListener("click", () => {
+        window.location.assign("/layout/edit");
+    });
+
+    if (current) {
+        for (const [selector, value] of [
+            ["#dimension-units", units], ["#dimension-orientations", orientation],
+        ]) {
+            for (const button of document.querySelectorAll(`${selector} button`)) {
+                const matches = button.dataset.unit === value || button.dataset.orientation === value;
+                button.setAttribute("aria-pressed", String(matches));
+                button.classList.toggle("current-dimension", matches);
+            }
+        }
+    }
 
     function renderSizes() {
         sizeList.replaceChildren();
         const sizes = pairs.flat().filter(([width, height, sourceUnits]) =>
             (units === "in" ? sourceUnits === "in" : sourceUnits === "cm" || sourceUnits === "mm")
-            && (orientation === "landscape" ? width > height : height > width)
+            && (orientation === "landscape" ? width > height
+                : orientation === "portrait" ? height > width : width === height)
         ).map(([sourceWidth, sourceHeight, sourceUnits]) => {
             const factor = sourceUnits === units ? 1 : units === "mm" ? 10 : 0.1;
             return [Number((sourceWidth * factor).toFixed(4)), Number((sourceHeight * factor).toFixed(4))];
@@ -34,6 +55,11 @@
             const button = document.createElement("button");
             button.type = "button";
             button.className = "dimension-size";
+            if (current && units === current.units && orientation === currentOrientation
+                && Math.abs(width - current.width) < 0.0001 && Math.abs(height - current.height) < 0.0001) {
+                button.classList.add("current-dimension");
+                button.setAttribute("aria-current", "true");
+            }
             button.setAttribute("aria-label", `${width} by ${height} ${units}, width by height`);
             const rectangle = document.createElement("span");
             rectangle.className = "dimension-rectangle";
@@ -90,7 +116,7 @@
             const response = await fetch("/layout/dimensions", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ dimensions }),
+                body: JSON.stringify({ dimensions, ...(fromEditor ? { from_editor: true } : {}) }),
                 signal: controller.signal,
             });
             const result = await response.json();

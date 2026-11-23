@@ -9,6 +9,24 @@
         sources.addEventListener("click", () => window.location.assign("/content/review"));
     }
 
+    const dimensions = document.getElementById("dimensions");
+    if (dimensions) {
+        dimensions.addEventListener("click", async () => {
+            dimensions.disabled = true;
+            try {
+                if (typeof window.flushPosterContent !== "function") {
+                    throw new Error("Poster changes could not be saved. Please try again.");
+                }
+                await window.flushPosterContent();
+                window.location.assign("/layout/dimensions?from=editor");
+            } catch (error) {
+                console.error("Could not open poster dimensions", error);
+                window.wikkit.say("<p>Your poster changes could not be saved. Please try again.</p>");
+                dimensions.disabled = false;
+            }
+        });
+    }
+
     const print = document.getElementById("print");
     if (print) {
         let confirming = false;

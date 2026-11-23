@@ -262,6 +262,25 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("#sources").click()
         await self.page.wait_for_url("https://presto.test/content/review")
 
+    async def test_dimensions_button_flushes_and_opens_editor_dimensions(self) -> None:
+        await self.page.evaluate(
+            "window.flushPosterContent = async () => { sessionStorage.setItem('flushed', 'yes'); }",
+        )
+        await self.page.locator("#dimensions").click()
+        await self.page.wait_for_url("https://presto.test/layout/dimensions?from=editor")
+        self.assertEqual(await self.page.evaluate("sessionStorage.getItem('flushed')"), "yes")
+
+    async def test_dimensions_button_stays_on_editor_when_flush_fails(self) -> None:
+        await self.page.evaluate("""() => {
+            window.flushPosterContent = async () => { throw new Error("Save failed"); };
+            window.wikkit = {say: message => { window.failureMessage = message; }};
+        }""")
+        await self.page.locator("#dimensions").click()
+        await self.page.wait_for_function("window.failureMessage !== undefined")
+        self.assertIn("could not be saved", await self.page.evaluate("window.failureMessage"))
+        self.assertTrue(await self.page.locator("#dimensions").is_enabled())
+        self.assertEqual(self.page.url, "https://presto.test/")
+
     async def test_theme_controls_save_all_settings_and_keep_other_appearance(self) -> None:
         await self.page.locator("#theme").click()
         self.assertTrue(await self.page.locator('input[name="color"][value="blue"]').is_checked())

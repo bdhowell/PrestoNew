@@ -761,8 +761,11 @@ async def dimensions_page(request: Request) -> Response:
     await common.resume(request)
     sizes = json.loads((Path(__file__).resolve().parent / "stipulations" / "sizes.json").read_text())
     rules = await rules_for(uid_for(request), poster.pid)
+    from_editor = request.query_params.get("from") == "editor"
     return render_page(
         request, "layout/dimensions.html", "layout-dimensions", poster=poster,
+        from_editor=from_editor,
+        wikkit_workflow="layout-dimensions-edit" if from_editor else "layout-dimensions",
         dimension_pairs=rules.eligible_dimension_pairs(sizes["poster_dimension_pairs"]),
     )
 
@@ -776,6 +779,9 @@ async def update_dimensions(request: Request) -> JSONResponse:
     template = data.get("template")
     if template is not None and template not in posters.TEMPLATES:
         raise HTTPException(422, "Choose a valid poster template.")
+    from_editor = data.get("from_editor", False)
+    if not isinstance(from_editor, bool):
+        raise HTTPException(422, "Invalid dimensions source.")
     try:
         poster = await owned(request, draft=True)
         rules = await rules_for(uid_for(request), poster.pid)
@@ -792,8 +798,50 @@ async def update_dimensions(request: Request) -> JSONResponse:
         raise HTTPException(503, "Your poster dimensions could not be saved.") from None
     return JSONResponse({
         "ok": True, "preview": payload,
-        "redirect": "/layout/edit" if template is not None else "/content/upload",
+        "redirect": "/layout/edit" if template is not None or from_editor else "/content/upload",
     })
+
+
+async def dimensions_edit_workflow(bot: Chatbot) -> None:
+    uid = getattr(bot.websocket.state, "user_id", None)
+    pid = getattr(bot.websocket.state, "poster_id", None)
+    if type(uid) is not int or type(pid) is not int:
+        await bot.send({"say": "<p>Please create or open a poster first.</p>"})
+        return
+    try:
+        poster = await posters.store().get(uid, pid)
+        if poster is None or poster.purchased:
+            await bot.send({"say": "<p>This poster is not available for editing.</p>"})
+            return
+        rules = await rules_for(uid, pid)
+        prompt = (
+            "<p>Choose a size or enter height x width in cm, mm, or in.</p>"
+            '<button class="action" data-sends="return">Return to Poster</button>'
+        )
+        while True:
+            reply = await bot.request_response(prompt)
+            if reply.strip().lower() == "return":
+                await bot.send({"command": {"does": "redirect", "payload": "/layout/edit"}})
+                return
+            try:
+                width, height, units = parse_dimensions(reply, rules.units if rules.name else poster.units)
+            except ValueError as error:
+                prompt = f"<p>{html.escape(str(error))}</p>"
+                await bot.send({"command": {"does": "correct-dimensions", "payload": None}})
+            else:
+                errors = rules.errors(width, height, units)
+                if not errors:
+                    await save_dimensions(uid, pid, width, height, units)
+                    await bot.send({"command": {"does": "redirect", "payload": "/layout/edit"}})
+                    return
+                prompt = "<p>" + " ".join(errors) + "</p>"
+                await bot.send({"command": {
+                    "does": "correct-dimensions", "payload": dimensions_payload(width, height, units),
+                }})
+            prompt += '<button class="action" data-sends="return">Return to Poster</button>'
+    except (psycopg.Error, ValueError, HTTPException):
+        logger.exception("Could not set dimensions for poster %s", pid)
+        await bot.send({"say": "<p>Your poster dimensions could not be saved. Please reload and try again.</p>"})
 
 
 async def dimensions_workflow(bot: Chatbot) -> None:
@@ -878,3 +926,4 @@ async def dimensions_workflow(bot: Chatbot) -> None:
 
 
 wikkit.WORKFLOWS["layout-dimensions"] = dimensions_workflow
+wikkit.WORKFLOWS["layout-dimensions-edit"] = dimensions_edit_workflow
