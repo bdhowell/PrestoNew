@@ -585,14 +585,20 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         document = html.fromstring(response.text)
         self.assertEqual(
-            document.xpath('//*[@id="template-selection"]//input[@name="template"]/@value'),
+            document.xpath('//*[@id="template-selection"]//button[@data-template]/@data-template'),
             ["central", "vertical"],
         )
         current = document.xpath(
-            '//*[@id="template-selection"]//label[contains(@class, "current-template")]',
+            '//*[@id="template-selection"]//button[contains(@class, "current-template")]',
         )
         self.assertEqual(len(current), 1)
-        self.assertEqual(current[0].xpath('.//input/@value'), ["central"])
+        self.assertEqual(current[0].get("data-template"), "central")
+        self.assertEqual(current[0].get("aria-current"), "true")
+        self.assertEqual(
+            document.xpath('//*[@id="template-selection"]//input[@type="radio"]'),
+            [],
+        )
+        self.assertFalse(document.xpath('//*[@id="template-selection-apply"]'))
         self.assertEqual(current[0].xpath('.//span[@class="template-current-label"]/text()'),
                          ["Current template"])
         preview = current[0].xpath('.//span[@class="template-preview"]')[0]
@@ -631,11 +637,11 @@ class LayoutRouteTests(unittest.TestCase):
         self.store.get.return_value = replace(DRAFT, template="arena")
         document = html.fromstring(self.client.get("/layout/template").text)
         current = document.xpath(
-            '//*[@id="template-selection"]//label[contains(@class, "current-template")]',
+            '//*[@id="template-selection"]//button[contains(@class, "current-template")]',
         )
         self.assertEqual(len(current), 1)
-        self.assertEqual(current[0].xpath('.//input/@value'), ["arena"])
-        self.assertEqual(current[0].xpath('.//input/@disabled'), ["disabled"])
+        self.assertEqual(current[0].get("data-template"), "arena")
+        self.assertTrue(current[0].get("disabled"))
         self.assertIn(
             "not available for this orientation",
             current[0].xpath('.//span[@class="template-current-label"]/text()')[0],

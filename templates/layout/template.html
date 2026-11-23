@@ -5,18 +5,19 @@
 {% block content %}
 <h1>Choose a poster template</h1>
 <p>Preview layouts in {{ orientation }} orientation for {{ display_dimensions }}.</p>
-<form id="template-selection" data-pid="{{ poster.pid }}">
+<section id="template-selection" data-pid="{{ poster.pid }}">
     {% if display_templates %}
     <fieldset id="template-selection-options">
         <legend>{% if available_templates %}Available layouts{% else %}Current layout{% endif %}</legend>
         <div class="template-selection-grid">
             {% for option in display_templates %}
-            <label class="template-card{% if poster.template == option %} current-template{% endif %}">
-                <input type="radio" name="template" value="{{ option }}"
-                       {% if option not in available_templates %}disabled{% endif %}
-                       {% if (poster.template == option and option in available_templates)
-                           or (poster.template not in available_templates and available_templates
-                               and option == available_templates[0]) %}checked{% endif %}>
+            <button type="button"
+                    class="template-card{% if poster.template == option %} current-template{% endif %}"
+                    data-template="{{ option }}"
+                    data-available="{{ 'true' if option in available_templates else 'false' }}"
+                    aria-label="Use the {{ option | capitalize }} template"
+                    {% if poster.template == option %}aria-current="true"{% endif %}
+                    {% if option not in available_templates %}disabled{% endif %}>
                 <span class="template-card-title">{{ option | capitalize }}</span>
                 <span class="template-preview" style="--poster-aspect: {{ '%.5f' | format(poster.width / poster.height) }}">
                     <span class="sample-poster" aria-hidden="true">
@@ -72,7 +73,7 @@
                     {% endif %}
                 </span>
                 {% endif %}
-            </label>
+            </button>
             {% endfor %}
         </div>
     </fieldset>
@@ -83,9 +84,6 @@
     <p id="template-selection-status" role="status" aria-live="polite"></p>
     <div class="template-selection-actions">
         <a class="button" href="{{ cancel_url }}">Cancel</a>
-        {% if available_templates %}
-        <button id="template-selection-apply" type="submit">Use this template</button>
-        {% endif %}
     </div>
-</form>
+</section>
 {% endblock %}

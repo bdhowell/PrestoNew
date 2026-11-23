@@ -1,3 +1,8 @@
+#template-selection,
+#template-selection * {
+    box-sizing: border-box;
+}
+
 #template-selection {
     max-width: 70rem;
     margin: 2rem auto;
@@ -16,7 +21,7 @@
     margin-block: 1rem;
 }
 
-.template-card {
+.wikkit-page .template-card {
     display: grid;
     justify-items: center;
     gap: 0.75rem;
@@ -24,24 +29,23 @@
     padding: 1rem;
     border: 2px solid currentColor;
     border-radius: 0.5rem;
+    background: white;
+    color: #17283a;
+    font: inherit;
+    text-align: center;
     cursor: pointer;
 }
 
-.template-card:focus-within,
-.template-card:has(input:checked) {
+.wikkit-page .template-card:focus-visible {
     outline: 3px solid #211a4d;
     outline-offset: 3px;
 }
 
-.template-card.current-template {
+.wikkit-page .template-card.current-template {
     border-width: 4px;
 }
 
-.template-card input {
-    justify-self: start;
-}
-
-.template-card:has(input:disabled) {
+.wikkit-page .template-card:disabled {
     cursor: not-allowed;
     opacity: 0.75;
 }
@@ -191,7 +195,7 @@
         justify-content: center;
     }
 
-    .template-card {
+    .wikkit-page .template-card {
         width: min(100%, 24rem);
     }
 

@@ -47,6 +47,41 @@ class TemplateDialogTests(unittest.TestCase):
     def choose_category(self, category: str) -> None:
         self.page.locator(f"label:has(input[name=category][value={category}])").click()
 
+    def test_template_button_contains_its_example_poster(self) -> None:
+        self.page.set_content("""<body class="wikkit-page">
+            <section id="template-selection">
+                <div class="template-selection-grid">
+                    <button class="template-card">
+                        <span class="template-card-title">Central</span>
+                        <span class="template-preview" style="--poster-aspect: 1.14286">
+                            <span class="sample-poster">
+                                <span class="sample-header">Title</span>
+                                <span class="sample-layout">Sample sections</span>
+                            </span>
+                        </span>
+                    </button>
+                </div>
+            </section>
+        </body>""")
+        self.page.add_style_tag(path=str(ROOT / "static/css/main.css"))
+        self.page.add_style_tag(path=str(ROOT / "static/css/pages/layout-template-select.css"))
+        bounds = self.page.locator(".template-card").evaluate("""button => {
+            const rect = element => {
+                const {left, top, right, bottom} = element.getBoundingClientRect();
+                return {left, top, right, bottom};
+            };
+            return {
+                button: rect(button),
+                preview: rect(button.querySelector(".template-preview")),
+                poster: rect(button.querySelector(".sample-poster")),
+            };
+        }""")
+        for child in ("preview", "poster"):
+            self.assertGreaterEqual(bounds[child]["left"], bounds["button"]["left"])
+            self.assertGreaterEqual(bounds[child]["top"], bounds["button"]["top"])
+            self.assertLessEqual(bounds[child]["right"], bounds["button"]["right"])
+            self.assertLessEqual(bounds[child]["bottom"], bounds["button"]["bottom"])
+
     def test_title_drag_moves_dialog_and_preserves_anchored_controls(self) -> None:
         layout_style = self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
         initial = self.page.locator("#template-dialog").bounding_box()
