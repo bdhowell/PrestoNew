@@ -7,7 +7,7 @@
 <button type="button" id="return-to-poster">Return to Poster</button>
 {% endif %}
 {% if poster.width is not none and poster.height is not none %}
-<p><a href="/layout/template">Choose a template</a></p>
+<p><a href="/layout/template?from=dimensions">Choose a template</a></p>
 {% endif %}
 <section id="dimension-picker" aria-label="Choose poster dimensions"
          data-sizes="{{ dimension_pairs|default([])|tojson|forceescape }}"

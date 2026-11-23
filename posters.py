@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 Sort = Literal["name", "conference_date", "relevance"]
 Direction = Literal["asc", "desc"]
 TEMPLATES = {
-    "arena" : ["landscape" ],
-    "central" : ["landscape", "portrait"],
+    "arena" : ["landscape", "square"],
+    "central" : ["landscape", "portrait", "square"],
     "vertical" : ["portrait"]
 }
 THEME_COLORS = (

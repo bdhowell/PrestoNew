@@ -20,6 +20,7 @@
                     body: JSON.stringify({
                         pid: Number(selection.dataset.pid),
                         template: choice.dataset.template,
+                        from_dimensions: selection.dataset.fromDimensions === "true",
                     }),
                 });
                 const result = await response.json();

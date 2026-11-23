@@ -337,13 +337,13 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
                 await route.fallback()
                 return
             posted.append(route.request.post_data_json)
-            await route.fulfill(json={"ok": True, "redirect": "/content/upload"})
+            await route.fulfill(json={"ok": True, "redirect": "/layout/template?from=dimensions"})
 
         await self.page.route("**/layout/dimensions", dimensions)
-        await self.page.route("**/content/upload", lambda route: route.fulfill(body="Upload"))
+        await self.page.route("**/layout/template*", lambda route: route.fulfill(body="Templates"))
         await self.page.goto("http://wikkit.test/layout/dimensions")
         await self.page.get_by_role("button", name="36 by 24 in, width by height").click()
-        await self.page.wait_for_url("**/content/upload", timeout=2000)
+        await self.page.wait_for_url("**/layout/template?from=dimensions", timeout=2000)
         self.assertEqual(posted, [{"dimensions": "24 in x 36 in"}])
         self.assertEqual(self.errors, [])
 
@@ -372,17 +372,17 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
                 await route.fallback()
                 return
             posted.append(route.request.post_data_json)
-            await route.fulfill(json={"ok": True, "redirect": "/layout/edit"})
+            await route.fulfill(json={"ok": True, "redirect": "/layout/template?from=dimensions"})
 
         await self.page.route("**/layout/dimensions", dimensions)
-        await self.page.route("**/layout/edit", lambda route: route.fulfill(body="Poster"))
+        await self.page.route("**/layout/template*", lambda route: route.fulfill(body="Templates"))
         await self.page.goto("http://wikkit.test/layout/dimensions?from=editor")
         await expect(self.page.locator('[data-orientation="square"]')).to_have_class("current-dimension")
         await expect(self.page.get_by_role("button", name="100 by 100 cm, width by height")).to_have_attribute(
             "aria-current", "true",
         )
         await self.page.get_by_role("button", name="100 by 100 cm, width by height").click()
-        await self.page.wait_for_url("**/layout/edit")
+        await self.page.wait_for_url("**/layout/template?from=dimensions")
         self.assertEqual(posted, [{"dimensions": "100 cm x 100 cm", "from_editor": True}])
         self.current_poster = posters.Poster(11, "Poster", None, 101.5, 97, None, None, False, None, units="cm")
         await self.page.goto("http://wikkit.test/layout/dimensions?from=editor")
@@ -408,7 +408,7 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_maximum_button_submits_and_redirects(self) -> None:
         self.prompt_on_connect = False
-        await self.page.route("**/content/upload", lambda route: route.fulfill(body="Upload"))
+        await self.page.route("**/layout/template*", lambda route: route.fulfill(body="Templates"))
         await self.page.goto("http://wikkit.test/layout/dimensions")
         self.socket.send(json.dumps({
             "say": '<p>Set the maximum dimensions?</p>'
@@ -422,8 +422,10 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
             while "ok" not in self.messages:
                 await asyncio.sleep(0.01)
         self.assertIn("ok", self.messages)
-        self.socket.send(json.dumps({"command": {"does": "redirect", "payload": "/content/upload"}}))
-        await self.page.wait_for_url("**/content/upload")
+        self.socket.send(json.dumps({
+            "command": {"does": "redirect", "payload": "/layout/template?from=dimensions"},
+        }))
+        await self.page.wait_for_url("**/layout/template?from=dimensions")
         self.assertEqual(self.errors, [])
 
     async def test_invalid_dimension_choice_shows_error_and_allows_retry(self) -> None:
@@ -440,10 +442,10 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
                     "preview": {"width": 36, "height": 24, "units": "in"},
                 })
             else:
-                await route.fulfill(json={"ok": True, "redirect": "/content/upload"})
+                await route.fulfill(json={"ok": True, "redirect": "/layout/template?from=dimensions"})
 
         await self.page.route("**/layout/dimensions", dimensions)
-        await self.page.route("**/content/upload", lambda route: route.fulfill(body="Upload"))
+        await self.page.route("**/layout/template*", lambda route: route.fulfill(body="Templates"))
         await self.page.goto("http://wikkit.test/layout/dimensions")
         choice = self.page.get_by_role("button", name="36 by 24 in, width by height")
         await choice.click()
@@ -452,7 +454,7 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await expect(self.page.locator("#poster-dimensions")).to_have_value("24 in x 36 in")
         await expect(choice).to_be_enabled()
         await choice.click()
-        await self.page.wait_for_url("**/content/upload")
+        await self.page.wait_for_url("**/layout/template?from=dimensions")
         self.assertEqual(posted, [{"dimensions": "24 in x 36 in"}] * 2)
         self.assertEqual(self.errors, [])
 

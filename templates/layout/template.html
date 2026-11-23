@@ -5,7 +5,8 @@
 {% block content %}
 <h1>Choose a poster template</h1>
 <p>Preview layouts in {{ orientation }} orientation for {{ display_dimensions }}.</p>
-<section id="template-selection" data-pid="{{ poster.pid }}">
+<section id="template-selection" data-pid="{{ poster.pid }}"
+         data-from-dimensions="{{ 'true' if from_dimensions else 'false' }}">
     {% if display_templates %}
     <fieldset id="template-selection-options">
         <legend>{% if available_templates %}Available layouts{% else %}Current layout{% endif %}</legend>
