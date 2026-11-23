@@ -8,6 +8,7 @@ import os
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import psycopg
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -280,6 +281,91 @@ async def edit_layout(
         logger.exception("Could not render poster %s", poster.pid)
         raise HTTPException(503, "Your layout could not be loaded.") from None
     return HTMLResponse(rendered, headers=PRIVATE)
+
+
+def poster_orientation(width: float, height: float) -> str:
+    return "landscape" if width > height else "portrait" if height > width else "square"
+
+
+def template_cancel_url(request: Request) -> str:
+    referer = request.headers.get("referer")
+    if referer:
+        parsed = urlsplit(referer)
+        if (
+            parsed.netloc == request.headers.get("host")
+            and parsed.path in {"/layout/dimensions", "/layout/edit", "/layout/layout"}
+        ):
+            return parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    return "/layout/edit"
+
+
+@router.get("/template")
+async def template_page(request: Request) -> Response:
+    if getattr(request.state, "user_id", None) is None:
+        return RedirectResponse("/account/signin", status_code=303)
+    try:
+        poster = await owned(request)
+    except psycopg.Error:
+        logger.exception("Could not load poster template choices")
+        raise HTTPException(503, "Your poster could not be loaded.") from None
+    if poster.purchased:
+        return RedirectResponse(f"/posters/{poster.pid}/open", status_code=303)
+    if poster.width is None or poster.height is None:
+        return RedirectResponse("/layout/dimensions", status_code=303)
+    try:
+        display_dimensions = poster.display_dimensions
+    except (KeyError, ValueError):
+        logger.exception("Poster %s has invalid dimensions", poster.pid)
+        raise HTTPException(503, "Your poster dimensions could not be loaded.") from None
+    orientation = poster_orientation(poster.width, poster.height)
+    available_templates = [
+        template for template, orientations in posters.TEMPLATES.items()
+        if orientation in orientations
+    ]
+    display_templates = list(available_templates)
+    if poster.template in posters.TEMPLATES and poster.template not in display_templates:
+        display_templates.append(poster.template)
+    await common.resume(request)
+    return render_page(
+        request, "layout/template.html", "layout-template-select",
+        poster=poster, orientation=orientation, display_dimensions=display_dimensions,
+        available_templates=available_templates,
+        display_templates=display_templates,
+        cancel_url=template_cancel_url(request),
+    )
+
+
+@router.post("/template")
+async def update_template(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    pid, template = data.get("pid"), data.get("template")
+    if (
+        type(pid) is not int or pid <= 0
+        or not isinstance(template, str) or template not in posters.TEMPLATES
+    ):
+        raise HTTPException(422, "Choose a valid poster template.")
+    try:
+        poster = await owned(request, pid, draft=True)
+        if poster.width is None or poster.height is None:
+            raise HTTPException(409, "Set the poster dimensions before choosing a template.")
+        orientation = poster_orientation(poster.width, poster.height)
+        if orientation not in posters.TEMPLATES[template]:
+            raise HTTPException(422, "Choose a template for this poster's orientation.")
+        width, height = poster.centimeters
+        saved = await posters.store().set_dimensions(
+            uid_for(request), poster.pid, width, height, poster.units, template,
+        )
+    except (KeyError, ValueError):
+        logger.exception("Could not save poster template for poster %s", pid)
+        raise HTTPException(
+            409, "Your poster dimensions are invalid. Update them before choosing a template.",
+        ) from None
+    except psycopg.Error:
+        logger.exception("Could not save poster template for poster %s", pid)
+        raise HTTPException(503, "Your poster template could not be saved.") from None
+    if not saved:
+        raise HTTPException(409, "This poster can no longer be edited.")
+    return JSONResponse({"ok": True, "redirect": "/layout/edit"}, headers=PRIVATE)
 
 
 @router.post("/geometry")

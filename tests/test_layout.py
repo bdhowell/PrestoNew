@@ -576,6 +576,72 @@ class LayoutRouteTests(unittest.TestCase):
         ordinary = html.fromstring(self.client.get("/layout/dimensions").text)
         self.assertFalse(ordinary.xpath('//*[@id="return-to-poster" or @id="current-dimensions"]'))
 
+    def test_template_page_shows_only_matching_orientations_and_marks_current(self) -> None:
+        self.store.get.return_value = replace(DRAFT, template="central")
+        response = self.client.get(
+            "/layout/template",
+            headers={"referer": "http://testserver/layout/dimensions?from=editor"},
+        )
+        self.assertEqual(response.status_code, 200)
+        document = html.fromstring(response.text)
+        self.assertEqual(
+            document.xpath('//*[@id="template-selection"]//input[@name="template"]/@value'),
+            ["central", "vertical"],
+        )
+        current = document.xpath(
+            '//*[@id="template-selection"]//label[contains(@class, "current-template")]',
+        )
+        self.assertEqual(len(current), 1)
+        self.assertEqual(current[0].xpath('.//input/@value'), ["central"])
+        self.assertEqual(current[0].xpath('.//span[@class="template-current-label"]/text()'),
+                         ["Current template"])
+        preview = current[0].xpath('.//span[@class="template-preview"]')[0]
+        self.assertIn("0.75000", preview.get("style"))
+        self.assertEqual(
+            document.get_element_by_id("template-selection").xpath('.//a[@href]/@href'),
+            ["/layout/dimensions?from=editor"],
+        )
+
+    def test_template_page_cancel_ignores_external_referer(self) -> None:
+        document = html.fromstring(self.client.get(
+            "/layout/template", headers={"referer": "https://attacker.test/layout/dimensions"},
+        ).text)
+        self.assertEqual(
+            document.get_element_by_id("template-selection").xpath('.//a[@href]/@href'),
+            ["/layout/edit"],
+        )
+
+    def test_template_page_still_outlines_a_current_orientation_mismatch(self) -> None:
+        self.store.get.return_value = replace(DRAFT, template="arena")
+        document = html.fromstring(self.client.get("/layout/template").text)
+        current = document.xpath(
+            '//*[@id="template-selection"]//label[contains(@class, "current-template")]',
+        )
+        self.assertEqual(len(current), 1)
+        self.assertEqual(current[0].xpath('.//input/@value'), ["arena"])
+        self.assertEqual(current[0].xpath('.//input/@disabled'), ["disabled"])
+        self.assertIn(
+            "not available for this orientation",
+            current[0].xpath('.//span[@class="template-current-label"]/text()')[0],
+        )
+
+    def test_template_updates_require_matching_orientation_and_preserve_dimensions(self) -> None:
+        response = self.client.post(
+            "/layout/template", json={"pid": 11, "template": "central"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "redirect": "/layout/edit"})
+        self.store.set_dimensions.assert_awaited_once_with(
+            7, 11, 36 * 2.54, 48 * 2.54, "in", "central",
+        )
+
+        self.store.set_dimensions.reset_mock()
+        response = self.client.post(
+            "/layout/template", json={"pid": 11, "template": "arena"},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.store.set_dimensions.assert_not_awaited()
+
     def test_resumed_dimensions_page_restores_its_own_resumption_marker(self) -> None:
         response = self.client.get("/layout/dimensions?tag=a%2Fb&tag=two&xyzzy=arpa")
         self.assertEqual(response.status_code, 200)

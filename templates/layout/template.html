@@ -1,0 +1,62 @@
+{% extends "page.html" %}
+{% block title %}Choose a poster template - {{ app_name() }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="/static/css/pages/layout-template-select.css">{% endblock %}
+{% block scripts %}<script src="/static/javascript/pages/layout-template-select.js" defer></script>{% endblock %}
+{% block content %}
+<h1>Choose a poster template</h1>
+<p>Preview layouts in {{ orientation }} orientation for {{ display_dimensions }}.</p>
+<form id="template-selection" data-pid="{{ poster.pid }}">
+    {% if display_templates %}
+    <fieldset id="template-selection-options">
+        <legend>{% if available_templates %}Available layouts{% else %}Current layout{% endif %}</legend>
+        <div class="template-selection-grid">
+            {% for option in display_templates %}
+            <label class="template-card{% if poster.template == option %} current-template{% endif %}">
+                <input type="radio" name="template" value="{{ option }}"
+                       {% if option not in available_templates %}disabled{% endif %}
+                       {% if (poster.template == option and option in available_templates)
+                           or (poster.template not in available_templates and available_templates
+                               and option == available_templates[0]) %}checked{% endif %}>
+                <span class="template-card-title">{{ option | capitalize }}</span>
+                <span class="template-preview" style="--poster-aspect: {{ '%.5f' | format(poster.width / poster.height) }}">
+                    <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                        <rect x="4" y="4" width="92" height="10" rx="1"></rect>
+                        <rect x="4" y="17" width="21" height="63" rx="1"></rect>
+                        <rect x="28" y="17" width="44" height="63" rx="1"></rect>
+                        {% if option == "arena" %}
+                        <rect x="75" y="17" width="21" height="63" rx="1"></rect>
+                        <rect x="4" y="83" width="92" height="13" rx="1"></rect>
+                        {% else %}
+                        <rect x="75" y="17" width="21" height="19" rx="1"></rect>
+                        <rect x="75" y="39" width="21" height="19" rx="1"></rect>
+                        <rect x="75" y="61" width="21" height="19" rx="1"></rect>
+                        <rect x="4" y="83" width="92" height="13" rx="1"></rect>
+                        {% endif %}
+                    </svg>
+                </span>
+                {% if poster.template == option %}
+                <span class="template-current-label">
+                    {% if option in available_templates %}
+                    Current template
+                    {% else %}
+                    Current template; not available for this orientation
+                    {% endif %}
+                </span>
+                {% endif %}
+            </label>
+            {% endfor %}
+        </div>
+    </fieldset>
+    {% endif %}
+    {% if not available_templates %}
+    <p role="status">No templates are available for this poster orientation.</p>
+    {% endif %}
+    <p id="template-selection-status" role="status" aria-live="polite"></p>
+    <div class="template-selection-actions">
+        <a class="button" href="{{ cancel_url }}">Cancel</a>
+        {% if available_templates %}
+        <button id="template-selection-apply" type="submit">Use this template</button>
+        {% endif %}
+    </div>
+</form>
+{% endblock %}

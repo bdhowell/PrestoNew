@@ -24,7 +24,11 @@ import identity
 logger = logging.getLogger(__name__)
 Sort = Literal["name", "conference_date", "relevance"]
 Direction = Literal["asc", "desc"]
-TEMPLATES = ("arena", "central", "vertical")
+TEMPLATES = {
+    "arena" : ["landscape" ],
+    "central" : ["landscape", "portrait"],
+    "vertical" : ["portrait"]
+}
 THEME_COLORS = (
     "blue", "red", "yellow", "green", "brown", "orange", "purple",
     "dark-grey", "light-grey", "black-and-white",
