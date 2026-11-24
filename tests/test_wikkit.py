@@ -126,10 +126,11 @@ class WikkitPageTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/poster/create?step=1&a=b")
 
-    def test_chatbot_loads_aladin_font(self) -> None:
+    def test_wikkit_pages_load_aladin_and_dm_sans(self) -> None:
         response = self.client.get("/wikkit")
         self.assertIn(
-            'href="https://fonts.googleapis.com/css2?family=Aladin&display=swap"',
+            'href="https://fonts.googleapis.com/css2?family=Aladin&family=DM+Sans:'
+            'ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap"',
             response.text,
         )
         self.assertNotIn("family=Henny+Penny", response.text)
@@ -327,6 +328,15 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_standard_page_loads_common_script(self) -> None:
         await self.page.goto("http://wikkit.test/layout/dimensions")
         self.assertEqual(await self.page.evaluate("numberToWords(3)"), "three")
+        self.assertEqual(self.errors, [])
+
+    async def test_standard_page_content_uses_dm_sans(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        for selector in ("body", "main"):
+            self.assertEqual(
+                await self.page.locator(selector).evaluate("element => getComputedStyle(element).fontFamily"),
+                '"DM Sans", system-ui, sans-serif',
+            )
         self.assertEqual(self.errors, [])
 
     async def test_dimension_choice_saves_and_navigates_without_prompt(self) -> None:

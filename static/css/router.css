@@ -40,7 +40,7 @@ body:has(> #chatbot) > #controls {
     flex-direction: column;
     width: var(--wikkit-panel-space);
     max-width: 100vw;
-    line-height: 1.6rem;
+    line-height: 1.3rem;
     overflow: hidden;
     outline: 2px solid #c9a227;
     outline-offset: -2px;
