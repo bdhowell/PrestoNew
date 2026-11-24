@@ -23,7 +23,8 @@
       data-socket="{{ socket_path }}" data-chat-window-transition="{{ chat_window_transition_ms }}"
       data-chat-input-transition="{{ chat_input_transition_ms }}"
       data-wikkit-offline="{{ 'true' if wikkit_offline|default(false) else 'false' }}"
-      data-clear-chat="{{ 'true' if clear_chat|default(false) else 'false' }}">
+      data-clear-chat="{{ 'true' if clear_chat|default(false) else 'false' }}"
+      data-user-name="{{ user_name|default('Friend') }}">
     {% include "menu.html" %}
     <main>
         {% block content %}{% endblock %}
