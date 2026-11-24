@@ -23,7 +23,8 @@ For a detailed feature inventory, see [FEATURES.md](FEATURES.md). For search and
 - Optional AI-assisted features for extraction and enrichment
 
 Wikkit opens as a fixed panel on the right. Use its close button to collapse it
-and the Wikkit tab at the right edge to reopen it.
+and the Wikkit tab at the right edge to reopen it. Page content and the poster
+editor viewport resize with the panel.
 
 ## Tech stack
 

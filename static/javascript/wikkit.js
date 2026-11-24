@@ -61,7 +61,7 @@
         chatbot.id = "chatbot";
         chatbot.setAttribute("aria-label", "Wikkit chatbot");
         chatbot.dataset.socket = document.body.dataset.socket || "/wikkit/ws";
-        chatbot.style.setProperty("--chat-window-transition", `${document.body.dataset.chatWindowTransition || 440}ms`);
+        document.body.style.setProperty("--chat-window-transition", `${document.body.dataset.chatWindowTransition || 440}ms`);
         chatbot.style.setProperty("--chat-input-transition", `${document.body.dataset.chatInputTransition || 500}ms`);
         chatbot.innerHTML = '<header class="chatbot-handle">Wikkit</header>'
             + '<div id="chatlog" role="log" aria-live="polite"></div>'

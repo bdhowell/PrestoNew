@@ -586,6 +586,28 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(dimensions["scrollHeight"], dimensions["clientHeight"] + 1)
         await self.assert_content_bounds()
 
+    async def test_fit_tracks_wikkit_panel(self) -> None:
+        await self.page.route("https://presto.test/**", lambda route: route.fulfill(body="<!doctype html>"))
+        await self.page.goto("https://presto.test/")
+        await self.page.set_viewport_size({"width": 900, "height": 1000})
+        await self.editor()
+        await self.set_zoom("fit")
+        original = await self.dimensions()
+        await self.page.evaluate("document.body.dataset.wikkitOffline = 'true'")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+        await self.page.evaluate("window.wikkit = connect(() => {})")
+        await self.page.wait_for_timeout(600)
+        opened = await self.dimensions()
+        self.assertAlmostEqual(opened["clientWidth"], original["clientWidth"] - 256, delta=1)
+        self.assertLess(opened["sliderMin"], original["sliderMin"])
+        self.assertLessEqual(opened["scrollWidth"], opened["clientWidth"] + 1)
+        self.assertLessEqual(opened["scrollHeight"], opened["clientHeight"] + 1)
+        await self.page.evaluate("wikkit.execute({does: 'hide-chat'})")
+        await self.page.wait_for_timeout(600)
+        closed = await self.dimensions()
+        self.assertAlmostEqual(closed["clientWidth"], original["clientWidth"], delta=1)
+        self.assertAlmostEqual(closed["sliderMin"], original["sliderMin"], delta=0.01)
+
     async def test_zoom_centers_poster_without_clipping_scrollable_edges(self) -> None:
         for template in posters.TEMPLATES:
             with self.subTest(template=template):

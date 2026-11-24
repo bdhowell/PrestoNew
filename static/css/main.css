@@ -86,7 +86,8 @@
   min-height: 100vh;
   background: linear-gradient(160deg, #f6f0ff, #e4e5fb 60%, #d4edf0);
   color: #292343;
-  font-family: system-ui, sans-serif;
+  font-family: "DM Sans", Aladin, system-ui, sans-serif;
+  font-optical-sizing: auto;
   line-height: 1.5;
 }
 

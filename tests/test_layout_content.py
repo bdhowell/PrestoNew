@@ -939,7 +939,7 @@ class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             await chatbot.evaluate("element => getComputedStyle(element).transitionDuration"),
-            "0.44s, 0.44s, 0s",
+            "0.44s, 0s",
         )
         self.assertEqual(await chatbot.evaluate("element => getComputedStyle(element).visibility"), "visible")
         await button.click()
@@ -973,12 +973,78 @@ class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
             await self.page.add_style_tag(path=str(ROOT / "static/css" / stylesheet))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
         await self.page.evaluate("window.wikkit = connect(() => {})")
+        await self.page.wait_for_function(
+            "Math.abs(document.querySelector('#chatbot').getBoundingClientRect().width - 256) < 0.1",
+        )
         positions = await self.page.evaluate("""() => ({
             menuBottom: document.querySelector('.basic-menu').getBoundingClientRect().bottom,
             chatbot: document.querySelector('#chatbot').getBoundingClientRect().toJSON(),
         })""")
         self.assertAlmostEqual(positions["chatbot"]["top"], positions["menuBottom"], delta=0.1)
         self.assertAlmostEqual(positions["chatbot"]["width"], 256, delta=0.1)
+
+    async def test_editor_viewport_and_controls_track_chatbot(self) -> None:
+        await self.page.goto("https://presto.test/layout")
+        await self.page.set_content(
+            '<body data-wikkit-offline="true"><nav class="basic-menu">Menu</nav>'
+            '<div id="poster-container"></div><div id="controls">Controls</div></body>',
+        )
+        for stylesheet in ("main.css", "layout.css", "router.css"):
+            await self.page.add_style_tag(path=str(ROOT / "static/css" / stylesheet))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+        opening = await self.page.evaluate("""async () => {
+            window.wikkit = connect(() => {});
+            const frames = [];
+            const start = performance.now();
+            do {
+                await new Promise(requestAnimationFrame);
+                frames.push({
+                    panelLeft: document.querySelector('#chatbot').getBoundingClientRect().left,
+                    viewportRight: document.querySelector('#poster-container').getBoundingClientRect().right,
+                });
+            } while (performance.now() - start < 550);
+            return frames;
+        }""")
+        for frame in opening:
+            self.assertAlmostEqual(frame["panelLeft"], frame["viewportRight"], delta=1)
+        samples = await self.page.evaluate("""async () => {
+            const bot = document.querySelector('#chatbot');
+            const viewport = document.querySelector('#poster-container');
+            const controls = document.querySelector('#controls');
+            const samples = [];
+            for (const command of ['hide-chat', 'show-chat']) {
+                await wikkit.execute({does: command});
+                const frames = [];
+                const start = performance.now();
+                do {
+                    await new Promise(requestAnimationFrame);
+                    frames.push({
+                        panelLeft: bot.getBoundingClientRect().left,
+                        viewportRight: viewport.getBoundingClientRect().right,
+                        controlsRight: controls.getBoundingClientRect().right,
+                    });
+                } while (performance.now() - start < 550);
+                samples.push(frames);
+            }
+            return samples;
+        }""")
+        for frames in samples:
+            self.assertGreater(len(frames), 2)
+            for frame in frames:
+                self.assertAlmostEqual(frame["panelLeft"], frame["viewportRight"], delta=1)
+                self.assertAlmostEqual(frame["panelLeft"], frame["controlsRight"], delta=1)
+        self.assertAlmostEqual(samples[0][-1]["viewportRight"], self.page.viewport_size["width"], delta=1)
+        self.assertAlmostEqual(samples[1][-1]["viewportRight"], self.page.viewport_size["width"] - 256, delta=1)
+        await self.page.set_viewport_size({"width": 200, "height": 600})
+        await self.page.wait_for_timeout(500)
+        sizes = await self.page.evaluate("""() => ({
+            panelLeft: document.querySelector('#chatbot').getBoundingClientRect().left,
+            viewportRight: document.querySelector('#poster-container').getBoundingClientRect().right,
+            controlsRight: document.querySelector('#controls').getBoundingClientRect().right,
+        })""")
+        self.assertAlmostEqual(sizes["panelLeft"], 0, delta=1)
+        self.assertAlmostEqual(sizes["panelLeft"], sizes["viewportRight"], delta=1)
+        self.assertAlmostEqual(sizes["panelLeft"], sizes["controlsRight"], delta=1)
 
 
 class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):

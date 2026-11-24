@@ -653,6 +653,68 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(box["height"] + box["y"], self.page.viewport_size["height"], delta=0.1)
         self.assertEqual(self.errors, [])
 
+    async def test_main_content_tracks_chatbot_during_transitions(self) -> None:
+        self.prompt_on_connect = False
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        for width in (900, 200):
+            with self.subTest(width=width):
+                await self.page.set_viewport_size({"width": width, "height": 600})
+                for _ in range(5):
+                    edges = await self.page.evaluate("""() => ({
+                        panelLeft: document.querySelector('#chatbot').getBoundingClientRect().left,
+                        contentRight: document.querySelector('main').getBoundingClientRect().right,
+                    })""")
+                    self.assertAlmostEqual(edges["panelLeft"], edges["contentRight"], delta=1)
+                    await self.page.wait_for_timeout(30)
+                await self.page.wait_for_timeout(500)
+                frames = await self.page.evaluate("""async () => {
+                    const bot = document.querySelector('#chatbot');
+                    const main = document.querySelector('main');
+                    const samples = [];
+                    for (const command of ['hide-chat', 'show-chat']) {
+                        await window.wikkit.execute({does: command});
+                        const frames = [];
+                        const start = performance.now();
+                        do {
+                            await new Promise(requestAnimationFrame);
+                            frames.push({
+                                panelLeft: bot.getBoundingClientRect().left,
+                                contentRight: main.getBoundingClientRect().right,
+                            });
+                        } while (performance.now() - start < 550);
+                        samples.push(frames);
+                    }
+                    return samples;
+                }""")
+                for transition in frames:
+                    self.assertGreater(len(transition), 2)
+                    for frame in transition:
+                        self.assertAlmostEqual(frame["panelLeft"], frame["contentRight"], delta=1)
+                self.assertAlmostEqual(frames[0][-1]["contentRight"], width, delta=1)
+                self.assertAlmostEqual(frames[1][-1]["contentRight"], max(width - 256, 0), delta=1)
+        await self.page.set_viewport_size({"width": 900, "height": 600})
+        await self.page.wait_for_timeout(500)
+        frames = await self.page.evaluate("""async () => {
+            document.body.style.setProperty('--chat-window-transition', '150ms');
+            await wikkit.execute({does: 'hide-chat'});
+            await new Promise(resolve => setTimeout(resolve, 50));
+            await wikkit.execute({does: 'show-chat'});
+            const frames = [];
+            const start = performance.now();
+            do {
+                await new Promise(requestAnimationFrame);
+                frames.push({
+                    panelLeft: document.querySelector('#chatbot').getBoundingClientRect().left,
+                    contentRight: document.querySelector('main').getBoundingClientRect().right,
+                });
+            } while (performance.now() - start < 200);
+            return frames;
+        }""")
+        for frame in frames:
+            self.assertAlmostEqual(frame["panelLeft"], frame["contentRight"], delta=1)
+        self.assertAlmostEqual(frames[-1]["contentRight"], 644, delta=1)
+        self.assertEqual(self.errors, [])
+
     async def test_chatbot_close_and_reopen_controls_restore_focus_and_state(self) -> None:
         self.prompt_on_connect = False
         await self.page.goto("http://wikkit.test/layout/dimensions")
