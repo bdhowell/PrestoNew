@@ -634,7 +634,7 @@ class LayoutRouteTests(unittest.TestCase):
             ["/layout/edit"],
         )
 
-    def test_template_selection_from_dimensions_continues_to_evaluation(self) -> None:
+    def test_template_selection_from_dimensions_continues_to_upload(self) -> None:
         for path, headers in (
             ("/layout/template?from=dimensions", {}),
             ("/layout/template", {"referer": "http://testserver/layout/dimensions?from=editor"}),
@@ -652,7 +652,7 @@ class LayoutRouteTests(unittest.TestCase):
             json={"pid": 11, "template": "central", "from_dimensions": True},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["redirect"], "/content/evaluate")
+        self.assertEqual(response.json()["redirect"], "/content/upload")
         self.assertEqual(
             self.client.post(
                 "/layout/template",

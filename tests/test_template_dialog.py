@@ -52,10 +52,10 @@ class TemplateDialogTests(unittest.TestCase):
 
         def save(route) -> None:
             posted.append(route.request.post_data_json)
-            route.fulfill(json={"ok": True, "redirect": "/content/evaluate"})
+            route.fulfill(json={"ok": True, "redirect": "/content/upload"})
 
         self.page.route("**/layout/template", save)
-        self.page.route("**/content/evaluate", lambda route: route.fulfill(body="Evaluation"))
+        self.page.route("**/content/upload", lambda route: route.fulfill(body="Upload"))
         self.page.set_content("""
             <section id="template-selection" data-pid="11" data-from-dimensions="true">
                 <button data-template="central" data-available="true">Central</button>
@@ -64,7 +64,7 @@ class TemplateDialogTests(unittest.TestCase):
         """)
         self.page.add_script_tag(path=str(ROOT / "static/javascript/pages/layout-template-select.js"))
         self.page.get_by_role("button", name="Central").click()
-        self.page.wait_for_url("**/content/evaluate")
+        self.page.wait_for_url("**/content/upload")
         self.assertEqual(posted, [{"pid": 11, "template": "central", "from_dimensions": True}])
 
     def test_template_button_contains_its_example_poster(self) -> None:

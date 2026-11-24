@@ -373,7 +373,7 @@ async def update_template(request: Request) -> JSONResponse:
     if not saved:
         raise HTTPException(409, "This poster can no longer be edited.")
     return JSONResponse({
-        "ok": True, "redirect": "/content/evaluate" if from_dimensions else "/layout/edit",
+        "ok": True, "redirect": "/content/upload" if from_dimensions else "/layout/edit",
     }, headers=PRIVATE)
 
 
