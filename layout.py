@@ -325,13 +325,18 @@ async def template_page(request: Request) -> Response:
     display_templates = list(available_templates)
     if poster.template in posters.TEMPLATES and poster.template not in display_templates:
         display_templates.append(poster.template)
+    cancel_url = template_cancel_url(request)
+    from_dimensions = (
+        request.query_params.get("from") == "dimensions"
+        or urlsplit(cancel_url).path == "/layout/dimensions"
+    )
     await common.resume(request)
     return render_page(
         request, "layout/template.html", "layout-template-select",
         poster=poster, orientation=orientation, display_dimensions=display_dimensions,
         available_templates=available_templates,
         display_templates=display_templates,
-        cancel_url=template_cancel_url(request),
+        cancel_url=cancel_url, from_dimensions=from_dimensions,
     )
 
 
@@ -339,9 +344,11 @@ async def template_page(request: Request) -> Response:
 async def update_template(request: Request) -> JSONResponse:
     data = await read_json(request)
     pid, template = data.get("pid"), data.get("template")
+    from_dimensions = data.get("from_dimensions", False)
     if (
         type(pid) is not int or pid <= 0
         or not isinstance(template, str) or template not in posters.TEMPLATES
+        or not isinstance(from_dimensions, bool)
     ):
         raise HTTPException(422, "Choose a valid poster template.")
     try:
@@ -365,7 +372,9 @@ async def update_template(request: Request) -> JSONResponse:
         raise HTTPException(503, "Your poster template could not be saved.") from None
     if not saved:
         raise HTTPException(409, "This poster can no longer be edited.")
-    return JSONResponse({"ok": True, "redirect": "/layout/edit"}, headers=PRIVATE)
+    return JSONResponse({
+        "ok": True, "redirect": "/content/upload" if from_dimensions else "/layout/edit",
+    }, headers=PRIVATE)
 
 
 @router.post("/geometry")
@@ -863,7 +872,7 @@ async def update_dimensions(request: Request) -> JSONResponse:
     if not isinstance(text, str) or len(text) > 100:
         raise HTTPException(422, "Enter height x width and units.")
     template = data.get("template")
-    if template is not None and template not in posters.TEMPLATES:
+    if template is not None and (not isinstance(template, str) or template not in posters.TEMPLATES):
         raise HTTPException(422, "Choose a valid poster template.")
     from_editor = data.get("from_editor", False)
     if not isinstance(from_editor, bool):
@@ -884,7 +893,7 @@ async def update_dimensions(request: Request) -> JSONResponse:
         raise HTTPException(503, "Your poster dimensions could not be saved.") from None
     return JSONResponse({
         "ok": True, "preview": payload,
-        "redirect": "/layout/edit" if template is not None or from_editor else "/content/upload",
+        "redirect": "/layout/edit" if template is not None else "/layout/template?from=dimensions",
     })
 
 
@@ -918,7 +927,7 @@ async def dimensions_edit_workflow(bot: Chatbot) -> None:
                 errors = rules.errors(width, height, units)
                 if not errors:
                     await save_dimensions(uid, pid, width, height, units)
-                    await bot.send({"command": {"does": "redirect", "payload": "/layout/edit"}})
+                    await bot.send({"command": {"does": "redirect", "payload": "/layout/template?from=dimensions"}})
                     return
                 prompt = "<p>" + " ".join(errors) + "</p>"
                 await bot.send({"command": {
@@ -1005,7 +1014,7 @@ async def dimensions_workflow(bot: Chatbot) -> None:
                     "does": "correct-dimensions", "payload": dimensions_payload(width, height, units),
                 }})
                 width = height = None
-        await bot.send({"command": {"does": "redirect", "payload": "/content/upload"}})
+        await bot.send({"command": {"does": "redirect", "payload": "/layout/template?from=dimensions"}})
     except (psycopg.Error, ValueError, HTTPException):
         logger.exception("Could not set dimensions for poster %s", pid)
         await bot.send({"say": "<p>Your poster dimensions could not be saved. Please reload and try again.</p>"})
