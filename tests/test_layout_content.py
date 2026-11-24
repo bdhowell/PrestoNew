@@ -158,6 +158,36 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
             "el => getComputedStyle(el).paddingTop",
         ), "48px")
 
+    async def test_vertical_section_groups_are_contiguous_with_single_separators(self) -> None:
+        await self.page.set_content("""<div class="section-parent vertical">
+            <div class="section">Citations</div>
+            <div class="section">Acknowledgements</div>
+            <div class="section">Information</div>
+        </div>""")
+        await self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
+        children = await self.page.locator(".section-parent > .section").evaluate_all(
+            """sections => sections.map(section => {
+                const bounds = section.getBoundingClientRect();
+                const style = getComputedStyle(section);
+                return {
+                    top: bounds.top,
+                    bottom: bounds.bottom,
+                    borderTop: style.borderTopWidth,
+                    borderBottom: style.borderBottomWidth,
+                };
+            })""",
+        )
+        self.assertEqual(
+            await self.page.locator(".section-parent").evaluate(
+                "el => getComputedStyle(el).gap",
+            ),
+            "0px",
+        )
+        for previous, current in zip(children, children[1:]):
+            self.assertAlmostEqual(previous["bottom"], current["top"], delta=0.1)
+            self.assertEqual(current["borderTop"], "0px")
+            self.assertNotEqual(previous["borderBottom"], "0px")
+
     async def asyncSetUp(self) -> None:
         playwright = await async_playwright().start()
         self.addAsyncCleanup(playwright.stop)
@@ -261,6 +291,25 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
     async def test_sources_button_redirects_to_content_review(self) -> None:
         await self.page.locator("#sources").click()
         await self.page.wait_for_url("https://presto.test/content/review")
+
+    async def test_dimensions_button_flushes_and_opens_editor_dimensions(self) -> None:
+        await self.page.evaluate(
+            "window.flushPosterContent = async () => { sessionStorage.setItem('flushed', 'yes'); }",
+        )
+        await self.page.locator("#dimensions").click()
+        await self.page.wait_for_url("https://presto.test/layout/dimensions?from=editor")
+        self.assertEqual(await self.page.evaluate("sessionStorage.getItem('flushed')"), "yes")
+
+    async def test_dimensions_button_stays_on_editor_when_flush_fails(self) -> None:
+        await self.page.evaluate("""() => {
+            window.flushPosterContent = async () => { throw new Error("Save failed"); };
+            window.wikkit = {say: message => { window.failureMessage = message; }};
+        }""")
+        await self.page.locator("#dimensions").click()
+        await self.page.wait_for_function("window.failureMessage !== undefined")
+        self.assertIn("could not be saved", await self.page.evaluate("window.failureMessage"))
+        self.assertTrue(await self.page.locator("#dimensions").is_enabled())
+        self.assertEqual(self.page.url, "https://presto.test/")
 
     async def test_theme_controls_save_all_settings_and_keep_other_appearance(self) -> None:
         await self.page.locator("#theme").click()

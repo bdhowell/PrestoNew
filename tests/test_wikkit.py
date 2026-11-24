@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import FastAPI, WebSocket
 from fastapi.staticfiles import StaticFiles
@@ -20,6 +20,7 @@ with patch.dict(os.environ, {"SESSION_BACKEND": "none"}):
     from app import app
 from llm import IntentDispatchResult
 import identity
+import posters
 from routers import wikkit
 import wikkit as chatbot
 
@@ -277,6 +278,7 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.word_deviation = 0
         self.prompt_on_connect = True
         self.messages = []
+        self.current_poster = posters.Poster(11, "Poster", None, 48, 36, None, None, False, None, units="in")
         dimension_pairs = json.loads(
             (Path(__file__).resolve().parent.parent / "stipulations" / "sizes.json").read_text()
         )["poster_dimension_pairs"]
@@ -286,9 +288,11 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         async def serve(route) -> None:
             path = urlsplit(route.request.url).path
             if path == "/layout/dimensions":
+                from_editor = parse_qs(urlsplit(route.request.url).query).get("from") == ["editor"]
                 rendered = wikkit.render_page(
                     request, "layout/dimensions.html", "layout-dimensions",
-                    dimension_pairs=dimension_pairs,
+                    dimension_pairs=dimension_pairs, from_editor=from_editor, poster=self.current_poster,
+                    wikkit_workflow="layout-dimensions-edit" if from_editor else "layout-dimensions",
                 )
                 await route.fulfill(body=rendered.body, content_type="text/html")
             elif path.startswith("/static/"):
@@ -341,6 +345,65 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.get_by_role("button", name="36 by 24 in, width by height").click()
         await self.page.wait_for_url("**/content/upload", timeout=2000)
         self.assertEqual(posted, [{"dimensions": "24 in x 36 in"}])
+        self.assertEqual(self.errors, [])
+
+    async def test_editor_dimensions_highlight_current_and_return(self) -> None:
+        self.prompt_on_connect = False
+        await self.page.route("**/layout/edit", lambda route: route.fulfill(body="Poster"))
+        await self.page.goto("http://wikkit.test/layout/dimensions?from=editor")
+        await expect(self.page.locator("#current-dimensions")).to_contain_text("48 x 36 in")
+        await expect(self.page.locator('[data-unit="in"]')).to_have_class("current-dimension")
+        await expect(self.page.locator('[data-orientation="landscape"]')).to_have_class("current-dimension")
+        current = self.page.get_by_role("button", name="48 by 36 in, width by height")
+        await expect(current).to_have_attribute("aria-current", "true")
+        await self.page.get_by_role("button", name="cm", exact=True).click()
+        await expect(self.page.locator('[data-unit="in"]')).to_have_class("current-dimension")
+        await self.page.locator("#return-to-poster").click()
+        await self.page.wait_for_url("**/layout/edit")
+        self.assertEqual(self.errors, [])
+
+    async def test_editor_square_and_custom_dimensions_and_picker_save(self) -> None:
+        self.prompt_on_connect = False
+        self.current_poster = posters.Poster(11, "Poster", None, 100, 100, None, None, False, None, units="cm")
+        posted = []
+
+        async def dimensions(route) -> None:
+            if route.request.method != "POST":
+                await route.fallback()
+                return
+            posted.append(route.request.post_data_json)
+            await route.fulfill(json={"ok": True, "redirect": "/layout/edit"})
+
+        await self.page.route("**/layout/dimensions", dimensions)
+        await self.page.route("**/layout/edit", lambda route: route.fulfill(body="Poster"))
+        await self.page.goto("http://wikkit.test/layout/dimensions?from=editor")
+        await expect(self.page.locator('[data-orientation="square"]')).to_have_class("current-dimension")
+        await expect(self.page.get_by_role("button", name="100 by 100 cm, width by height")).to_have_attribute(
+            "aria-current", "true",
+        )
+        await self.page.get_by_role("button", name="100 by 100 cm, width by height").click()
+        await self.page.wait_for_url("**/layout/edit")
+        self.assertEqual(posted, [{"dimensions": "100 cm x 100 cm", "from_editor": True}])
+        self.current_poster = posters.Poster(11, "Poster", None, 101.5, 97, None, None, False, None, units="cm")
+        await self.page.goto("http://wikkit.test/layout/dimensions?from=editor")
+        await expect(self.page.locator("#current-dimensions")).to_contain_text("101.5 x 97 cm")
+        await expect(self.page.locator("#dimension-sizes [aria-current]")).to_have_count(0)
+        self.assertEqual(self.errors, [])
+
+    async def test_editor_wikkit_return_button_sends_response(self) -> None:
+        self.prompt_on_connect = False
+        await self.page.route("**/layout/edit", lambda route: route.fulfill(body="Poster"))
+        await self.page.goto("http://wikkit.test/layout/dimensions?from=editor")
+        self.socket.send(json.dumps({
+            "say": '<button data-sends="return">Return to Poster</button>',
+            "command": {"does": "request-response"},
+        }))
+        await self.page.locator('#chatlog button[data-sends="return"]').click()
+        async with asyncio.timeout(2):
+            while "return" not in self.messages:
+                await asyncio.sleep(0.01)
+        self.socket.send(json.dumps({"command": {"does": "redirect", "payload": "/layout/edit"}}))
+        await self.page.wait_for_url("**/layout/edit")
         self.assertEqual(self.errors, [])
 
     async def test_maximum_button_submits_and_redirects(self) -> None:

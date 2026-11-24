@@ -1,0 +1,89 @@
+{% extends "page.html" %}
+{% block title %}Choose a poster template - {{ app_name() }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="/static/css/pages/layout-template-select.css">{% endblock %}
+{% block scripts %}<script src="/static/javascript/pages/layout-template-select.js" defer></script>{% endblock %}
+{% block content %}
+<h1>Choose a poster template</h1>
+<p>Preview layouts in {{ orientation }} orientation for {{ display_dimensions }}.</p>
+<section id="template-selection" data-pid="{{ poster.pid }}">
+    {% if display_templates %}
+    <fieldset id="template-selection-options">
+        <legend>{% if available_templates %}Available layouts{% else %}Current layout{% endif %}</legend>
+        <div class="template-selection-grid">
+            {% for option in display_templates %}
+            <button type="button"
+                    class="template-card{% if poster.template == option %} current-template{% endif %}"
+                    data-template="{{ option }}"
+                    data-available="{{ 'true' if option in available_templates else 'false' }}"
+                    aria-label="Use the {{ option | capitalize }} template"
+                    {% if poster.template == option %}aria-current="true"{% endif %}
+                    {% if option not in available_templates %}disabled{% endif %}>
+                <span class="template-card-title">{{ option | capitalize }}</span>
+                <span class="template-preview" style="--poster-aspect: {{ '%.5f' | format(poster.width / poster.height) }}">
+                    <span class="sample-poster" aria-hidden="true">
+                        <span class="sample-header">
+                            <span class="sample-title">Title</span>
+                            <span class="sample-authors">Authors</span>
+                        </span>
+                        <span class="sample-layout {% if option == 'arena' %}sample-arena{% else %}sample-central{% endif %}">
+                            {% if option == "arena" %}
+                            <span class="sample-column">
+                                <span class="sample-section">Introduction</span>
+                                <span class="sample-section">Materials and Methods</span>
+                            </span>
+                            <span class="sample-column">
+                                <span class="sample-section">Results</span>
+                            </span>
+                            <span class="sample-column">
+                                <span class="sample-section">Conclusion</span>
+                            </span>
+                            <span class="sample-footer">
+                                <span class="sample-section">Literature Cited</span>
+                                <span class="sample-section sample-section-acknowledgements"
+                                      lang="en">Ack&shy;nowl&shy;edg&shy;ements</span>
+                                <span class="sample-section">Additional Information</span>
+                            </span>
+                            {% else %}
+                            <span class="sample-column">
+                                <span class="sample-section">Introduction</span>
+                                <span class="sample-section">Materials and Methods</span>
+                            </span>
+                            <span class="sample-column">
+                                <span class="sample-section">Results</span>
+                            </span>
+                            <span class="sample-column sample-column-stacked">
+                                <span class="sample-section">Conclusion</span>
+                                <span class="sample-section-group">
+                                    <span class="sample-section">Literature Cited</span>
+                                    <span class="sample-section sample-section-acknowledgements"
+                                          lang="en">Ack&shy;nowl&shy;edg&shy;ements</span>
+                                    <span class="sample-section">Additional Information</span>
+                                </span>
+                            </span>
+                            {% endif %}
+                        </span>
+                    </span>
+                </span>
+                {% if poster.template == option %}
+                <span class="template-current-label">
+                    {% if option in available_templates %}
+                    Current template
+                    {% else %}
+                    Current template; not available for this orientation
+                    {% endif %}
+                </span>
+                {% endif %}
+            </button>
+            {% endfor %}
+        </div>
+    </fieldset>
+    {% endif %}
+    {% if not available_templates %}
+    <p role="status">No templates are available for this poster orientation.</p>
+    {% endif %}
+    <p id="template-selection-status" role="status" aria-live="polite"></p>
+    <div class="template-selection-actions">
+        <a class="button" href="{{ cancel_url }}">Cancel</a>
+    </div>
+</section>
+{% endblock %}

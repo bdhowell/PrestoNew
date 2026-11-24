@@ -502,7 +502,7 @@ class ContentRouteTests(unittest.TestCase):
                     self.assertEqual(start["total"], count)
                     self.assertEqual(start["estimate_word"], estimate)
 
-    def test_graphic_evaluation_skips_to_layout_for_current_saved_results(self) -> None:
+    def test_graphic_evaluation_reports_current_saved_results(self) -> None:
         evaluation_result = {
             "image_analysis": {"classification": "image", "math_expressions": []},
             "evaluations": {},

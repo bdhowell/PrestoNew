@@ -80,10 +80,12 @@ psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-complexi
 
 On the dimensions page, choose units and orientation to browse sizes from
 `stipulations/sizes.json`. Metric sizes are also available in millimeters
-(10 mm per cm). Only sizes in the selected orientation are shown; square sizes
-are excluded. Select a rectangle to fill Wikkit's input, then choose OK or press
-Enter. Wikkit checks the dimensions against the poster and conference rules.
-The picker becomes available when Wikkit asks for dimensions.
+(10 mm per cm). Select a size to save it, or enter height x width in Wikkit.
+Dimensions are checked against the poster and conference rules.
+From the editor's Dimensions button, the page outlines the current size, units,
+and orientation, including square sizes, and offers Return to Poster on the page
+and in Wikkit. A successful change returns to the editor; the setup flow continues
+to content upload.
 
 ### Poster auto-fit
 
@@ -158,13 +160,13 @@ The original auto-fit endpoint without `run_id` still applies revisions directly
 Application and rollback compare saved section contents under a database lock.
 Pending editor changes are saved before rollback or application.
 
-The graphics evaluation page skips to `/layout/edit` when every graphic has
-current assessments for its Materials and Methods and Results sections and none
-fails the complexity or legibility thresholds. Otherwise, it screens graphics
-before reporting the evaluation count and estimated time. Only pending graphics
-that pass both thresholds are sent for evaluation; rejected graphics are shown
-as unsuitable without an assessment. It offers the section review page when
-finished. `/content/evaluate` is its own resumption page: returning after
+The graphics evaluation page reuses current assessments for Materials and Methods
+and Results. It screens graphics before reporting the evaluation count and
+estimated time. Only pending graphics that pass both thresholds are sent for
+evaluation; rejected graphics are shown
+as unsuitable without an assessment. When finished, it offers Continue to Poster
+on the page and in Wikkit; either proceeds to section review.
+`/content/evaluate` is its own resumption page: returning after
 an interruption reuses current assessments and finishes the remaining graphics.
 Each image evaluation is recorded in `assessment` for its Materials and Methods
 and Results sections, including criteria, supported elements, limitations, and

@@ -222,7 +222,8 @@ input[name="height"] {
    left: 0;
  }
 
-#editor-controls button {
+#editor-controls button,
+#editor-controls #template-previews {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -234,18 +235,21 @@ input[name="height"] {
     color: #fff;
     font: 1.125rem/1 system-ui, sans-serif;
     cursor: pointer;
+    text-decoration: none;
 }
 
 /* #editor-controls button.gap {
     margin-left: 0.75rem;
 } */
 
-#editor-controls button:hover {
+#editor-controls button:hover,
+#editor-controls #template-previews:hover {
     background: #5b4e9e;
     border-color: #c4bdeb;
 }
 
-#editor-controls button:active {
+#editor-controls button:active,
+#editor-controls #template-previews:active {
     background: #211a4d;
 }
 
@@ -259,7 +263,8 @@ input[name="height"] {
     cursor: default;
 }
 
-#editor-controls button:focus-visible {
+#editor-controls button:focus-visible,
+#editor-controls #template-previews:focus-visible {
     box-shadow: 0 0 0 2px #fff;
 }
 
@@ -591,7 +596,7 @@ input[name="height"] {
 .section-parent[data-orientation="vertical"],
 .section-parent:where([style*="column"]) {
     flex-direction: column;
-    gap: var(--gutter);
+    gap: 0;
     border: none;
 }
 
@@ -601,6 +606,16 @@ input[name="height"] {
 .section-parent[data-orientation="vertical"] > .section,
 .section-parent:where([style*="column"]) > .section {
     border: var(--border-width) solid var(--border-color);
+}
+
+.section-parent.vertical > .section + .section,
+.section-parent.column > .section + .section,
+.section-parent[data-direction="vertical"] > .section + .section,
+.section-parent[data-orientation="vertical"] > .section + .section,
+.section-parent:where([style*="column"]) > .section + .section {
+    border-top: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
 }
 
 .content {

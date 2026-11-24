@@ -3,8 +3,20 @@
 {% block content %}
 <h1>Poster dimensions</h1>
 <p>Tell Wikkit the height and width of your poster.</p>
+{% if from_editor %}
+<button type="button" id="return-to-poster">Return to Poster</button>
+{% endif %}
+{% if poster.width is not none and poster.height is not none %}
+<p><a href="/layout/template">Choose a template</a></p>
+{% endif %}
 <section id="dimension-picker" aria-label="Choose poster dimensions"
-         data-sizes="{{ dimension_pairs|default([])|tojson|forceescape }}">
+         data-sizes="{{ dimension_pairs|default([])|tojson|forceescape }}"
+         {% if from_editor and poster.width is not none and poster.height is not none %}
+         data-current="{{ {'width': poster.width, 'height': poster.height, 'units': poster.units}|tojson|forceescape }}"
+         {% endif %} data-from-editor="{{ 'true' if from_editor else 'false' }}">
+    {% if from_editor and poster.width is not none and poster.height is not none %}
+    <p id="current-dimensions">Current dimensions (width x height): {{ poster.display_dimensions }}</p>
+    {% endif %}
     <p>Choose a size, or type your own dimensions into Wikkit.</p>
     <fieldset id="dimension-picker-controls">
         <legend>Choose a poster size</legend>
@@ -21,6 +33,11 @@
                 <button type="button" data-orientation="portrait" aria-pressed="false">
                     <span class="orientation-icon portrait" aria-hidden="true"></span> portrait
                 </button>
+                {% if from_editor %}
+                <button type="button" data-orientation="square" aria-pressed="false">
+                    <span class="orientation-icon square" aria-hidden="true"></span> square
+                </button>
+                {% endif %}
             </div>
         </div>
         <div id="dimension-sizes" aria-label="Available poster sizes"></div>

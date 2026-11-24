@@ -8,6 +8,7 @@ import os
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import psycopg
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -280,6 +281,91 @@ async def edit_layout(
         logger.exception("Could not render poster %s", poster.pid)
         raise HTTPException(503, "Your layout could not be loaded.") from None
     return HTMLResponse(rendered, headers=PRIVATE)
+
+
+def poster_orientation(width: float, height: float) -> str:
+    return "landscape" if width > height else "portrait" if height > width else "square"
+
+
+def template_cancel_url(request: Request) -> str:
+    referer = request.headers.get("referer")
+    if referer:
+        parsed = urlsplit(referer)
+        if (
+            parsed.netloc == request.headers.get("host")
+            and parsed.path in {"/layout/dimensions", "/layout/edit", "/layout/layout"}
+        ):
+            return parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    return "/layout/edit"
+
+
+@router.get("/template")
+async def template_page(request: Request) -> Response:
+    if getattr(request.state, "user_id", None) is None:
+        return RedirectResponse("/account/signin", status_code=303)
+    try:
+        poster = await owned(request)
+    except psycopg.Error:
+        logger.exception("Could not load poster template choices")
+        raise HTTPException(503, "Your poster could not be loaded.") from None
+    if poster.purchased:
+        return RedirectResponse(f"/posters/{poster.pid}/open", status_code=303)
+    if poster.width is None or poster.height is None:
+        return RedirectResponse("/layout/dimensions", status_code=303)
+    try:
+        display_dimensions = poster.display_dimensions
+    except (KeyError, ValueError):
+        logger.exception("Poster %s has invalid dimensions", poster.pid)
+        raise HTTPException(503, "Your poster dimensions could not be loaded.") from None
+    orientation = poster_orientation(poster.width, poster.height)
+    available_templates = [
+        template for template, orientations in posters.TEMPLATES.items()
+        if orientation in orientations
+    ]
+    display_templates = list(available_templates)
+    if poster.template in posters.TEMPLATES and poster.template not in display_templates:
+        display_templates.append(poster.template)
+    await common.resume(request)
+    return render_page(
+        request, "layout/template.html", "layout-template-select",
+        poster=poster, orientation=orientation, display_dimensions=display_dimensions,
+        available_templates=available_templates,
+        display_templates=display_templates,
+        cancel_url=template_cancel_url(request),
+    )
+
+
+@router.post("/template")
+async def update_template(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    pid, template = data.get("pid"), data.get("template")
+    if (
+        type(pid) is not int or pid <= 0
+        or not isinstance(template, str) or template not in posters.TEMPLATES
+    ):
+        raise HTTPException(422, "Choose a valid poster template.")
+    try:
+        poster = await owned(request, pid, draft=True)
+        if poster.width is None or poster.height is None:
+            raise HTTPException(409, "Set the poster dimensions before choosing a template.")
+        orientation = poster_orientation(poster.width, poster.height)
+        if orientation not in posters.TEMPLATES[template]:
+            raise HTTPException(422, "Choose a template for this poster's orientation.")
+        width, height = poster.centimeters
+        saved = await posters.store().set_dimensions(
+            uid_for(request), poster.pid, width, height, poster.units, template,
+        )
+    except (KeyError, ValueError):
+        logger.exception("Could not save poster template for poster %s", pid)
+        raise HTTPException(
+            409, "Your poster dimensions are invalid. Update them before choosing a template.",
+        ) from None
+    except psycopg.Error:
+        logger.exception("Could not save poster template for poster %s", pid)
+        raise HTTPException(503, "Your poster template could not be saved.") from None
+    if not saved:
+        raise HTTPException(409, "This poster can no longer be edited.")
+    return JSONResponse({"ok": True, "redirect": "/layout/edit"}, headers=PRIVATE)
 
 
 @router.post("/geometry")
@@ -761,8 +847,11 @@ async def dimensions_page(request: Request) -> Response:
     await common.resume(request)
     sizes = json.loads((Path(__file__).resolve().parent / "stipulations" / "sizes.json").read_text())
     rules = await rules_for(uid_for(request), poster.pid)
+    from_editor = request.query_params.get("from") == "editor"
     return render_page(
         request, "layout/dimensions.html", "layout-dimensions", poster=poster,
+        from_editor=from_editor,
+        wikkit_workflow="layout-dimensions-edit" if from_editor else "layout-dimensions",
         dimension_pairs=rules.eligible_dimension_pairs(sizes["poster_dimension_pairs"]),
     )
 
@@ -776,6 +865,9 @@ async def update_dimensions(request: Request) -> JSONResponse:
     template = data.get("template")
     if template is not None and template not in posters.TEMPLATES:
         raise HTTPException(422, "Choose a valid poster template.")
+    from_editor = data.get("from_editor", False)
+    if not isinstance(from_editor, bool):
+        raise HTTPException(422, "Invalid dimensions source.")
     try:
         poster = await owned(request, draft=True)
         rules = await rules_for(uid_for(request), poster.pid)
@@ -792,8 +884,50 @@ async def update_dimensions(request: Request) -> JSONResponse:
         raise HTTPException(503, "Your poster dimensions could not be saved.") from None
     return JSONResponse({
         "ok": True, "preview": payload,
-        "redirect": "/layout/edit" if template is not None else "/content/upload",
+        "redirect": "/layout/edit" if template is not None or from_editor else "/content/upload",
     })
+
+
+async def dimensions_edit_workflow(bot: Chatbot) -> None:
+    uid = getattr(bot.websocket.state, "user_id", None)
+    pid = getattr(bot.websocket.state, "poster_id", None)
+    if type(uid) is not int or type(pid) is not int:
+        await bot.send({"say": "<p>Please create or open a poster first.</p>"})
+        return
+    try:
+        poster = await posters.store().get(uid, pid)
+        if poster is None or poster.purchased:
+            await bot.send({"say": "<p>This poster is not available for editing.</p>"})
+            return
+        rules = await rules_for(uid, pid)
+        prompt = (
+            "<p>Choose a size or enter height x width in cm, mm, or in.</p>"
+            '<button class="action" data-sends="return">Return to Poster</button>'
+        )
+        while True:
+            reply = await bot.request_response(prompt)
+            if reply.strip().lower() == "return":
+                await bot.send({"command": {"does": "redirect", "payload": "/layout/edit"}})
+                return
+            try:
+                width, height, units = parse_dimensions(reply, rules.units if rules.name else poster.units)
+            except ValueError as error:
+                prompt = f"<p>{html.escape(str(error))}</p>"
+                await bot.send({"command": {"does": "correct-dimensions", "payload": None}})
+            else:
+                errors = rules.errors(width, height, units)
+                if not errors:
+                    await save_dimensions(uid, pid, width, height, units)
+                    await bot.send({"command": {"does": "redirect", "payload": "/layout/edit"}})
+                    return
+                prompt = "<p>" + " ".join(errors) + "</p>"
+                await bot.send({"command": {
+                    "does": "correct-dimensions", "payload": dimensions_payload(width, height, units),
+                }})
+            prompt += '<button class="action" data-sends="return">Return to Poster</button>'
+    except (psycopg.Error, ValueError, HTTPException):
+        logger.exception("Could not set dimensions for poster %s", pid)
+        await bot.send({"say": "<p>Your poster dimensions could not be saved. Please reload and try again.</p>"})
 
 
 async def dimensions_workflow(bot: Chatbot) -> None:
@@ -878,3 +1012,4 @@ async def dimensions_workflow(bot: Chatbot) -> None:
 
 
 wikkit.WORKFLOWS["layout-dimensions"] = dimensions_workflow
+wikkit.WORKFLOWS["layout-dimensions-edit"] = dimensions_edit_workflow

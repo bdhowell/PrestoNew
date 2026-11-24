@@ -23,6 +23,18 @@
     outline-offset: 2px;
 }
 
+.dimension-filters button.current-dimension,
+.wikkit-page .dimension-size.current-dimension,
+#current-dimensions {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+
+#current-dimensions {
+    display: inline-block;
+    padding: .5rem;
+}
+
 .orientation-icon {
     display: inline-block;
     border: 1px solid currentColor;
@@ -37,6 +49,11 @@
 .orientation-icon.portrait {
     width: .8rem;
     height: 1.3rem;
+}
+
+.orientation-icon.square {
+    width: 1rem;
+    height: 1rem;
 }
 
 #dimension-sizes {
