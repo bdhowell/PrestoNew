@@ -22,6 +22,9 @@ For a detailed feature inventory, see [FEATURES.md](FEATURES.md). For search and
 - Download-ready PDF output
 - Optional AI-assisted features for extraction and enrichment
 
+Wikkit opens as a fixed panel on the right. Use its close button to collapse it
+and the Wikkit tab at the right edge to reopen it.
+
 ## Tech stack
 
 - Python 3.14

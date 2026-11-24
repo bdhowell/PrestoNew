@@ -939,7 +939,7 @@ class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             await chatbot.evaluate("element => getComputedStyle(element).transitionDuration"),
-            "0.44s, 0s",
+            "0.44s, 0.44s, 0s",
         )
         self.assertEqual(await chatbot.evaluate("element => getComputedStyle(element).visibility"), "visible")
         await button.click()
@@ -961,6 +961,24 @@ class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
         await self.page.wait_for_function(
             "getComputedStyle(document.getElementById('chatbot')).visibility === 'visible'",
         )
+
+    async def test_chatbot_starts_below_editor_menu(self) -> None:
+        await self.page.goto("https://presto.test/layout")
+        await self.page.set_content(
+            '<body data-wikkit-offline="true"><nav class="basic-menu">'
+            '<a class="menu-brand">Presto</a><ul><li>Account</li></ul></nav>'
+            '<button id="wikkit">Wikkit</button></body>',
+        )
+        for stylesheet in ("main.css", "layout.css", "router.css"):
+            await self.page.add_style_tag(path=str(ROOT / "static/css" / stylesheet))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+        await self.page.evaluate("window.wikkit = connect(() => {})")
+        positions = await self.page.evaluate("""() => ({
+            menuBottom: document.querySelector('.basic-menu').getBoundingClientRect().bottom,
+            chatbot: document.querySelector('#chatbot').getBoundingClientRect().toJSON(),
+        })""")
+        self.assertAlmostEqual(positions["chatbot"]["top"], positions["menuBottom"], delta=0.1)
+        self.assertAlmostEqual(positions["chatbot"]["width"], 256, delta=0.1)
 
 
 class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
