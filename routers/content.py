@@ -184,6 +184,7 @@ async def extract_page(request: Request) -> Response:
         "<p>I&rsquo;m reading through it now, extracting the text, tables, and images "
         "I can use for your poster. Please keep this page open while I work.</p>"
         + conversion_notice(),
+        user_name=identity.display_name(request),
         pending=[{"sid": item.sid, "filename": item.filename}
                  for item in items if item.parent is None and not item.extracted],
     )
