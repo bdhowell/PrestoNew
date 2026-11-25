@@ -1,0 +1,145 @@
+.graphic {
+    display: block;
+    max-width: calc(100% - 4rem);
+    margin: 2rem auto;
+}
+
+.graphic > img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    margin: 0;
+}
+
+/* Placed graphics keep 2rem clear of text, except on the side touching the container. */
+.graphic[data-placement$="left"],
+.graphic[data-placement="left-middle"] {
+    float: left;
+    max-width: calc(100% - 2rem);
+    margin: 2rem 2rem 2rem 0;
+}
+
+.graphic[data-placement$="right"],
+.graphic[data-placement="right-middle"] {
+    float: right;
+    max-width: calc(100% - 2rem);
+    margin: 2rem 0 2rem 2rem;
+}
+
+.section-content > .graphic:first-child:not([data-placement$="left"]):not([data-placement="left-middle"]):not([data-placement$="right"]):not([data-placement="right-middle"]) {
+    margin-top: 0;
+}
+
+.section-content > .graphic:last-child:not([data-placement$="left"]):not([data-placement="left-middle"]):not([data-placement$="right"]):not([data-placement="right-middle"]) {
+    margin-bottom: 0;
+}
+
+#graphics-dialog, #graphics-preview {
+    margin: auto;
+    width: min(60rem, calc(100% - 2rem));
+    max-height: calc(100dvh - 2rem);
+    padding: 1.5rem;
+    background: white;
+    color: #222;
+    font: 1rem/1.5 system-ui, sans-serif;
+}
+
+#graphics-dialog::backdrop, #graphics-preview::backdrop {
+    background: rgb(0 0 0 / 65%);
+}
+
+#graphics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+    gap: 0.75rem;
+    max-height: 50dvh;
+    overflow: auto;
+}
+
+.graphics-choice {
+    display: grid;
+    place-items: center;
+    gap: 0.25rem;
+    min-width: 0;
+    padding: 0.5rem;
+    border: 2px solid #bbb;
+    background: white;
+    overflow-wrap: anywhere;
+}
+
+.graphics-choice[aria-pressed="true"] {
+    border-color: #0066ff;
+    outline: 2px solid #0066ff;
+}
+
+.graphics-choice img {
+    width: 100%;
+    height: 8rem;
+    object-fit: contain;
+    margin: 0;
+}
+
+#graphics-preview-content {
+    max-height: 65dvh;
+    overflow: auto;
+}
+
+#graphics-preview-content img {
+    max-width: 100%;
+    height: auto;
+}
+
+.graphics-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+
+.graphic-controls {
+    position: fixed;
+    z-index: 30;
+    border: 2px solid #0066ff;
+    pointer-events: none;
+}
+
+.graphic-handle, .graphic-move {
+    position: absolute;
+    pointer-events: auto;
+    touch-action: none;
+}
+
+.graphic-handle {
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    border: 1px solid white;
+    background: #0066ff;
+    transform: translate(-50%, -50%);
+}
+
+.graphic-handle-nw { left: 0; top: 0; cursor: nwse-resize; }
+.graphic-handle-n { left: 50%; top: 0; cursor: ns-resize; }
+.graphic-handle-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.graphic-handle-e { left: 100%; top: 50%; cursor: ew-resize; }
+.graphic-handle-se { left: 100%; top: 100%; cursor: nwse-resize; }
+.graphic-handle-s { left: 50%; top: 100%; cursor: ns-resize; }
+.graphic-handle-sw { left: 0; top: 100%; cursor: nesw-resize; }
+.graphic-handle-w { left: 0; top: 50%; cursor: ew-resize; }
+
+.graphic-move {
+    left: 50%;
+    top: 0;
+    transform: translate(-50%, -100%);
+    cursor: move;
+    font: 0.75rem system-ui, sans-serif;
+}
+
+.graphic-low-resolution {
+    animation: graphic-resolution-warning 0.7s ease-in-out 3;
+}
+
+@keyframes graphic-resolution-warning {
+    50% { opacity: 0.25; }
+}

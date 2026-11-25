@@ -1,0 +1,1 @@
+ALTER TABLE source ADD COLUMN IF NOT EXISTS complexity REAL;

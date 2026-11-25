@@ -3,15 +3,6 @@
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
-CREATE TABLE chatbot_session (
-    session_id TEXT PRIMARY KEY,
-    data       BYTEA NOT NULL,
-    version    BIGINT NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX chatbot_session_expires_at ON chatbot_session (expires_at);
-
 CREATE TABLE administration (
     username    TEXT,
     password    TEXT,
@@ -73,8 +64,8 @@ CREATE TABLE poster (
     resumption   TEXT,
     logo         BYTEA,
     logotype     TEXT,        -- type of the logo (e.g., 'png', 'jpg', 'svg')
-    width        INTEGER DEFAULT NULL,
-    height       INTEGER DEFAULT NULL,
+    width        DOUBLE PRECISION DEFAULT NULL,
+    height       DOUBLE PRECISION DEFAULT NULL,
     units        TEXT NOT NULL DEFAULT 'cm' CHECK (units IN ('cm', 'mm', 'in')),
     description  TEXT,
     moreinfo     TEXT,
@@ -96,7 +87,8 @@ CREATE INDEX idx_poster_embedding_ivfflat ON poster
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 
--- permissions to view or edit poster and user-specific configuration options, such as display layout
+-- Permissions and configuration. settings['layout-resizing'][template] stores
+-- normalized pane offsets and section shares; other settings are preserved.
 
 CREATE TABLE userposter (
     uid       INTEGER NOT NULL REFERENCES "user"(uid) ON DELETE CASCADE,
@@ -144,21 +136,26 @@ CREATE INDEX idx_show_approved ON show (approved) WHERE approved IS NULL;
 CREATE TABLE source (
     sid         SERIAL PRIMARY KEY,
     pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
-    kind        TEXT NOT NULL CHECK (kind IN ('text', 'svg','mixed','image','chart','table','logo','moreinfo', 'qrcode')),
+    kind        TEXT NOT NULL CHECK (kind IN (
+        'text', 'svg', 'mixed', 'image', 'math', 'math expression', 'chart', 'table',
+        'diagram', 'logo', 'moreinfo', 'qrcode', 'thumbnail'
+    )),
     parent      INTEGER REFERENCES source(sid) ON DELETE CASCADE,
     text        TEXT,
     description TEXT,
-    summary     TEXT,
     extracted   BOOLEAN NOT NULL DEFAULT TRUE,
     size        INTEGER NOT NULL,
     height      INTEGER,
     width       INTEGER,
+    complexity  REAL,
+    legibility  REAL, -- fraction of detected features visible at default viewing conditions
     fileid      UUID,
     storage_uri TEXT, -- absolute local path or gs://bucket/key for an original upload
     hash        TEXT, -- prevents repeatedly extracted the same item
     filename    TEXT, -- original filename of the uploaded file without the path
     mimetype    TEXT NOT NULL,
     added       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     usable      BOOLEAN NOT NULL DEFAULT TRUE,
     search_vector tsvector,
     embedding   vector(1536)
@@ -170,12 +167,36 @@ CREATE INDEX idx_source_parent ON source (parent);
 
 -- Allow at most one source of each special kind per poster.
 CREATE UNIQUE INDEX idx_source_pid_kind_unique ON source (pid, kind)
-WHERE kind IN ('logo', 'moreinfo', 'qrcode');
+WHERE kind IN ('logo', 'moreinfo', 'qrcode', 'thumbnail');
 
 CREATE INDEX idx_source_embedding_ivfflat ON source
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 
+CREATE TYPE section_which AS ENUM(
+    'title', 'abstract', 'introduction', 'materials and methods', 'results',
+    'conclusion', 'future plans', 'literature cited', 'additional information',
+    'acknowledgements'
+);
+
+CREATE TABLE assessment (
+    aid         SERIAL PRIMARY KEY,
+    pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    cid         INTEGER REFERENCES conference(cid) ON DELETE CASCADE,
+    sid         INTEGER REFERENCES source(sid) ON DELETE CASCADE,
+    section     section_which NOT NULL,
+    rating      TEXT NOT NULL CHECK (rating IN ('none', 'weakly', 'somewhat', 'significantly', 'highly', 'definitively')),
+    explanation TEXT NOT NULL,
+    criteria               JSONB,
+    supported_elements     TEXT[],
+    limitations            TEXT[],
+    suggested_improvements TEXT[],
+    created     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_assessment_pid ON assessment (pid);
+CREATE INDEX idx_assessment_cid ON assessment (cid);
+CREATE UNIQUE INDEX idx_assessment_sid_section ON assessment (sid, section);
 
 CREATE TABLE authors (
     aid         SERIAL PRIMARY KEY,
@@ -187,11 +208,7 @@ CREATE TABLE authors (
     UNIQUE (pid, name)
 );
 
-CREATE TYPE section_which AS ENUM(
-    'title', 'abstract', 'introduction', 'materials and methods', 'results',
-    'conclusion', 'future plans', 'literature cited', 'additional information',
-    'acknowledgements'
-);
+CREATE INDEX idx_authors_pid ON authors (pid);
 
 CREATE TABLE section (
     xid         SERIAL PRIMARY KEY,
@@ -204,6 +221,52 @@ CREATE TABLE section (
     UNIQUE (pid, which)
 );
 
+CREATE UNIQUE INDEX idx_section_pid_which ON section (pid, which);
+
+CREATE TABLE summarization (
+    zid         SERIAL PRIMARY KEY,
+    pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    which       section_which NOT NULL,
+    words       INTEGER NOT NULL,
+    summary     TEXT NOT NULL,
+    source_hash TEXT NOT NULL DEFAULT '', -- summaries of older section content are not reused
+    created     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_summarization_pid_which_words ON summarization (pid, which, words);
+
+CREATE TABLE fitting_runs (
+    run_id      UUID PRIMARY KEY,
+    pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    uid         INTEGER NOT NULL,
+    cancelled   BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE TABLE sizings (
+    sizing_id   BIGSERIAL PRIMARY KEY,
+    pid         INTEGER NOT NULL REFERENCES poster(pid) ON DELETE CASCADE,
+    section     section_which NOT NULL,
+    length      INTEGER NOT NULL CHECK (length > 0),
+    text        TEXT NOT NULL,
+    source_text TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    run_id      UUID REFERENCES fitting_runs(run_id) ON DELETE CASCADE,
+    expected_text TEXT,
+    version     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_sizings_pid_section ON sizings (pid, section, length, version);
+CREATE INDEX idx_sizings_source_hash ON sizings (source_hash);
+
+CREATE TABLE fitting_applications (
+    application_id BIGSERIAL PRIMARY KEY,
+    run_id      UUID NOT NULL REFERENCES fitting_runs(run_id) ON DELETE CASCADE,
+    sizing_id   BIGINT NOT NULL REFERENCES sizings(sizing_id) ON DELETE CASCADE,
+    section     section_which NOT NULL,
+    prior_text  TEXT NOT NULL,
+    applied_text TEXT NOT NULL,
+    rolled_back BOOLEAN NOT NULL DEFAULT FALSE
+);
 
 CREATE TABLE keyterm (
     cid         INTEGER REFERENCES conference(cid) ON DELETE CASCADE,

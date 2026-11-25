@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Source {{ sid }} dump</title>
+    <link rel="stylesheet" href="/static/css/pages/system-dump.css">
+</head>
+<body>
+    <main>
+        <h1>Source {{ sid }}</h1>
+        {% if image_source %}
+        <section aria-labelledby="image-preview-heading">
+            <h2 id="image-preview-heading">Image preview</h2>
+            {% if has_image_file %}
+            <div class="image-preview-scroll" role="region" aria-label="Image preview" tabindex="0">
+                <img class="image-preview" src="/system/dump/{{ sid }}/image" alt="Image of source {{ sid }}">
+            </div>
+            {% else %}
+            <p>No stored image file is available.</p>
+            {% endif %}
+        </section>
+        {% endif %}
+        {% if table_preview %}
+        <section aria-labelledby="table-preview-heading">
+            <h2 id="table-preview-heading">Table preview</h2>
+            <div class="table-preview">{{ table_preview | safe }}</div>
+        </section>
+        {% endif %}
+        {% if legibility is not none %}
+        <section aria-labelledby="legibility-heading">
+            <h2 id="legibility-heading">Legibility</h2>
+            <p>{{ legibility }}</p>
+        </section>
+        {% endif %}
+        <dl>
+            {% for name, value in fields.items() %}
+            {% if name != "legibility" %}
+            <dt>{{ name }}</dt>
+            <dd><pre><code>{{ value }}</code></pre></dd>
+            {% endif %}
+            {% endfor %}
+        </dl>
+    </main>
+</body>
+</html>

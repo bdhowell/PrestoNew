@@ -4,11 +4,13 @@ import unittest
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import openai
 import psycopg
 from fastapi import Depends, FastAPI, Request
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from psycopg import sql
@@ -58,14 +60,50 @@ class PosterRouteTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn('class="poster-card current"', response.text)
             self.assertIn('/posters/11/open', response.text)
-            self.assertIn('/posters/12/view', response.text)
+            self.assertIn('/account/download?pid=12', response.text)
+            self.assertIn('data-download-poster', response.text)
+            self.assertEqual(response.text.count('>Print</button>'), 1)
+            self.assertIn('data-download-url="/account/download?pid=12"', response.text)
+            self.assertNotIn('data-download-url="/account/download?pid=11"', response.text)
+            self.assertNotIn('/posters/12/view', response.text)
             self.assertIn('&lt;Research&gt;', response.text)
             self.assertIn('data-new-poster', response.text)
-            self.assertEqual('data-thumbnail' in response.text, mode == "grid")
+            self.assertIn('src="/posters/11/thumbnail"', response.text)
+            if mode == "grid":
+                self.assertIn('src="/posters/12/preview"', response.text)
+            else:
+                self.assertNotIn('src="/posters/12/preview"', response.text)
+
+    def test_list_refreshes_a_stale_thumbnail_even_in_list_view(self) -> None:
+        self.store.unpurchased.return_value = 11
+        state = SimpleNamespace(stale=True, revision=("poster revision", "source revision"))
+        self.store.thumbnail_state.return_value = state
+        self.store.save_thumbnail.return_value = True
+        with patch.object(
+            routes, "preview", AsyncMock(return_value=Response("<html></html>")),
+        ) as preview, patch.object(
+            routes.poster_rendering, "poster_thumbnail", AsyncMock(return_value=b"png"),
+        ) as render:
+            response = self.client.get("/posters/list")
+
+        self.assertEqual(response.status_code, 200)
+        preview.assert_awaited_once()
+        render.assert_awaited_once_with("<html></html>")
+        self.store.save_thumbnail.assert_awaited_once_with(
+            7, 11, b"png", state.revision,
+        )
+
+    def test_stored_thumbnail_is_owner_scoped_and_served_as_private_png(self) -> None:
+        self.store.poster_thumbnail.return_value = b"\x89PNG\r\n\x1a\nimage"
+        response = self.client.get("/posters/11/thumbnail")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/png")
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+        self.store.poster_thumbnail.assert_awaited_once_with(7, 11)
 
     def test_signed_out_pages_redirect_and_mutations_require_identity(self) -> None:
         self.uid = None
-        for path in ("/posters/list", "/posters/open", "/posters/11/open", "/posters/11/view"):
+        for path in ("/posters/list", "/posters/open", "/posters/11/open"):
             response = self.client.get(path, follow_redirects=False)
             self.assertEqual(response.status_code, 303)
             self.assertEqual(response.headers["location"], "/account/signin")
@@ -95,14 +133,13 @@ class PosterRouteTests(unittest.TestCase):
             response = self.client.get("/posters/list?q=research")
         self.assertIn("Keyword search only", response.text)
 
-    def test_create_poster_selects_draft_and_returns_upload_redirect(self) -> None:
+    def test_create_poster_selects_draft_and_returns_conference_query_redirect(self) -> None:
         self.store.new_or_existing.return_value = (11, True)
         response = self.client.post("/posters/create", json={})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True, "redirect": "/content/upload"})
+        self.assertEqual(response.json(), {"ok": True, "redirect": "/conferences/query"})
         self.assertEqual(self.session["poster_id"], 11)
-        self.assertEqual(self.request_state.poster, {"pid": 11})
-        self.assertEqual(self.request_state.poster_id, 11)
+        self.assertEqual(self.request_state.pid, 11)
         self.store.new_or_existing.assert_awaited_once_with(7)
         self.store.initialize.assert_not_awaited()
 
@@ -189,7 +226,11 @@ class PosterRouteTests(unittest.TestCase):
         self.store.get.return_value = replace(DRAFT, theme="blues", fonts="technical")
         response = self.client.get("/posters/11/preview")
         self.assertEqual(response.status_code, 200)
-        self.assertIn('class="poster-document blues technical arena"', response.text)
+        self.assertIn(
+            'class="poster-document blue corners-very-rounded '
+            'colored-poster-header colored-section-headers technical arena"',
+            response.text,
+        )
         self.assertIn('href="/static/css/fonts.css"', response.text)
 
     def test_new_draft_without_dimensions_has_explicit_preview_placeholder(self) -> None:
@@ -208,13 +249,15 @@ class PosterRouteTests(unittest.TestCase):
         self.store.get.return_value = None
         self.assertEqual(self.client.get("/posters/99/open").status_code, 404)
 
-    def test_purchased_viewer_and_preview_are_owner_scoped(self) -> None:
+    def test_purchased_open_downloads_and_preview_is_owner_scoped(self) -> None:
         self.store.get.return_value = replace(DRAFT, purchased=True, theme="basic")
-        response = self.client.get("/posters/11/view")
+        response = self.client.get("/posters/11/open", follow_redirects=False)
+        self.assertEqual(response.headers["location"], "/posters/list?download=11")
+        response = self.client.get("/posters/list?download=11")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("data-fit", response.text)
-        self.assertIn("data-full-size", response.text)
-        self.assertNotIn("connect(", response.text)
+        self.assertIn("data-auto-download", response.text)
+        self.assertIn('data-poster-name="&lt;Research&gt;"', response.text)
+        self.assertIn("/account/download?pid=11", response.text)
         response = self.client.get("/posters/11/preview")
         self.assertEqual(response.status_code, 200)
         self.assertIn('data-width="3456.0"', response.text)
@@ -224,11 +267,12 @@ class PosterRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["cache-control"], "private, no-store")
         self.store.content.assert_awaited_once_with(7, 11)
         self.store.get.return_value = None
-        self.assertEqual(self.client.get("/posters/99/view").status_code, 404)
+        self.assertEqual(self.client.get("/posters/list?download=99").status_code, 404)
         self.assertEqual(self.client.get("/posters/99/preview").status_code, 404)
 
-    def test_unpurchased_view_redirects_to_edit_flow(self) -> None:
-        response = self.client.get("/posters/11/view", follow_redirects=False)
+    def test_view_page_is_removed_and_drafts_cannot_auto_download(self) -> None:
+        self.assertEqual(self.client.get("/posters/11/view").status_code, 404)
+        response = self.client.get("/posters/list?download=11", follow_redirects=False)
         self.assertEqual(response.headers["location"], "/posters/11/open")
 
     def test_delete_requires_confirmation_and_clears_selected_poster(self) -> None:
@@ -362,6 +406,17 @@ class PosterRouteTests(unittest.TestCase):
 
 
 class PosterValueTests(unittest.IsolatedAsyncioTestCase):
+    def test_font_scale_uses_physical_area_in_any_supported_units(self) -> None:
+        for width, height, units, expected in (
+            (36, 36, "in", 1), (36, 48, "in", 4 / 3),
+            (72, 72, "in", 4), (96, 96, "in", 64 / 9),
+            (100, 150, "cm", 15000 / (91.44 ** 2)),
+            (1000, 1500, "mm", 15000 / (91.44 ** 2)),
+        ):
+            with self.subTest(width=width, height=height, units=units):
+                poster = replace(DRAFT, width=width, height=height, units=units)
+                self.assertAlmostEqual(poster.font_scale, expected)
+
     async def test_font_update_is_validated_owner_scoped_and_invalidates_cache(self) -> None:
         store = posters.PosterStore()
         connection = AsyncMock()
@@ -385,21 +440,28 @@ class PosterValueTests(unittest.IsolatedAsyncioTestCase):
     async def test_theme_update_is_validated_owner_scoped_and_invalidates_cache(self) -> None:
         store = posters.PosterStore()
         connection = AsyncMock()
+        settings = posters.ThemeSettings(
+            corners="rounded",
+            colored_poster_header=True,
+            colored_section_headers=False,
+        )
         with patch.object(store, "_connect", AsyncMock(return_value=connection)), patch.object(
             store, "invalidate",
         ) as invalidate:
             for row, expected in (((11,), True), (None, False)):
                 connection.execute.return_value.fetchone.return_value = row
-                self.assertEqual(await store.set_theme(7, 11, "greens"), expected)
+                self.assertEqual(await store.set_theme(7, 11, "green", settings), expected)
             self.assertEqual(invalidate.call_count, 4)
             invalidate.assert_called_with(7, 11)
             with self.assertRaises(ValueError):
-                await store.set_theme(7, 11, "unknown")
-        statement, params = connection.execute.call_args.args
-        self.assertIn("p.uid = %s AND p.pid = %s", statement)
-        self.assertIn("NOT EXISTS", statement)
-        self.assertIn("purchase", statement)
-        self.assertEqual(params, ("greens", 7, 11))
+                await store.set_theme(7, 11, "unknown", settings)
+        statement, params = connection.execute.call_args_list[1].args
+        self.assertIn("theme-settings", statement)
+        self.assertEqual(params[0:2], (7, 11))
+        update, update_params = connection.execute.call_args_list[0].args
+        self.assertIn("NOT EXISTS", update)
+        self.assertIn("purchase", update)
+        self.assertEqual(update_params, ("green", 7, 11))
 
     async def test_resumption_update_is_parameterized_and_owner_scoped(self) -> None:
         store = posters.PosterStore()
@@ -434,7 +496,7 @@ class PosterValueTests(unittest.IsolatedAsyncioTestCase):
         inserted.fetchone.return_value = (11,)
         connection.execute.side_effect = [owner, draft, inserted]
         with patch.object(store, "_connect", AsyncMock(return_value=connection)), patch.object(
-            posters.random, "choice", side_effect=["blues", "technical"],
+            posters.random, "choice", side_effect=["blue", "technical"],
         ) as choose:
             self.assertEqual(await store.new_or_existing(7), (11, True))
         self.assertEqual(choose.call_args_list[0].args, (posters.installed_themes(),))
@@ -449,7 +511,7 @@ class PosterValueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(uid, 7)
         self.assertIn(theme, posters.installed_themes())
         self.assertIn(fonts, posters.installed_fonts())
-        self.assertEqual((theme, fonts), ("blues", "technical"))
+        self.assertEqual((theme, fonts), ("blue", "technical"))
 
     async def test_creation_reuses_existing_draft_without_inserting(self) -> None:
         store = posters.PosterStore()
@@ -555,6 +617,24 @@ class PosterDatabaseTests(unittest.TestCase):
             "SELECT theme, fonts FROM poster WHERE pid = %s", (pid,),
         ).fetchone(), original)
 
+    def test_theme_configuration_persists_with_palette_and_independent_settings(self) -> None:
+        pid = self.create("Research")
+        settings = posters.ThemeSettings(
+            corners="slightly-rounded",
+            colored_poster_header=True,
+            colored_section_headers=False,
+        )
+        self.assertTrue(asyncio.run(self.store.set_theme(7, pid, "purple", settings)))
+        poster = asyncio.run(self.store.get(7, pid))
+        self.assertEqual(poster.theme, "purple")
+        self.assertEqual(poster.theme_settings, settings.model_dump())
+        self.assertEqual(
+            posters.theme_classes(poster.theme, poster.theme_settings),
+            "purple corners-slightly-rounded colored-poster-header",
+        )
+        self.purchase(pid)
+        self.assertFalse(asyncio.run(self.store.set_theme(7, pid, "red", settings)))
+
     def test_concurrent_new_clicks_create_one_draft_and_allow_new_after_purchase(self) -> None:
         async def concurrent():
             return await asyncio.gather(*(self.store.new_or_existing(7) for _ in range(6)))
@@ -650,6 +730,19 @@ class PosterDatabaseTests(unittest.TestCase):
         self.assertFalse(asyncio.run(self.store.save_section(7, pid, "results", "Purchased")))
         sections, _ = asyncio.run(self.store.content(7, pid))
         self.assertIn(("results", "<p>Quasar evidence</p>"), sections)
+
+    def test_revision_save_checks_original_and_owner_atomically(self) -> None:
+        pid = self.create("Research")
+        save = self.store.save_section_if_unchanged
+        self.assertTrue(asyncio.run(save(7, pid, "results", "First", None)))
+        self.assertFalse(asyncio.run(save(7, pid, "results", "Stale", None)))
+        self.assertFalse(asyncio.run(save(7, pid, "results", "Stale", "Older")))
+        self.assertFalse(asyncio.run(save(8, pid, "results", "Private", "First")))
+        self.assertTrue(asyncio.run(save(7, pid, "results", "Revised", "First")))
+        self.purchase(pid)
+        self.assertFalse(asyncio.run(save(7, pid, "results", "Purchased", "Revised")))
+        sections, _ = asyncio.run(self.store.content(7, pid))
+        self.assertIn(("results", "Revised"), sections)
 
     def test_fts_tracks_description_sections_authors_and_keyterms(self) -> None:
         pid = self.create("Ocean science")

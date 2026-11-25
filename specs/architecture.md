@@ -12,7 +12,11 @@ Sessions are managed with Redis (locally installed).
 
 # Session Management
 
-Sessions persist for {SESSION_MAX_AGE}.
+Sessions expire after {SESSION_MAX_AGE} seconds without a cookie-bearing HTTP
+response. Normal HTTP responses renew both the Redis expiry and the session
+cookie lifetime; `/system/timecheck` renews only when marked by recent client
+activity. Static assets and WebSocket traffic do not renew sessions. Renewal
+does not change the session data version or revive an already expired session.
 Users are notified of incipient session expiration at {SESSION_EXPIRATION_NOTIFICATION=480}.
 When a session is terminated, the session's associated chat websocket must also be closed with an appropriate message.
 
@@ -512,11 +516,11 @@ Would you like me to open it for you?
 - `GET /posters/{pid}/open` checks ownership, selects the draft in the server-side
   session, and redirects to `/layout/edit`. **The layout editor is deliberately
   deferred**.
-- `GET /posters/{pid}/view` opens purchased posters in a full-viewport viewer
-  outside the Wikkit shell. Fit and 100% zoom, intermediate zoom, scrolling, and
-  Close/Escape are supported. The read-only HTML preview renders stored title,
-  authors, and text sections; it is not a print/export renderer or layout editor.
-  `GET /posters/{pid}/preview` also supplies owner-only draft thumbnails.
+- Purchased poster links and their Print buttons download the printable PDF without leaving the poster
+  list. Wikkit says "I've downloaded a copy of {poster.name}." after the PDF
+  response succeeds. Opening a purchased poster redirects to the list and starts
+  the same download; the former `/posters/{pid}/view` page has been removed.
+  `GET /posters/{pid}/preview` remains an owner-only HTML thumbnail source.
 - `POST /posters/delete` accepts same-origin JSON with `pid` and returns Wikkit's
   confirmation question with Yes/No buttons without rendering a template. The
   list waits for a chat reply, then posts `pid` and `response` to the same
@@ -684,7 +688,6 @@ Can you add anything?
 	- If the user provides additional information, repeat the search for matching conferences or fairs.
 	prompt the user to provide more information or continue without conference information.
 
-
 	Add the current conferences in the table with the newly found results.
 
 When a conference is clicked;
@@ -745,7 +748,7 @@ Write a local function that takes a Python text or binary object and produces a 
   logo/moreinfo/QR-code kinds.
 - PDF, DOCX, PPTX, Markdown and Pages use the configured Docling service. Picture
   export uses `referenced` mode; the official service client materializes the
-  resource bundle, preserving images for local PNG extraction. Embedded image
+  resource bundle, preserving images for local crop extraction. Embedded image
   export is not requested from the service. Picture descriptions/classification,
   chart extraction and formula enrichment are
   enabled. This work runs on the separate `/content/extract` reading page after
@@ -759,7 +762,14 @@ Write a local function that takes a Python text or binary object and produces a 
   affected conversion logs a warning. There is no automatic feature downgrade
   or success fallback after a failed conversion. Set it back to `true` and
   re-upload affected documents to obtain the missing enrichments.
-  Generated PNG assets retain source parent IDs, descriptions and dimensions.
+  PDF picture provenance regions are converted with Poppler `pdftocairo` and
+  pypdfium2: pure-vector crops are stored as SVG, while crops containing images
+  use the Docling PNG. Other document formats and tables/formulas retain PNG crops.
+  Conversion errors are reported as warnings and fall back to PNG. Generated
+  assets retain source parent IDs, descriptions and dimensions; SVGs are exempt
+  from low-raster-resolution warnings. A Docling PNG crop is also used to
+  describe an SVG when it has no caption or description; if that crop is
+  unavailable, extraction fails explicitly instead of storing an undescribed image.
   If a crop is unavailable, formula/table text is retained with an icon, and
   converter warnings are logged rather than inventing a graphic.
 - XLSX/XLSM cells and sheet names are HTML-escaped and stored as tables.
@@ -767,8 +777,15 @@ Write a local function that takes a Python text or binary object and produces a 
   Pages, Numbers and Keynote files are submitted directly to Docling on every
   platform. No local Apple apps, AppleScript or PDF export is required;
   unsupported service conversions fail explicitly.
-- Nonempty source text is summarized into `source.summary`. Uploaded images
-  receive model-generated descriptions. Configure `DOCLING_SERVICE_URL`,
+- Saved poster sections are summarized by the asynchronous
+  `source_processing.summarize(pid, section, words)` API. It reuses the largest
+  cached summary in the inclusive range `words - floor(words / divisor)` to
+  `words`, where `SUMMARIZATION_VARIANCE_DIVISOR` defaults to 22.
+  `SUMMARIZATION_MODEL` defaults to `gpt-4.1`. New summaries must meet that range
+  and are stored with their actual word count and section-content hash, preventing
+  reuse after edits. Apply `schema/section-summarization.sql` to existing databases.
+  Callers must authorize poster access before summarization.
+  Uploaded images receive model-generated descriptions. Configure `DOCLING_SERVICE_URL`,
   optionally `DOCLING_SERVICE_API_KEY`, and `OPENAI_API_KEY`;
   `OPENAI_POSTER_MODEL` defaults to `gpt-4.1`. Source analysis uses no browsing
   tools or shared prompt cache. Model/converter failures are reported on the
@@ -800,8 +817,8 @@ Write a local function that takes a Python text or binary object and produces a 
   this flow. It adds `source.extracted` and marks pre-existing sources as already
   extracted, preserving their completed work. The migration is safe to repeat.
 
-  The current schema also adds `source.summary`, allows top-level sources with a null
-  `parent`, and updates the special-kind uniqueness index. Retry the upload
+  The current schema allows top-level sources with a null `parent` and updates
+  the special-kind uniqueness index. Retry the upload
   after the migration completes. The reduced-feature Docling warning is
   independent of database schema compatibility.
   Run `bin/python -m unittest tests.test_content tests.test_posters tests.test_wikkit`; set
@@ -905,7 +922,6 @@ For each uploaded item:
 If the document is a PDF, DocX, MD, Apple Pages:
 - Use Docling for IBM Watson X to extract texts, charts, formulae (math), tables images, math (as latex) from source documents: (descriptions for images and charts turned on)
  - For text documents, store the text, if any, in the source's db source record's text field.
-	- Use the LLM to summarize the text and store the summary in the source reccord's summary field.
 	- Hash images, charts, formulae (math), and graphs and verify that they don't already exist in the database.
 - For extracted images, charts, formulae (math), and graphs:
 	- Hash images, charts, formulae (math), and graphs and verify that they don't already exist in the database.
@@ -969,15 +985,24 @@ As each item is uploaded and added to the database, display it in the #items-lis
   stale writes and return HTTP 409. Author/section failures roll back together.
   Section/poster embeddings are invalidated after content changes.
 - After successful elucidation is saved, the browser redirects to
-  `/conferences/query` to collect optional conference or fair information.
+  `/content/evaluate`. The owner-checked evaluation stream processes eligible
+  uploaded and extracted PNG/JPEG sources one at a time, persists each
+  results in `assessment` rows linked to each source image, and reports progress
+  to Wikkit. Assessments are reused only while source and section timestamps
+  remain current. A graphic is suitable when either
+  its Materials and Methods or Results rating is at least `significantly`.
+  The results page groups uploaded before extracted graphics and continues to
+  `/content/review`; when no eligible graphics exist, Wikkit redirects to
+  `/conferences/query`.
 - While the POST is pending, the browser chooses a new random delay in the
   inclusive 15–30-second range and a random Wikkit message from the list below.
   Completion, failure and leaving the page stop the timers. Failure stays on
   the page with an explicit error and a Try again button; no success redirect
   is returned before persistence completes.
-- Success navigates to `/layout/edit`; the layout editor itself remains
-  deferred. Apply `schema/schema.sql` for `authors.errata` and the
-  `acknowledgements` section enum, and install `requirements-content.txt`.
+- Success navigates to `/content/evaluate` before graphic assessment and review.
+  The evaluation image route is owner-scoped. Apply
+  `schema/source-analysis-cleanup.sql` to existing databases and install
+  `requirements-content.txt`.
   Run `bin/python -m unittest tests.test_elucidation tests.test_content tests.test_posters tests.test_wikkit`.
 
 ### Internal Logic
@@ -1093,6 +1118,36 @@ Return the following information:
 
 # System Router
 
+`GET /system/catalog` provides a read-only source catalog with a poster ID form.
+`GET /system/catalog?pid=123` lists every source for that poster, including original
+uploads and extracted children, without requiring a signed-in owner or selected
+draft. Text/document sources have a text icon; graphics have thumbnails from
+`GET /system/catalog/{pid}/{sid}/thumbnail`. Both routes use exactly the same
+`SYSTEM_PURGE_ENABLED=true`, direct-loopback and no-forwarding-header guard as
+purging, and return `Cache-Control: no-store`. Thumbnail lookups are scoped to
+both the requested poster and source. Raster previews use the shared 160 by 120
+pixel thumbnail renderer; SVGs are displayed as images with a sandboxed response.
+The catalog reports graphical size suitability at 150 dpi: both dimensions must
+be at least 450 pixels (3 inches). Missing or non-positive dimensions are unknown,
+not suitable by default; text/document sources are not subject to this check.
+This diagnostic check does not change the upload page's existing size warnings.
+
+`GET /system/dump?sid=123` displays every column of the source record as an
+HTML page, including its text and storage URI, but not the contents of any
+externally stored file. Text retains its line breaks and tabs; literal backslash
+sequences are not decoded. Table sources with table markup in their text also
+show a sanitized table preview while preserving the original text below.
+Image media types show an actual-size preview via `GET /system/dump/{sid}/image`,
+with horizontal scrolling when the image is wider than the page. That endpoint
+independently checks the current superuser flag, regardless of the
+source's classification or poster ownership. The original image is served except
+that TIFF is converted to PNG for browser compatibility. Missing image files are
+reported in the page or by the image endpoint. The original thumbnail endpoint
+remains available.
+It requires a signed-in account whose
+current `user.superuser` flag is true, regardless of poster ownership. The
+response is not cacheable; nonexistent sources return 404.
+
 `POST /system/purge` permanently removes all posters and conferences, including
 their cascading dependent records and optional poster memory, then deletes only
 the numbered `0` through `9` subdirectories of the configured local `SOURCES_DIR`.
@@ -1123,6 +1178,9 @@ Implementation contract:
 - `layout(template, pid, *, uid, request=None)` renders a fresh copy of the named
   template. The trusted owner's `uid` is required; the optional request supplies
   navigation context. `/layout/edit` and `/layout/layout` display the result.
+  Drafts missing either dimension are redirected to `/layout/dimensions` before
+  rendering or saving the editor resumption URL. An explicitly requested owned
+  draft is selected first, so the dimensions workflow updates the correct poster.
 - Panes use `data-sections` (legacy `data-section` is also accepted). Commas
   separate sections; pipes group sections inside a `section-parent`. Vertical
   panes and their grouped sections use the `vertical` class.
@@ -1137,6 +1195,49 @@ Implementation contract:
   `layout()` measures `#title` and `#authors` at the poster's physical width
   (96 CSS pixels per inch), fixes `#poster-canvas` to that width and the exact
   physical poster height, and embeds percentage widths in the returned HTML.
+  Base typography uses the poster's physical area in square centimeters divided
+  by the minimum poster area (`POSTER_MIN_WIDTH_CM * POSTER_MIN_HEIGHT_CM`,
+  currently 36 x 36 inches). This stable reference avoids a feedback loop between
+  font size, wrapping, header height, and auto-fit. The canvas sets the section
+  body size to `2rem * ratio`; section headings, title, and authors remain 1.5,
+  3.5, and 1.375 times that size. Unitless line-height preserves proportional
+  line spacing. The scale is present before server-side header measurement and
+  is independent of viewport zoom, content changes, and gutter resizing.
+  Read-only documents use the same area ratio while preserving their existing
+  heading proportions and line-height.
+  The toolbar places `#font-sizing` (Sections, Title, Authors) and the `#font-size`
+  range input inside the extended-controls tray on its right side, preceded by the
+  Font Awesome text-size icon. Each target has an independent 50%-150% multiplier
+  relative to its area-based size. Unitless line-height scales with the font.
+  Controls preview immediately, preserve the current target's value, and schedule
+  content updates without altering zoom or other targets. Header adjustments
+  reset the old balanced width to 100%; reload rebalances with saved sizing.
+  `POST /layout/font-sizing` accepts `pid`, `target`, and numeric `value` (0.5-1.5).
+  The owner-only draft write atomically merges only that target into the
+  `userposter.settings` `font-sizing` object, preserving gutter and other settings,
+  updates the poster timestamp, and invalidates the owner-scoped cache.
+  These poster-wide multipliers survive template, theme, and font-set changes
+  and apply to read-only previews. Client writes are debounced and serialized,
+  retain newer changes during an in-flight save, display errors with a retry
+  action, and warn on navigation with unsaved changes.
+  Font-sizing progress, success, and error messages use the shared
+  `#content-save-status` output; the font controls retain their retry button.
+  Once dimensions exist and a template first renders, `layout-geometry.js`
+  waits for fonts and the initial content fit, then freezes the header, grid
+  tracks, and nested section shares. The layout frame fills the space between
+  the header gap and the bottom gutter, including for previously saved geometry.
+  Font and content edits clip
+  within these areas instead of redistributing space or rerunning whole-poster
+  auto-fit. Viewport zoom remains independent, and explicit gutter resizing
+  still adjusts the saved proportions.
+  `POST /layout/geometry` validates the measured areas against the template
+  and atomically initializes `userposter.settings["layout-geometry"][template]`
+  for the owner-only draft. Existing baselines win concurrent initialization;
+  other templates, resizing positions, and font settings are preserved.
+  Baselines are restored on reopening; older drafts initialize on their first
+  editor visit. The content frame scales with physical dimension changes while
+  retaining the baseline shares. Failed initialization writes are reported and
+  navigation warns while the baseline is unsaved.
   CSS keeps both containers centered within their original layout slots, measured
   inside the canvas padding of `5 * var(--gutter)` on every side.
   Measurement uses local stylesheets and waits for web fonts; scripts and other
@@ -1175,39 +1276,95 @@ Implementation contract:
   pane, no footer row is reserved; a single row of panes stretches to the bottom
   of `#layout`.
   Other subsequent rows use their content height.
-  `#layout` has left, right, and bottom margins of `2 * var(--gutter)`.
+  `#layout` has left, right, and bottom margins of `var(--gutter)`.
   Content fitting includes the layout's trailing bottom margin explicitly, since
   scroll height can omit that margin when the flex layout overflows.
   Layout grid columns share the space left after gutters to avoid overflowing
   the poster width.
 - Stored section HTML is sanitized with the same allowlist as poster previews.
 - The layout toolbar's Theme button opens a modal dialog listing the installed
-  themes from `themes.css`. Each option previews a section on its poster background
-  using the renderer's section styles and the current fonts. Preview cards are
-  clickable selectors; visually hidden radios preserve keyboard selection and
+  themes from `themes.css`. Each option previews a poster header and section on its poster background
+  using the renderer's section styles and the current fonts. Cards are
+  displayed in a scrollable grid sized for two rows, reduced to the available
+  height on short screens. Only the grid scrolls; the dialog title, status, and
+  action buttons stay visible.
+  Preview cards are clickable selectors; visually hidden radios preserve keyboard selection and
   accessible names, with card outlines indicating focus and selection. Cancel or Escape
   discards the selection. Apply saves via `POST /layout/theme` with an explicit
   poster ID and installed theme name, then updates only the body's theme class.
   Saving enforces same-origin requests, ownership, and draft status, invalidates
   the poster cache, and reports failures in the dialog so the user can retry.
+  Every theme defines `--header-background-color` and `--header-font-color` for
+  the poster header, independently of the poster background and section headings.
+  These colors are shared by the editor, theme previews, and read-only documents.
+  When both poster-header and section-header coloring are enabled, layout
+  section headings sit flush at the section top and span its full inner width.
+  Section and grouped-section outlines clip the colored heading backgrounds to
+  their top corner radii; body content retains padding. Without a separately
+  colored poster header, section headings retain their previous inset styling.
+  Flush colored headings have twice the default single-line height, vertically
+  centered text, and the same horizontal padding as the body content below.
+  Body content below flush colored headings has 3rem of top padding.
+  Non-flush colored section headings have a 1rem bottom margin.
+  The ocean, forest, plum, terracotta, slate, and gold palettes coordinate dark
+  headers and light header text with pale poster backgrounds and dark body text.
 - The last poster lookup is cached by owner and poster ID for two seconds;
   poster mutations invalidate it.
 - Media endpoints require ownership. QR PNG bytes come from `poster.moreinfopng`,
   logos from `poster.logo` with an allowlisted `poster.logotype`, and source files
   from owner-scoped source storage. Responses are private and non-cacheable.
-- `poster.width` and `poster.height` are nullable integers, stored in the units
+- `poster.width` and `poster.height` are nullable double-precision numbers, stored in the units
   selected in `poster.units` (`cm`, `mm`, or `in`). New posters have null
   dimensions until the user sets them. Pixel previews convert those dimensions
   to inches at the rendering boundary.
-- User input is **height x width**; whole numbers and `cm`, `mm`, and `in` are accepted.
+- User input is **height x width**; fractional dimensions and `cm`, `mm`, and `in` are accepted.
   Missing units use the
   conference units, or the poster display units without a conference.
-- Landscape and square posters select `arena`; portrait posters select `vertical`.
+- Without an explicit template choice, landscape and square posters select
+  `arena`; portrait posters select `vertical`. The template dialog saves its
+  selected template together with the dimensions and units.
+- Portrait presets in the template dialog scroll horizontally in ascending width
+  groups. Tiles are vertically centered, with thin black vertical separators
+  between groups and a small centered `{width}{units} wide` label below each group
+  that scrolls with it.
+- Landscape presets scroll vertically in ascending height groups, separated by
+  thin black horizontal rules. A small `{height}{units} Hgh` label sits to the
+  left of each group, vertically centered and scrolling with it.
+  The list shrinks to the available dialog height so scrolling leaves the
+  lower-right Cancel and Apply buttons visible and stationary.
+  Every category uses the same viewport-constrained 650px outer height and a
+  maximum outer width of 650px, including padding, borders, and action buttons.
+  Status messages occupy the space to the left of Cancel and Apply in the same
+  row; long messages scroll within that space without moving the buttons.
+  Each preset tile shows contrasting section outlines for the selected template.
+  Adjacent sections share edges without gaps, retaining an outer preview margin.
+  Changing the template updates all outlines while keeping size labels centered.
+  Changing category does not change the dialog height or position.
+  Units, Category, and Template stay at fixed vertical positions across categories.
+  Only the dimensions area scrolls; Cancel and Apply stay 1.5rem from the
+  dialog's inner bottom edge in every category.
+  Dragging the dialog title moves it within the viewport; resizing the viewport
+  keeps it on-screen, and reopening centers it again.
+  Opening the dialog or changing size options reveals the selected tile within
+  the vertical heights or horizontal widths list without scrolling the form.
+- The dialog disables incompatible presets and shows validation reasons in hover
+  tooltips rather than inline within the width and height lists,
+  using server-computed errors from the same conference and application dimension
+  rules enforced when saving. It selects only eligible presets; custom dimensions
+  remain subject to server validation.
+- When a displayed preset list contains disabled options, Wikkit explains that
+  they are too large for the conference requirements, using "one option",
+  "a couple of options", or "some options" for one, two, or more disabled presets.
 - `/layout/dimensions` uses the `layout-dimensions` Wikkit workflow: save exact
   required sizes and wait for confirmation, otherwise offer complete maximum
   sizes, then request custom input as necessary. `idk` uses complete maximum
   sizes only when available; without them it asks again rather than inventing
   dimensions. All conference bounds are converted to centimeters before validation.
+  The size picker reserves space beside the default chat window on wider screens
+  and allows its choices to be scrolled above the chat window on narrow screens.
+  Selecting a size immediately validates and saves it via the dimensions
+  endpoint, then proceeds to upload. Invalid sizes display validation errors
+  and the correction form.
 - Exact conference requirements take precedence over readability minima.
   Otherwise both dimensions must meet the configured minimums. Partial maxima
   and requirements still constrain custom input. Layout validation enforces
@@ -1219,7 +1376,8 @@ Implementation contract:
   Edits POST JSON `{"dimensions": "36 in x 48 in"}` to `/layout/dimensions`;
   invalid values return HTTP 422 with errors and, when parseable, a preview.
   Valid values persist width, height, units, and orientation together and redirect
-  to `/layout/edit`. The server rejects edits to purchased or foreign posters.
+  to `/content/upload` (or `/layout/edit` when saving with a template).
+  The server rejects edits to purchased or foreign posters.
 
 The following original design sketch is superseded by the implementation
 contract above where unit conversions, field names, or orientation differ.

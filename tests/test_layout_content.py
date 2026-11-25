@@ -19,7 +19,175 @@ FORMATTING = {
 }
 
 
+class MathJaxSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mathjax_output_serializes_and_restores_as_latex(self) -> None:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            try:
+                page = await browser.new_page()
+                await page.set_content("""<div id="formula">
+                    \\[E=mc^2\\]
+                </div>""")
+                await page.add_script_tag(path=str(ROOT / "static/javascript/mathjax.js"))
+                result = await page.locator("#formula").evaluate("""element => {
+                    window.mathJaxSource.prepare(element);
+                    const saved = window.mathJaxSource.serialize(element);
+                    window.mathJaxSource.restore(element);
+                    return {saved, restored: element.textContent.trim()};
+                }""")
+                self.assertIn(r"\[E=mc^2\]", result["saved"])
+                self.assertEqual(result["restored"], r"\[E=mc^2\]")
+            finally:
+                await browser.close()
+
+
 class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
+    async def test_flush_header_doubles_height_and_aligns_text_with_body(self) -> None:
+        await self.page.set_content("""<body class="blue colored-section-headers">
+            <div class="layout" style="width: 900px">
+                <div class="section">
+                    <div class="header"><span>Heading</span></div>
+                    <div class="content">Body</div>
+                </div>
+            </div></body>""")
+        for stylesheet in ("layout", "themes"):
+            await self.page.add_style_tag(path=str(ROOT / f"static/css/{stylesheet}.css"))
+        heading = self.page.locator(".header")
+        for font_size in (16, 32):
+            await self.page.locator(".layout").evaluate(
+                "(el, size) => {el.style.fontSize = `${size}px`}", font_size,
+            )
+            baseline = await heading.bounding_box()
+            await self.page.locator("body").evaluate("el => el.classList.add('colored-poster-header')")
+            bounds = await heading.bounding_box()
+            text = await heading.locator("span").bounding_box()
+            body_left = await self.page.locator(".content").evaluate(
+                "el => el.getBoundingClientRect().left + parseFloat(getComputedStyle(el).paddingLeft)",
+            )
+            self.assertAlmostEqual(bounds["height"], baseline["height"] * 2, delta=1)
+            self.assertAlmostEqual(
+                text["y"] + text["height"] / 2, bounds["y"] + bounds["height"] / 2, delta=1,
+            )
+            self.assertAlmostEqual(text["x"], body_left, delta=0.1)
+            self.assertEqual(await self.page.locator(".content").evaluate(
+                "el => getComputedStyle(el).paddingTop",
+            ), "48px")
+            self.assertEqual(await heading.evaluate(
+                "el => getComputedStyle(el).marginBottom",
+            ), "0px")
+            self.assertEqual(await heading.evaluate(
+                "el => getComputedStyle(el).paddingRight",
+            ), await self.page.locator(".content").evaluate(
+                "el => getComputedStyle(el).paddingRight",
+            ))
+            await self.page.locator("body").evaluate("el => el.classList.remove('colored-poster-header')")
+            self.assertEqual(await heading.bounding_box(), baseline)
+            self.assertEqual(await self.page.locator(".content").evaluate(
+                "el => getComputedStyle(el).paddingTop",
+            ), "0px")
+            self.assertEqual(await heading.evaluate(
+                "el => getComputedStyle(el).marginBottom",
+            ), "16px")
+            content = await self.page.locator(".content").bounding_box()
+            self.assertAlmostEqual(
+                content["y"] - baseline["y"] - baseline["height"], 16, delta=0.1,
+            )
+
+    async def test_colored_section_headers_are_flush_and_clipped_to_section_corners(self) -> None:
+        await self.page.set_content("""<body class="blue colored-section-headers">
+            <div class="layout" style="width: 900px">
+                <div class="section"><div class="header">Heading</div><div class="content">Body</div></div>
+                <div class="section-parent">
+                    <div class="section"><div class="header">Left</div><div class="content">Body</div></div>
+                    <div class="section"><div class="header">Right</div><div class="content">Body</div></div>
+                </div>
+                <div class="section-parent vertical">
+                    <div class="section"><div class="header">Stacked</div><div class="content">Body</div></div>
+                </div>
+            </div></body>""")
+        for stylesheet in ("layout", "themes"):
+            await self.page.add_style_tag(path=str(ROOT / f"static/css/{stylesheet}.css"))
+        for corner in ("square", "slightly-rounded", "rounded", "very-rounded"):
+            await self.page.locator("body").evaluate(
+                "(el, corner) => {el.className = `blue colored-poster-header colored-section-headers corners-${corner}`}", corner,
+            )
+            for section in await self.page.locator(".section").all():
+                geometry = await section.evaluate("""el => {
+                    const r = el.getBoundingClientRect();
+                    const style = getComputedStyle(el);
+                    const heading = el.querySelector('.header');
+                    const h = heading.getBoundingClientRect();
+                    return {
+                        left: h.left - r.left,
+                        top: h.top - r.top,
+                        width: h.width,
+                        innerWidth: el.clientWidth,
+                        borderLeft: parseFloat(style.borderLeftWidth),
+                        borderTop: parseFloat(style.borderTopWidth),
+                        overflow: style.overflow,
+                        radius: getComputedStyle(heading).borderTopLeftRadius,
+                        padding: getComputedStyle(el.querySelector('.content')).paddingLeft,
+                    };
+                }""")
+                self.assertAlmostEqual(geometry["left"], geometry["borderLeft"], delta=0.1)
+                self.assertAlmostEqual(geometry["top"], geometry["borderTop"], delta=0.1)
+                self.assertAlmostEqual(geometry["width"], geometry["innerWidth"], delta=1)
+                self.assertEqual(geometry["overflow"], "hidden")
+                self.assertEqual(geometry["radius"], "0px")
+                self.assertEqual(geometry["padding"], "80px")
+            row = self.page.locator(".section-parent:not(.vertical)")
+            self.assertEqual(await row.evaluate("el => getComputedStyle(el).overflow"), "hidden")
+            self.assertEqual(await row.locator(".section").first.evaluate(
+                "el => getComputedStyle(el).borderTopLeftRadius",
+            ), "0px")
+            await self.page.locator("body").evaluate("el => el.classList.remove('colored-poster-header')")
+            section = self.page.locator(".section").first
+            self.assertEqual(await section.evaluate("el => getComputedStyle(el).paddingTop"), "48px")
+            self.assertEqual(await section.locator(".content").evaluate(
+                "el => getComputedStyle(el).paddingLeft",
+            ), "0px")
+            self.assertEqual(await section.locator(".header").evaluate(
+                "el => getComputedStyle(el).backgroundColor",
+            ), "rgb(35, 99, 165)")
+            self.assertEqual(await section.locator(".header").evaluate(
+                "el => getComputedStyle(el).borderTopLeftRadius",
+            ), {"square": "0px", "slightly-rounded": "10px", "rounded": "20px", "very-rounded": "30px"}[corner])
+            self.assertEqual(await row.evaluate("el => getComputedStyle(el).overflow"), "visible")
+        await self.page.locator("body").evaluate("el => el.classList.remove('colored-section-headers')")
+        self.assertEqual(await self.page.locator(".section").first.evaluate(
+            "el => getComputedStyle(el).paddingTop",
+        ), "48px")
+
+    async def test_vertical_section_groups_are_contiguous_with_single_separators(self) -> None:
+        await self.page.set_content("""<div class="section-parent vertical">
+            <div class="section">Citations</div>
+            <div class="section">Acknowledgements</div>
+            <div class="section">Information</div>
+        </div>""")
+        await self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
+        children = await self.page.locator(".section-parent > .section").evaluate_all(
+            """sections => sections.map(section => {
+                const bounds = section.getBoundingClientRect();
+                const style = getComputedStyle(section);
+                return {
+                    top: bounds.top,
+                    bottom: bounds.bottom,
+                    borderTop: style.borderTopWidth,
+                    borderBottom: style.borderBottomWidth,
+                };
+            })""",
+        )
+        self.assertEqual(
+            await self.page.locator(".section-parent").evaluate(
+                "el => getComputedStyle(el).gap",
+            ),
+            "0px",
+        )
+        for previous, current in zip(children, children[1:]):
+            self.assertAlmostEqual(previous["bottom"], current["top"], delta=0.1)
+            self.assertEqual(current["borderTop"], "0px")
+            self.assertNotEqual(previous["borderBottom"], "0px")
+
     async def asyncSetUp(self) -> None:
         playwright = await async_playwright().start()
         self.addAsyncCleanup(playwright.stop)
@@ -33,8 +201,12 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         footer = Environment(autoescape=True).from_string(
             (ROOT / "templates/layoutfoot.html").read_text(),
         ).render(poster={"pid": 11}, themes=posters.installed_themes(),
+                 theme_options=posters.THEME_PICKER_COLORS,
                  font_sets=posters.installed_fonts())
-        await self.page.set_content('<body class="blues elegant">' + footer)
+        await self.page.set_content(
+            '<body class="blue corners-square elegant"><div class="content" contenteditable="true">Sample text</div>'
+            + footer,
+        )
         for stylesheet in ("layout", "fonts", "themes"):
             await self.page.add_style_tag(path=str(ROOT / f"static/css/{stylesheet}.css"))
         await self.page.evaluate("""() => {
@@ -44,12 +216,16 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
                 return {ok: true, json: async () => ({ok: true})};
             };
         }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-theme.js"))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-editor.js"))
+        self.assertTrue(await self.page.locator("#appearance-controls").is_hidden())
+        await self.page.locator("#appearance").click()
+        self.assertEqual(await self.page.locator("#appearance").get_attribute("aria-expanded"), "true")
 
     async def test_cancel_escape_and_apply_preserve_other_appearance_setting(self) -> None:
-        for button, setting, current, target, other in (
-            ("font", "fonts", "elegant", "technical", "blues"),
-            ("theme", "theme", "blues", "greens", "technical"),
+        for button, setting, current, target in (
+            ("font", "fonts", "elegant", "technical"),
         ):
             with self.subTest(button=button):
                 await self.page.locator(f"#{button}").click()
@@ -61,20 +237,303 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
                 await self.page.locator(f"#{button}").click()
                 self.assertTrue(await self.page.locator(f'input[value="{current}"]').is_checked())
                 await self.page.keyboard.press("Escape")
+                await self.page.wait_for_function(
+                    f"!document.getElementById('{button}-dialog').open",
+                )
                 self.assertFalse(await self.page.locator(f"#{button}-dialog").is_visible())
+                self.assertTrue(await self.page.locator("#appearance-controls").is_visible())
                 await self.page.locator(f"#{button}").click()
                 await self.page.locator(f'label:has(input[value="{target}"])').click()
                 await self.page.locator(f"#{button}-apply").click()
                 await self.page.wait_for_function(
                     f"!document.getElementById('{button}-dialog').open",
                 )
-                self.assertEqual(
-                    set((await self.page.locator("body").get_attribute("class")).split()),
-                    {target, other},
-                )
+                self.assertEqual(set((await self.page.locator("body").get_attribute("class")).split()), {
+                    "blue", "corners-square", target,
+                })
                 self.assertEqual(await self.page.evaluate("window.savedRequests.pop()"), {
                     "url": f"/layout/{setting}", "data": {"pid": 11, setting: target},
                 })
+
+    async def test_toolbar_control_groups_are_mutually_exclusive(self) -> None:
+        for button, visible in (
+            ("extended", "extended"),
+            ("appearance", "appearance"),
+            ("appearance", None),
+            ("extended", "extended"),
+            ("extended", None),
+        ):
+            with self.subTest(button=button, visible=visible):
+                await self.page.locator(f"#{button}").click()
+                for group in ("appearance", "extended"):
+                    self.assertEqual(
+                        await self.page.locator(f"#{group}-controls").is_visible(),
+                        group == visible,
+                    )
+                    self.assertEqual(
+                        await self.page.locator(f"#{group}").get_attribute("aria-expanded"),
+                        str(group == visible).lower(),
+                    )
+
+        await self.page.locator("#extended").focus()
+        await self.page.keyboard.press("Enter")
+        await self.page.locator("#appearance").focus()
+        await self.page.keyboard.press("Enter")
+        self.assertTrue(await self.page.locator("#appearance-controls").is_visible())
+        self.assertTrue(await self.page.locator("#extended-controls").is_hidden())
+        self.assertEqual(await self.page.locator("#extended").get_attribute("aria-expanded"), "false")
+        await self.page.locator("#theme").focus()
+        await self.page.keyboard.press("Escape")
+        self.assertTrue(await self.page.locator("#appearance-controls").is_hidden())
+        self.assertEqual(await self.page.locator("#appearance").get_attribute("aria-expanded"), "false")
+        self.assertEqual(await self.page.locator(":focus").get_attribute("id"), "appearance")
+
+    async def test_sources_button_redirects_to_content_review(self) -> None:
+        await self.page.locator("#sources").click()
+        await self.page.wait_for_url("https://presto.test/content/review")
+
+    async def test_dimensions_button_flushes_and_opens_editor_dimensions(self) -> None:
+        await self.page.evaluate(
+            "window.flushPosterContent = async () => { sessionStorage.setItem('flushed', 'yes'); }",
+        )
+        await self.page.locator("#dimensions").click()
+        await self.page.wait_for_url("https://presto.test/layout/dimensions?from=editor")
+        self.assertEqual(await self.page.evaluate("sessionStorage.getItem('flushed')"), "yes")
+
+    async def test_dimensions_button_stays_on_editor_when_flush_fails(self) -> None:
+        await self.page.evaluate("""() => {
+            window.flushPosterContent = async () => { throw new Error("Save failed"); };
+            window.wikkit = {say: message => { window.failureMessage = message; }};
+        }""")
+        await self.page.locator("#dimensions").click()
+        await self.page.wait_for_function("window.failureMessage !== undefined")
+        self.assertIn("could not be saved", await self.page.evaluate("window.failureMessage"))
+        self.assertTrue(await self.page.locator("#dimensions").is_enabled())
+        self.assertEqual(self.page.url, "https://presto.test/")
+
+    async def test_theme_controls_save_all_settings_and_keep_other_appearance(self) -> None:
+        await self.page.locator("#theme").click()
+        self.assertTrue(await self.page.locator('input[name="color"][value="blue"]').is_checked())
+        self.assertTrue(await self.page.locator('input[name="corners"][value="square"]').is_checked())
+        await self.page.locator('label:has(input[name="color"][value="purple"])').click()
+        await self.page.locator('label:has(input[name="corners"][value="very-rounded"])').click()
+        await self.page.locator('label:has(input[name="colored_poster_header"])').click()
+        await self.page.locator('label:has(input[name="colored_section_headers"])').click()
+        await self.page.locator("#theme-apply").click()
+        await self.page.wait_for_function("!document.getElementById('theme-dialog').open")
+        self.assertEqual(set((await self.page.locator("body").get_attribute("class")).split()), {
+            "purple", "corners-very-rounded", "colored-poster-header",
+            "colored-section-headers", "elegant",
+        })
+        self.assertEqual(await self.page.evaluate("window.savedRequests.pop()"), {
+            "url": "/layout/theme",
+            "data": {
+                "pid": 11, "color": "purple", "corners": "very-rounded",
+                "colored_poster_header": True, "colored_section_headers": True,
+            },
+        })
+
+    async def test_corner_and_header_examples_follow_selected_color_and_shape(self) -> None:
+        await self.page.locator("#theme").click()
+        await self.page.locator('label:has(input[name="color"][value="green"])').click()
+        await self.page.locator('label:has(input[name="corners"][value="rounded"])').click()
+        examples = await self.page.locator(
+            ".theme-corner-option, .theme-toggle-option",
+        ).evaluate_all("""elements => elements.map(element => {
+            const style = getComputedStyle(element);
+            return {
+                background: style.backgroundColor,
+                color: style.color,
+                radius: style.borderRadius,
+            };
+        })""")
+        for example in examples:
+            self.assertEqual(example["background"], "rgb(52, 131, 75)")
+            self.assertEqual(example["color"], "rgb(255, 255, 255)")
+        for example, expected in zip(examples[:4], (0, 20 / 3, 40 / 3, 20)):
+            self.assertAlmostEqual(float(example["radius"].removesuffix("px")), expected, places=2)
+        for example in examples[4:]:
+            self.assertAlmostEqual(
+                float(example["radius"].removesuffix("px")),
+                40 / 3,
+                places=2,
+            )
+
+    async def test_theme_controls_match_the_current_theme_button_text_color(self) -> None:
+        await self.page.locator("body").evaluate(
+            "body => body.classList.replace('blue', 'yellow')",
+        )
+        await self.page.locator("#theme").click()
+        for theme in posters.THEME_COLORS:
+            with self.subTest(theme=theme):
+                await self.page.locator(
+                    f'label:has(input[name="color"][value="{theme}"])',
+                ).click()
+                combinations = await self.page.locator(
+                    ".theme-color-option:has(input[name='color']:checked), "
+                    ".theme-corner-option, .theme-toggle-option",
+                ).evaluate_all("""elements => elements.map(element => {
+                    const style = getComputedStyle(element);
+                    return [style.backgroundColor, style.color];
+                })""")
+                self.assertEqual(
+                    combinations,
+                    [combinations[0]] * len(combinations),
+                )
+                self.assertEqual(
+                    await self.page.locator(".theme-color-option").evaluate_all(
+                        "elements => elements.map(element => getComputedStyle(element).color)",
+                    ),
+                    [
+                        "rgb(34, 34, 34)" if color in {"yellow", "orange", "light-grey"}
+                        else "rgb(255, 255, 255)"
+                        for color in posters.THEME_COLORS
+                    ],
+                )
+
+    async def test_header_controls_have_ten_pixel_gap(self) -> None:
+        await self.page.locator("#theme").click()
+        for width, height in ((1200, 1100), (360, 500)):
+            with self.subTest(width=width, height=height):
+                await self.page.set_viewport_size({"width": width, "height": height})
+                gap = await self.page.locator(".theme-header-options").evaluate("""group => {
+                    const [first, second] = [...group.children].map(element => element.getBoundingClientRect());
+                    return Math.abs(first.top - second.top) < 1
+                        ? second.left - first.right
+                        : second.top - first.bottom;
+                }""")
+                self.assertAlmostEqual(gap, 10, delta=0.01)
+
+    async def test_theme_option_outlines_fit_at_all_edges(self) -> None:
+        await self.page.locator("#theme").click()
+        for width, height in ((1200, 1100), (360, 500)):
+            with self.subTest(width=width, height=height):
+                await self.page.set_viewport_size({"width": width, "height": height})
+                options = self.page.locator(".theme-color-option, .theme-choice-option")
+                for index in range(await options.count()):
+                    option = options.nth(index)
+                    input_control = option.locator("input")
+                    if not await input_control.is_checked():
+                        await option.click()
+                    bounds = await option.evaluate("""element => {
+                        const scroller = document.getElementById("theme-options-scroll");
+                        const before = element.getBoundingClientRect();
+                        const scrollport = scroller.getBoundingClientRect();
+                        scroller.scrollTop += (before.top + before.bottom) / 2
+                            - (scrollport.top + scrollport.bottom) / 2;
+                        const style = getComputedStyle(element);
+                        const outset = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+                        const rect = element.getBoundingClientRect();
+                        const group = element.parentElement.getBoundingClientRect();
+                        const viewport = scroller.getBoundingClientRect();
+                        const siblings = [...element.parentElement.children]
+                            .filter(sibling => sibling !== element)
+                            .map(sibling => sibling.getBoundingClientRect());
+                        return {
+                            outset,
+                            left: rect.left - outset,
+                            right: rect.right + outset,
+                            top: rect.top - outset,
+                            bottom: rect.bottom + outset,
+                            group: {left: group.left, right: group.right,
+                                    top: group.top, bottom: group.bottom},
+                            viewport: {left: viewport.left + scroller.clientLeft,
+                                       right: viewport.left + scroller.clientLeft + scroller.clientWidth,
+                                       top: viewport.top + scroller.clientTop,
+                                       bottom: viewport.top + scroller.clientTop + scroller.clientHeight},
+                            overlaps: siblings.some(sibling =>
+                                rect.left - outset < sibling.right
+                                && rect.right + outset > sibling.left
+                                && rect.top - outset < sibling.bottom
+                                && rect.bottom + outset > sibling.top),
+                        };
+                    }""")
+                    self.assertEqual(bounds["outset"], 6)
+                    for container in ("group", "viewport"):
+                        self.assertGreaterEqual(bounds["left"], bounds[container]["left"] - 0.01)
+                        self.assertLessEqual(bounds["right"], bounds[container]["right"] + 0.01)
+                        self.assertGreaterEqual(bounds["top"], bounds[container]["top"] - 0.01)
+                        self.assertLessEqual(
+                            bounds["bottom"], bounds[container]["bottom"] + 0.01,
+                            f"option {index}, {container}: {bounds}",
+                        )
+                    self.assertFalse(bounds["overlaps"])
+
+    async def test_selected_theme_buttons_use_contrasting_three_pixel_outlines(self) -> None:
+        await self.page.locator("#theme").click()
+        await self.page.locator('label:has(input[name="color"][value="blue"])').click()
+        await self.page.locator('label:has(input[name="corners"][value="rounded"])').click()
+        await self.page.locator('label:has(input[name="colored_poster_header"])').click()
+        await self.page.locator('label:has(input[name="colored_section_headers"])').click()
+        selected = await self.page.locator(
+            ".theme-color-option:has(> input[name='color']:checked), "
+            ".theme-corner-option:has(> input[name='corners']:checked), "
+            ".theme-toggle-option:has(> input[type='checkbox']:checked)",
+        ).evaluate_all(
+            """elements => elements.map(element => {
+            const style = getComputedStyle(element);
+            return {
+                outline: style.outlineStyle,
+                width: style.outlineWidth,
+                offset: style.outlineOffset,
+                color: style.outlineColor,
+                border: style.borderColor,
+                marker: getComputedStyle(element, "::after").content,
+            };
+        })""",
+        )
+        self.assertEqual(len(selected), 4)
+        for button in selected:
+            self.assertEqual(button["outline"], "solid")
+            self.assertEqual(button["width"], "3px")
+            self.assertEqual(button["offset"], "3px")
+            self.assertEqual(button["color"], button["border"])
+            self.assertEqual(button["marker"], "none")
+        self.assertEqual(
+            await self.page.locator(
+                ".theme-color-option:has(> input[name='color']:checked)",
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            await self.page.locator(
+                ".theme-corner-option:has(> input[name='corners']:checked)",
+            ).count(),
+            1,
+        )
+        await self.page.locator('label:has(input[name="colored_section_headers"])').click()
+        self.assertEqual(
+            await self.page.locator(
+                ".theme-toggle-option:has(> input[type='checkbox']:checked)",
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            await self.page.locator(
+                ".theme-toggle-option:has(> input[type='checkbox']:checked)",
+            ).inner_text(),
+            "Colored Poster Header",
+        )
+        await self.page.locator('label:has(input[name="color"][value="dark-grey"])').click()
+        light_selected = await self.page.locator(
+            ".theme-color-option:has(> input[name='color']:checked)",
+        ).evaluate("""element => {
+            const style = getComputedStyle(element);
+            return [style.outlineColor, style.borderColor];
+        }""")
+        self.assertEqual(light_selected[0], light_selected[1])
+        self.assertEqual(
+            await self.page.locator(
+                ".theme-color-option:has(> input[name='color']:checked)",
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            await self.page.locator(
+                ".theme-color-option:has(> input[name='color']:checked)",
+            ).evaluate("element => getComputedStyle(element).outlineWidth"),
+            "3px",
+        )
 
     async def test_failed_save_stays_open_and_can_be_retried(self) -> None:
         await self.page.evaluate("""() => {
@@ -91,13 +550,19 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(await self.page.locator("#font-dialog").is_visible())
         self.assertTrue(await self.page.locator("#font-apply").is_enabled())
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "blues elegant")
+        self.assertEqual(
+            set((await self.page.locator("body").get_attribute("class")).split()),
+            {"blue", "corners-square", "elegant"},
+        )
         await self.page.evaluate("""() => {
             window.fetch = async () => ({ok: true, json: async () => ({ok: true})});
         }""")
         await self.page.locator("#font-apply").click()
         await self.page.wait_for_function("!document.getElementById('font-dialog').open")
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "blues modern")
+        self.assertEqual(
+            set((await self.page.locator("body").get_attribute("class")).split()),
+            {"blue", "corners-square", "modern"},
+        )
 
     async def test_font_previews_use_their_own_fonts_and_fit_small_screens(self) -> None:
         await self.page.locator("#font").click()
@@ -113,6 +578,473 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(bounds["x"], 0)
         self.assertLessEqual(bounds["x"] + bounds["width"], 360)
         self.assertLessEqual(bounds["height"], 640)
+
+    async def test_palette_buttons_have_contrasting_theme_colors(self) -> None:
+        await self.page.locator("#theme").click()
+        self.assertEqual(
+            await self.page.locator(".theme-color-option").count(),
+            len(posters.THEME_PICKER_COLORS),
+        )
+        self.assertEqual(
+            await self.page.locator(".theme-color-option").evaluate_all(
+                "elements => elements.map(element => [element.querySelector('input').value, "
+                "getComputedStyle(element).color])",
+            ),
+            [
+                [theme, "rgb(34, 34, 34)" if theme in {"yellow", "orange", "light-grey"}
+                 else "rgb(255, 255, 255)"]
+                for theme in posters.THEME_COLORS
+            ],
+        )
+        buttons = await self.page.locator(".theme-color-option").evaluate_all("""elements =>
+            elements.map(element => {
+                const style = getComputedStyle(element);
+                const luminance = color => {
+                    const rgb = color.match(/\\d+/g).slice(0, 3).map(value => {
+                        const channel = Number(value) / 255;
+                        return channel <= 0.04045 ? channel / 12.92
+                            : ((channel + 0.055) / 1.055) ** 2.4;
+                    });
+                    return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+                };
+                const text = luminance(style.color);
+                const background = luminance(style.backgroundColor);
+                return {
+                    contrast: (Math.max(text, background) + 0.05)
+                        / (Math.min(text, background) + 0.05),
+                    inputVisible: getComputedStyle(element.querySelector("input")).opacity !== "0"
+                        && getComputedStyle(element.querySelector("input")).clipPath === "none",
+                };
+            })""")
+        for button in buttons:
+            self.assertGreaterEqual(button["contrast"], 4.5)
+            self.assertFalse(button["inputVisible"])
+        self.assertTrue(await self.page.locator(".theme-color-option").first.evaluate(
+            "element => getComputedStyle(element).backgroundColor !== 'rgba(0, 0, 0, 0)'",
+        ))
+        for corner, radius in (
+            ("square", 0), ("slightly-rounded", 20 / 3),
+            ("rounded", 40 / 3), ("very-rounded", 20),
+        ):
+            button_radius = await self.page.locator(
+                f'.theme-corner-option:has(input[value="{corner}"])',
+            ).evaluate("element => getComputedStyle(element).borderRadius")
+            self.assertAlmostEqual(float(button_radius.removesuffix("px")), radius, places=2)
+        await self.page.evaluate("""() => {
+            const header = document.createElement("div");
+            header.className = "poster-header";
+            header.textContent = "Poster title";
+            document.body.append(header);
+            document.body.classList.add("colored-poster-header", "colored-section-headers");
+        }""")
+        for theme in posters.THEME_COLORS:
+            with self.subTest(theme=theme):
+                actual = await self.page.locator(".poster-header").evaluate("""(element, theme) => {
+                    document.body.classList.remove(...document.body.classList);
+                    document.body.classList.add(theme, "colored-poster-header");
+                    return getComputedStyle(element).backgroundColor;
+                }""", theme)
+                self.assertNotEqual(actual, "rgba(0, 0, 0, 0)")
+
+    async def test_read_only_header_colors_are_opt_in(self) -> None:
+        await self.page.set_content("""
+            <article class="poster-document blue corners-rounded">
+                <header>Poster title</header>
+                <h2>Section title</h2>
+                <div id="sample-section" class="section">Section content</div>
+            </article>
+        """)
+        for path in ("themes.css", "pages/poster-document.css"):
+            await self.page.add_style_tag(path=str(ROOT / "static/css" / path))
+        before = await self.page.locator(".poster-document").evaluate("""element => [
+            getComputedStyle(element.querySelector("header")).backgroundColor,
+            getComputedStyle(element.querySelector("h2")).backgroundColor,
+            getComputedStyle(element.querySelector("h2")).borderRadius,
+            getComputedStyle(element.querySelector(".section")).borderRadius,
+        ]""")
+        self.assertEqual(before[:2], ["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"])
+        self.assertEqual(before[2:], ["20px", "40px"])
+        for corner, section_radius in (
+            ("square", "0px"), ("slightly-rounded", "20px"),
+            ("rounded", "40px"), ("very-rounded", "60px"),
+        ):
+            radius = await self.page.locator("#sample-section").evaluate(
+                """(element, corner) => {
+                    element.closest(".poster-document").classList.remove(
+                        "corners-square", "corners-slightly-rounded",
+                        "corners-rounded", "corners-very-rounded",
+                    );
+                    element.closest(".poster-document").classList.add(`corners-${corner}`);
+                    return getComputedStyle(element).borderRadius;
+                }""", corner,
+            )
+            self.assertEqual(radius, section_radius)
+        after = await self.page.locator(".poster-document").evaluate("""element => {
+            element.classList.add("colored-poster-header", "colored-section-headers");
+            return [
+                getComputedStyle(element.querySelector("header")).backgroundColor,
+                getComputedStyle(element.querySelector("h2")).backgroundColor,
+            ];
+        }""")
+        self.assertNotEqual(after[0], "rgba(0, 0, 0, 0)")
+        self.assertNotEqual(after[1], "rgba(0, 0, 0, 0)")
+
+    async def test_new_theme_colors_have_readable_contrast_in_documents(self) -> None:
+        await self.page.set_content("""
+            <article class="poster-document">
+                <header>Poster title</header><h2>Section title</h2><p>Poster content</p>
+            </article>
+        """)
+        for path in ("themes.css", "pages/poster-document.css"):
+            await self.page.add_style_tag(path=str(ROOT / "static/css" / path))
+        for theme in posters.THEME_COLORS:
+            with self.subTest(theme=theme):
+                contrasts = await self.page.locator("article").evaluate("""(element, theme) => {
+                    element.className = `poster-document ${theme} colored-poster-header colored-section-headers`;
+                    const luminance = color => {
+                        const rgb = color.match(/\\d+/g).slice(0, 3).map(value => {
+                            const channel = Number(value) / 255;
+                            return channel <= 0.04045 ? channel / 12.92
+                                : ((channel + 0.055) / 1.055) ** 2.4;
+                        });
+                        return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+                    };
+                    return [element, element.querySelector('header'), element.querySelector('h2')].map(node => {
+                        const style = getComputedStyle(node);
+                        const text = luminance(style.color);
+                        const background = luminance(style.backgroundColor);
+                        return (Math.max(text, background) + 0.05)
+                            / (Math.min(text, background) + 0.05);
+                    });
+                }""", theme)
+                for contrast in contrasts:
+                    self.assertGreaterEqual(contrast, 4.5)
+
+
+class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        playwright = await async_playwright().start()
+        self.addAsyncCleanup(playwright.stop)
+        browser = await playwright.chromium.launch()
+        self.addAsyncCleanup(browser.close)
+        self.page = await browser.new_page()
+        await self.page.route(
+            "https://presto.test/**", lambda route: route.fulfill(body="<!doctype html>"),
+        )
+        await self.page.goto("https://presto.test/")
+        await self.page.set_content('<body><button id="wikkit">Wikkit</button></body>')
+        await self.page.add_style_tag(path=str(ROOT / "static/css/router.css"))
+        await self.page.evaluate("""() => {
+            class MockWebSocket extends EventTarget {
+                constructor() {
+                    super();
+                    this.readyState = MockWebSocket.OPEN;
+                    this.sent = [];
+                    window.chatSocket = this;
+                }
+                send(text) { this.sent.push(text); }
+                close() {}
+            }
+            MockWebSocket.CONNECTING = 0;
+            MockWebSocket.OPEN = 1;
+            window.WebSocket = MockWebSocket;
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+        await self.page.evaluate("window.wikkit = connect(() => {})")
+
+    async def prompt(self, local: bool = False) -> None:
+        await self.page.evaluate("""local => {
+            wikkit.say('<button data-sends="yes">Yes</button><button data-sends="no">No</button>'
+                + '<input required><textarea></textarea><select><option>Choose</option>'
+                + '<option>Other</option></select>');
+            if (local) {
+                window.answer = null;
+                wikkit.requestResponse().then(answer => { window.answer = answer; });
+            } else {
+                return wikkit.execute({does: 'request-response'});
+            }
+        }""", local)
+
+    async def test_typed_response_disables_all_controls_for_server_and_local_waits(self) -> None:
+        for local in (False, True):
+            with self.subTest(local=local):
+                await self.prompt(local)
+                await self.page.locator("#chatinput").fill("My answer")
+                await self.page.locator("#chatinput").press("Enter")
+                self.assertEqual(await self.page.locator(
+                    "#chatlog :is(button, input, textarea, select):enabled",
+                ).count(), 0)
+                if local:
+                    self.assertEqual(await self.page.evaluate("window.answer"), "My answer")
+                await self.page.evaluate("wikkit.say('<button data-sends=\"next\">Next</button>')")
+                self.assertTrue(await self.page.locator("#chatlog button").last.is_enabled())
+                await self.page.evaluate("wikkit.execute({does: 'clear-chat'})")
+
+    async def test_embedded_responses_disable_other_groups_and_fields(self) -> None:
+        for control in ("button", "input", "textarea", "select"):
+            with self.subTest(control=control):
+                await self.prompt()
+                if control == "button":
+                    await self.page.locator("#chatlog button").first.click()
+                elif control == "select":
+                    await self.page.locator("#chatlog select").select_option("Other")
+                else:
+                    await self.page.locator(f"#chatlog {control}").fill("Answer")
+                    if control == "input":
+                        await self.page.locator("#chatlog input").press("Enter")
+                    else:
+                        await self.page.locator("#chatlog textarea + button").click()
+                self.assertEqual(await self.page.locator(
+                    "#chatlog :is(button, input, textarea, select):enabled",
+                ).count(), 0)
+                await self.page.evaluate("wikkit.execute({does: 'clear-chat'})")
+
+    async def test_invalid_response_leaves_controls_active(self) -> None:
+        await self.prompt()
+        await self.page.locator("#chatlog input").press("Enter")
+        self.assertTrue(await self.page.locator("#chatlog input").is_enabled())
+        self.assertTrue(await self.page.locator("#chatlog button").first.is_enabled())
+        self.assertEqual(await self.page.evaluate("chatSocket.sent"), [])
+
+    async def test_late_memory_ack_cannot_submit_or_reenable_obsolete_controls(self) -> None:
+        for ok in (True, False):
+            with self.subTest(ok=ok):
+                await self.prompt()
+                await self.page.evaluate("""() => {
+                    chatSocket.sent = [];
+                    wikkit.say('<input id="remembered" data-memory="session" data-name="answer">');
+                }""")
+                await self.page.locator("#remembered").fill("Old answer")
+                await self.page.locator("#remembered").press("Enter")
+                await self.page.locator("#chatinput").fill("New answer")
+                await self.page.locator("#chatinput").press("Enter")
+                await self.page.evaluate("""ok => {
+                    const {memory} = JSON.parse(chatSocket.sent[0]);
+                    chatSocket.dispatchEvent(new MessageEvent('message', {
+                        data: JSON.stringify({memory: {id: memory.id, ok, error: 'Write failed'}}),
+                    }));
+                }""", ok)
+                self.assertEqual(await self.page.locator(
+                    "#chatlog :is(button, input, textarea, select):enabled",
+                ).count(), 0)
+                self.assertEqual((await self.page.evaluate("chatSocket.sent"))[1:], ["New answer"])
+                await self.page.evaluate("wikkit.execute({does: 'clear-chat'})")
+
+    async def test_failed_memory_write_can_be_retried_without_completing_wait(self) -> None:
+        await self.prompt(True)
+        await self.page.evaluate("""() => {
+            wikkit.say('<input id="remembered" data-memory="session" data-name="answer">');
+        }""")
+        await self.page.locator("#remembered").fill("Answer")
+        await self.page.locator("#remembered").press("Enter")
+        await self.page.evaluate("""() => {
+            const {memory} = JSON.parse(chatSocket.sent[0]);
+            chatSocket.dispatchEvent(new MessageEvent('message', {
+                data: JSON.stringify({memory: {id: memory.id, ok: false, error: 'Write failed'}}),
+            }));
+        }""")
+        self.assertTrue(await self.page.locator("#remembered").is_enabled())
+        self.assertTrue(await self.page.locator("#remembered + button").is_enabled())
+        self.assertTrue(await self.page.locator("#chatlog button").first.is_enabled())
+        self.assertIsNone(await self.page.evaluate("window.answer"))
+        await self.page.locator("#remembered").press("Enter")
+        await self.page.evaluate("""() => {
+            const {memory} = JSON.parse(chatSocket.sent[1]);
+            chatSocket.dispatchEvent(new MessageEvent('message', {
+                data: JSON.stringify({memory: {id: memory.id, ok: true}}),
+            }));
+        }""")
+        self.assertEqual(await self.page.evaluate("window.answer"), "Answer")
+        self.assertEqual(await self.page.locator(
+            "#chatlog :is(button, input, textarea, select):enabled",
+        ).count(), 0)
+
+    async def test_completed_controls_remain_inactive_after_navigation(self) -> None:
+        await self.prompt()
+        await self.page.locator("#chatinput").fill("Answer")
+        await self.page.locator("#chatinput").press("Enter")
+        await self.page.goto("https://presto.test/next")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+        self.assertGreater(await self.page.locator("#chatlog button").count(), 0)
+        self.assertEqual(await self.page.locator(
+            "#chatlog :is(button, input, textarea, select):enabled",
+        ).count(), 0)
+
+    async def test_clicking_outlined_element_or_child_hides_outline_without_blocking_click(self) -> None:
+        await self.page.evaluate("""() => {
+            const element = document.createElement('button');
+            element.id = 'outlined';
+            element.style.outline = '4px solid red';
+            element.innerHTML = '<span>Outlined</span>';
+            element.onclick = event => {
+                element.dataset.clicked = 'true';
+                event.stopPropagation();
+            };
+            document.body.prepend(element);
+        }""")
+        await self.page.locator("#outlined span").click()
+        self.assertEqual(await self.page.locator("#outlined").get_attribute("data-clicked"), "true")
+        self.assertEqual(await self.page.locator("#outlined").evaluate(
+            "element => getComputedStyle(element).outlineStyle",
+        ), "none")
+        await self.page.add_style_tag(content=(
+            ".layout-profile-attention { outline: 4px solid red !important; }"
+        ))
+        await self.page.evaluate("""() => {
+            const element = document.createElement('button');
+            element.id = 'profile-attention';
+            element.className = 'layout-profile-attention';
+            element.innerHTML = '<span>Needs attention</span>';
+            document.body.prepend(element);
+        }""")
+        await self.page.locator("#profile-attention span").click()
+        self.assertEqual(await self.page.locator("#profile-attention").evaluate(
+            "element => getComputedStyle(element).outlineStyle",
+        ), "solid")
+
+    async def test_handle_appearance_matches_on_public_and_layout_pages(self) -> None:
+        await self.page.add_style_tag(path=str(ROOT / "static/css/main.css"))
+        await self.page.locator("body").evaluate("element => element.className = 'wikkit-page'")
+        handle = self.page.locator("#chatbot .chatbot-handle")
+        appearance = """element => {
+            const style = getComputedStyle(element);
+            const icon = getComputedStyle(element, '::before');
+            return {
+                fontFamily: style.fontFamily,
+                fontSize: style.fontSize,
+                fontWeight: style.fontWeight,
+                lineHeight: style.lineHeight,
+                height: element.getBoundingClientRect().height,
+                color: style.color,
+                background: style.backgroundColor,
+                icon: icon.backgroundImage,
+                iconWidth: icon.width,
+                iconHeight: icon.height,
+            };
+        }"""
+        public = await handle.evaluate(appearance)
+        self.assertEqual(public["fontSize"], "32px")
+        self.assertEqual(public["lineHeight"], "51.2px")
+        self.assertIn("/static/graphics/wikkicon.png", public["icon"])
+        self.assertEqual(public["iconWidth"], "32px")
+        self.assertEqual(public["iconHeight"], "32px")
+
+        await self.page.locator("body").evaluate("element => element.className = ''")
+        await self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
+        self.assertEqual(await handle.evaluate(appearance), public)
+
+    async def test_wikkit_button_toggles_chatbot_visibility_and_accessibility(self) -> None:
+        chatbot = self.page.locator("#chatbot")
+        button = self.page.locator("#wikkit")
+
+        self.assertEqual(
+            await chatbot.evaluate("element => getComputedStyle(element).transitionDuration"),
+            "0.44s, 0s",
+        )
+        self.assertEqual(await chatbot.evaluate("element => getComputedStyle(element).visibility"), "visible")
+        await button.click()
+        self.assertTrue(
+            await chatbot.evaluate("element => element.classList.contains('chat-hidden')"),
+        )
+        self.assertTrue(await chatbot.evaluate("element => element.inert"))
+        self.assertEqual(await chatbot.get_attribute("aria-hidden"), "true")
+        await self.page.wait_for_function(
+            "getComputedStyle(document.getElementById('chatbot')).visibility === 'hidden'",
+        )
+
+        await button.click()
+        self.assertFalse(
+            await chatbot.evaluate("element => element.classList.contains('chat-hidden')"),
+        )
+        self.assertFalse(await chatbot.evaluate("element => element.inert"))
+        self.assertIsNone(await chatbot.get_attribute("aria-hidden"))
+        await self.page.wait_for_function(
+            "getComputedStyle(document.getElementById('chatbot')).visibility === 'visible'",
+        )
+
+    async def test_chatbot_starts_below_editor_menu(self) -> None:
+        await self.page.goto("https://presto.test/layout")
+        await self.page.set_content(
+            '<body data-wikkit-offline="true"><nav class="basic-menu">'
+            '<a class="menu-brand">Presto</a><ul><li>Account</li></ul></nav>'
+            '<button id="wikkit">Wikkit</button></body>',
+        )
+        for stylesheet in ("main.css", "layout.css", "router.css"):
+            await self.page.add_style_tag(path=str(ROOT / "static/css" / stylesheet))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+        await self.page.evaluate("window.wikkit = connect(() => {})")
+        await self.page.wait_for_function(
+            "Math.abs(document.querySelector('#chatbot').getBoundingClientRect().width - 256) < 0.1",
+        )
+        positions = await self.page.evaluate("""() => ({
+            menuBottom: document.querySelector('.basic-menu').getBoundingClientRect().bottom,
+            chatbot: document.querySelector('#chatbot').getBoundingClientRect().toJSON(),
+        })""")
+        self.assertAlmostEqual(positions["chatbot"]["top"], positions["menuBottom"], delta=0.1)
+        self.assertAlmostEqual(positions["chatbot"]["width"], 256, delta=0.1)
+
+    async def test_editor_viewport_and_controls_track_chatbot(self) -> None:
+        await self.page.goto("https://presto.test/layout")
+        await self.page.set_content(
+            '<body data-wikkit-offline="true"><nav class="basic-menu">Menu</nav>'
+            '<div id="poster-container"></div><div id="controls">Controls</div></body>',
+        )
+        for stylesheet in ("main.css", "layout.css", "router.css"):
+            await self.page.add_style_tag(path=str(ROOT / "static/css" / stylesheet))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+        opening = await self.page.evaluate("""async () => {
+            window.wikkit = connect(() => {});
+            const frames = [];
+            const start = performance.now();
+            do {
+                await new Promise(requestAnimationFrame);
+                frames.push({
+                    panelLeft: document.querySelector('#chatbot').getBoundingClientRect().left,
+                    viewportRight: document.querySelector('#poster-container').getBoundingClientRect().right,
+                });
+            } while (performance.now() - start < 550);
+            return frames;
+        }""")
+        for frame in opening:
+            self.assertAlmostEqual(frame["panelLeft"], frame["viewportRight"], delta=1)
+        samples = await self.page.evaluate("""async () => {
+            const bot = document.querySelector('#chatbot');
+            const viewport = document.querySelector('#poster-container');
+            const controls = document.querySelector('#controls');
+            const samples = [];
+            for (const command of ['hide-chat', 'show-chat']) {
+                await wikkit.execute({does: command});
+                const frames = [];
+                const start = performance.now();
+                do {
+                    await new Promise(requestAnimationFrame);
+                    frames.push({
+                        panelLeft: bot.getBoundingClientRect().left,
+                        viewportRight: viewport.getBoundingClientRect().right,
+                        controlsRight: controls.getBoundingClientRect().right,
+                    });
+                } while (performance.now() - start < 550);
+                samples.push(frames);
+            }
+            return samples;
+        }""")
+        for frames in samples:
+            self.assertGreater(len(frames), 2)
+            for frame in frames:
+                self.assertAlmostEqual(frame["panelLeft"], frame["viewportRight"], delta=1)
+                self.assertAlmostEqual(frame["panelLeft"], frame["controlsRight"], delta=1)
+        self.assertAlmostEqual(samples[0][-1]["viewportRight"], self.page.viewport_size["width"], delta=1)
+        self.assertAlmostEqual(samples[1][-1]["viewportRight"], self.page.viewport_size["width"] - 256, delta=1)
+        await self.page.set_viewport_size({"width": 200, "height": 600})
+        await self.page.wait_for_timeout(500)
+        sizes = await self.page.evaluate("""() => ({
+            panelLeft: document.querySelector('#chatbot').getBoundingClientRect().left,
+            viewportRight: document.querySelector('#poster-container').getBoundingClientRect().right,
+            controlsRight: document.querySelector('#controls').getBoundingClientRect().right,
+        })""")
+        self.assertAlmostEqual(sizes["panelLeft"], 0, delta=1)
+        self.assertAlmostEqual(sizes["panelLeft"], sizes["viewportRight"], delta=1)
+        self.assertAlmostEqual(sizes["panelLeft"], sizes["controlsRight"], delta=1)
 
 
 class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
@@ -139,7 +1071,7 @@ class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
             window.savedRequests = [];
             window.fetch = async (url, options) => {
                 window.savedRequests.push(JSON.parse(options.body));
-                return {ok: true, json: async () => ({ok: true})};
+                return {ok: true, json: async () => ({ok: true, content: JSON.parse(options.body).content})};
             };
         }""")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-content.js"))
@@ -188,6 +1120,29 @@ class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await tray.is_hidden())
         self.assertEqual(await self.page.locator(":focus").get_attribute("id"), "extended")
         self.assertEqual(await self.page.evaluate("window.savedRequests"), [])
+
+    async def test_extended_buttons_are_outlined_only_when_formatting_is_set(self) -> None:
+        for button in ("code", "superscript", "subscript", "ullist", "ollist"):
+            with self.subTest(button=button):
+                await self.load_editor()
+                await self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
+                await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+                control = self.page.locator(f"#{button}")
+                self.assertEqual(await control.evaluate(
+                    "element => getComputedStyle(element).outlineStyle",
+                ), "none")
+                await control.click()
+                self.assertEqual(await control.get_attribute("aria-pressed"), "true")
+                self.assertEqual(await control.evaluate(
+                    "element => [getComputedStyle(element).outlineStyle, "
+                    "getComputedStyle(element).outlineWidth, getComputedStyle(element).outlineOffset]",
+                ), ["solid", "3px", "3px"])
+                await control.click()
+                self.assertEqual(await control.get_attribute("aria-pressed"), "false")
+                await control.focus()
+                self.assertEqual(await control.evaluate(
+                    "element => getComputedStyle(element).outlineStyle",
+                ), "none")
 
     async def test_list_buttons_toggle_switch_and_save(self) -> None:
         for button, tag, other in (("ullist", "ul", "ollist"), ("ollist", "ol", "ullist")):
@@ -280,27 +1235,27 @@ class SectionFormattingTests(unittest.IsolatedAsyncioTestCase):
                 await self.page.set_viewport_size({"width": width, "height": 700})
                 bounds = await self.page.evaluate("""() => {
                     const rect = id => document.getElementById(id).getBoundingClientRect();
-                    const bold = rect('bold');
-                    const redo = rect('redo');
+                    const appearance = rect('appearance');
+                    const wikkit = rect('wikkit');
                     const status = rect('content-save-status');
                     const slider = rect('poster-zoom');
                     const value = rect('poster-zoom-value');
                     return {
-                        leftInset: bold.left, rightInset: innerWidth - value.right,
-                        statusAfterRedo: Boolean(document.querySelector(
-                            '#editor-controls #redo + #content-save-status')),
-                        statusLeft: status.left, redoRight: redo.right,
-                        statusTop: status.top, redoBottom: redo.bottom,
+                        leftInset: appearance.left, rightInset: innerWidth - value.right,
+                        statusAfterWikkit: Boolean(document.querySelector(
+                            '#editor-controls #wikkit + #content-save-status')),
+                        statusLeft: status.left, wikkitRight: wikkit.right,
+                        statusTop: status.top, wikkitBottom: wikkit.bottom,
                         sliderGap: value.left - slider.right,
                         sliderTop: slider.top, valueBottom: value.bottom,
                         pageWidth: document.documentElement.scrollWidth,
                     };
                 }""")
                 self.assertAlmostEqual(bounds["leftInset"], bounds["rightInset"], delta=0.1)
-                self.assertTrue(bounds["statusAfterRedo"])
+                self.assertTrue(bounds["statusAfterWikkit"])
                 if width == 1600:
-                    self.assertGreater(bounds["statusLeft"], bounds["redoRight"])
-                    self.assertLess(bounds["statusTop"], bounds["redoBottom"])
+                    self.assertGreater(bounds["statusLeft"], bounds["wikkitRight"])
+                    self.assertLess(bounds["statusTop"], bounds["wikkitBottom"])
                 self.assertAlmostEqual(bounds["sliderGap"], 6, delta=0.1)
                 self.assertLess(bounds["sliderTop"], bounds["valueBottom"])
                 self.assertLessEqual(bounds["pageWidth"], width)

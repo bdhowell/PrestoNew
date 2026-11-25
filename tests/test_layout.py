@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import unittest
 import uuid
@@ -56,14 +57,32 @@ class LayoutRouteTests(unittest.TestCase):
         response = self.client.get("/layout/layout")
         self.assertEqual(response.status_code, 200)
         self.assertIn('id="pane0"', response.text)
+        self.assertIn('href="/static/css/router.css"', response.text)
+        self.assertIn('src="/static/javascript/wikkit.js"', response.text)
+        self.assertIn("window.wikkit = connect(", response.text)
         self.store.get.assert_awaited_with(7, 11)
         self.store.content.assert_awaited_once_with(7, 11)
         document = html.fromstring(response.text)
         self.assertEqual(document.get_element_by_id("title").text_content(), "Research")
-        self.assertEqual(document.get_element_by_id("authors").text_content(), "<Ada> (Institute)")
+        template_dialog = document.get_element_by_id("template-dialog")
+        self.assertEqual(template_dialog.get("data-template"), "arena")
+        self.assertEqual(template_dialog.get("data-width"), "36")
+        self.assertEqual(template_dialog.get("data-height"), "48")
+        self.assertEqual(
+            document.xpath('//*[@id="template-dialog"]//input[@name="category"]/@value'),
+            ["square", "landscape", "portrait", "custom"],
+        )
+        self.assertEqual(
+            document.xpath('//*[@id="template-dialog"]//select[@name="units"]/option/@value'),
+            ["in", "cm", "mm"],
+        )
+        self.assertEqual(
+            document.get_element_by_id("template-units").getnext().get("id"), "template-categories",
+        )
+        self.assertEqual(document.get_element_by_id("authors").text_content(), "<Ada>\u00a0(Institute)")
         self.assertIn("Experiment", document.get_element_by_id("methods").text_content())
         self.assertEqual(len(document.xpath('//*[@id="methods"]//h2')), 0)
-        self.assertIn("Findings", document.get_element_by_id("conclusion").text_content())
+        self.assertIn("Findings", document.get_element_by_id("conclusions").text_content())
         self.assertEqual(
             document.xpath('//*[@id="methods"]//div[@class="content"]/@contenteditable'),
             ["true"],
@@ -72,6 +91,38 @@ class LayoutRouteTests(unittest.TestCase):
             document.xpath('//*[@id="methods"]//div[@class="content"]/@data-section'),
             ["materials and methods"],
         )
+
+    def test_profile_validation_interval_is_exposed_to_the_editor(self) -> None:
+        with patch.dict(os.environ, {"PROFILE_VALIDATION_INTERVAL": "425"}):
+            document = html.fromstring(self.client.get("/layout/layout").text)
+        self.assertEqual(
+            document.get_element_by_id("layout").get("data-profile-validation-interval"),
+            "425",
+        )
+
+    def test_manual_sections_expose_personalized_adjustment_message(self) -> None:
+        document = html.fromstring(self.client.get("/layout/layout").text)
+        for name, label in (
+            ("citations", "Literature Cited"),
+            ("acknowledgements", "Acknowledgements"),
+            ("information", "Additional Information"),
+        ):
+            with self.subTest(section=name):
+                section = document.get_element_by_id(name)
+                self.assertEqual(
+                    section.get("data-manual-adjustment"),
+                    f"I\u2019m sorry, Ada, you have to adjust {label} yourself.",
+                )
+                self.assertEqual(section.xpath('.//*[@contenteditable="true"]/@data-section'),
+                                 [routes.ALIASES.get(name, name)])
+        self.assertIsNone(document.get_element_by_id("results").get("data-manual-adjustment"))
+
+    def test_profile_validation_interval_rejects_invalid_values(self) -> None:
+        for value in ("invalid", "-1", "2147483648"):
+            with self.subTest(value=value), patch.dict(
+                os.environ, {"PROFILE_VALIDATION_INTERVAL": value},
+            ), self.assertRaises(ValueError):
+                routes.profile_validation_interval()
 
     def test_section_headings_use_full_names(self) -> None:
         document = html.fromstring(self.client.get("/layout/layout").text)
@@ -83,6 +134,10 @@ class LayoutRouteTests(unittest.TestCase):
             document.xpath('//*[@id="citations"]//div[@class="header"]/text()'),
             ["Literature Cited"],
         )
+        self.assertEqual(
+            document.xpath('//*[@id="information"]//div[@class="header"]/text()'),
+            ["Additional Information"],
+        )
 
     def test_section_content_is_saved_to_its_database_section(self) -> None:
         self.store.save_section.return_value = True
@@ -91,10 +146,42 @@ class LayoutRouteTests(unittest.TestCase):
             json={"section": "materials and methods", "content": "<p>Updated</p>"},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True})
+        self.assertEqual(response.json(), {"ok": True, "content": "<p>Updated</p>"})
         self.store.save_section.assert_awaited_once_with(
             7, 11, "materials and methods", "<p>Updated</p>",
         )
+
+    def test_section_save_with_explicit_poster_is_owner_scoped(self) -> None:
+        self.store.save_section.return_value = True
+        response = self.client.post(
+            "/layout/content", json={"pid": 11, "section": "results", "content": "<p>Updated</p>"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.store.get.assert_awaited_with(7, 11)
+        self.store.save_section.assert_awaited_once_with(7, 11, "results", "<p>Updated</p>")
+        for pid in (0, -1, True, "11"):
+            self.assertEqual(self.client.post(
+                "/layout/content", json={"pid": pid, "section": "results", "content": "Text"},
+            ).status_code, 422)
+        self.store.get.return_value = None
+        self.assertEqual(self.client.post(
+            "/layout/content", json={"pid": 12, "section": "results", "content": "Text"},
+        ).status_code, 404)
+
+    def test_revision_save_is_conditional_on_original_content(self) -> None:
+        self.store.save_section_if_unchanged.return_value = True
+        data = {"pid": 11, "section": "results", "content": "<p>Revised</p>",
+                "expected": "<p>Original</p>"}
+        self.assertEqual(self.client.post("/layout/content", json=data).status_code, 200)
+        self.store.save_section_if_unchanged.assert_awaited_once_with(
+            7, 11, "results", "<p>Revised</p>", "<p>Original</p>",
+        )
+        self.store.save_section_if_unchanged.return_value = False
+        response = self.client.post("/layout/content", json=data)
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Copy your edits", response.json()["detail"])
+        data["expected"] = 123
+        self.assertEqual(self.client.post("/layout/content", json=data).status_code, 422)
 
     def test_section_save_rejects_invalid_input_and_cross_origin_requests(self) -> None:
         for data in (
@@ -130,6 +217,17 @@ class LayoutRouteTests(unittest.TestCase):
         for tag in ("b", "i", "code", "u", "strike", "sup", "sub", "ul", "ol"):
             self.assertEqual(len(document.xpath(f'//*[@id="results"]//{tag}')), 1)
 
+    def test_section_save_returns_the_sanitized_content(self) -> None:
+        self.store.save_section.return_value = True
+        response = self.client.post(
+            "/layout/content", json={"section": "results", "content": "<div>Edited</div>"},
+        )
+        self.assertEqual(response.json(), {"ok": True, "content": "&lt;div&gt;Edited&lt;/div&gt;"})
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+        self.store.save_section.assert_awaited_once_with(
+            7, 11, "results", "&lt;div&gt;Edited&lt;/div&gt;",
+        )
+
     def test_headers_include_measured_widths_for_every_template(self) -> None:
         for template in posters.TEMPLATES:
             with self.subTest(template=template):
@@ -140,7 +238,9 @@ class LayoutRouteTests(unittest.TestCase):
                 self.assertAlmostEqual(self.balancer.await_args.args[1], DRAFT.inches[0] * 96)
                 self.assertEqual(
                     document.get_element_by_id("poster-canvas").get("style"),
-                    f"width: {DRAFT.inches[0] * 96:.6f}px; height: {DRAFT.inches[1] * 96:.6f}px",
+                    f"width: {DRAFT.inches[0] * 96:.6f}px; height: {DRAFT.inches[1] * 96:.6f}px; "
+                    f"--poster-font-scale: {DRAFT.font_scale:.9f}; "
+                    "--sections-font-scale: 1; --title-font-scale: 1; --authors-font-scale: 1",
                 )
                 self.assertIsNone(document.find("body").get("style"))
                 self.assertTrue(document.xpath('//*[@id="poster-container"]//*[@id="poster-header"]'))
@@ -163,29 +263,93 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertIn('class="section-parent vertical"', response.text)
         self.assertEqual(self.session["poster_id"], 12)
 
+    def test_drafts_missing_dimensions_redirect_before_rendering(self) -> None:
+        for path in ("/layout/edit", "/layout/layout", "/layout/edit?pid=52"):
+            for width, height in ((None, None), (None, 48), (36, None)):
+                with self.subTest(path=path, width=width, height=height):
+                    self.session["poster_id"] = 11
+                    self.store.get.return_value = replace(
+                        DRAFT, pid=52 if "pid=" in path else 11, width=width, height=height,
+                    )
+                    response = self.client.get(path, follow_redirects=False)
+                    self.assertEqual(response.status_code, 303)
+                    self.assertEqual(response.headers["location"], "/layout/dimensions")
+                    self.assertEqual(self.session["poster_id"], self.store.get.return_value.pid)
+        self.store.content.assert_not_awaited()
+        self.balancer.assert_not_awaited()
+        self.store.set_resumption.assert_not_awaited()
+
+    def test_missing_dimensions_can_be_set_before_upload(self) -> None:
+        self.store.get.return_value = replace(DRAFT, width=None, height=None)
+        response = self.client.get("/layout/edit?pid=11")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.url.path, "/layout/dimensions")
+        self.assertIn('data-page="layout-dimensions"', response.text)
+        response = self.client.post("/layout/dimensions", json={"dimensions": "48 in x 36 in"})
+        self.assertEqual(response.status_code, 200)
+        self.store.set_dimensions.assert_awaited_once_with(7, 11, 36 * 2.54, 48 * 2.54, "in")
+        self.assertEqual(response.json()["redirect"], "/layout/template?from=dimensions")
+
     def test_saved_theme_and_fonts_are_applied_to_layout(self) -> None:
         self.store.get.return_value = replace(DRAFT, theme="blues", fonts="technical")
         document = html.fromstring(self.client.get("/layout/edit").text)
-        self.assertEqual(document.find("body").get("class").split(), ["blues", "technical"])
+        self.assertEqual(document.find("body").get("class").split(), [
+            "blue", "corners-very-rounded", "colored-poster-header",
+            "colored-section-headers", "technical",
+        ])
         self.assertTrue(document.xpath('//link[@href="/static/css/themes.css"]'))
         self.assertTrue(document.xpath('//link[@href="/static/css/fonts.css"]'))
 
-    def test_theme_dialog_lists_installed_themes_and_saves_current_poster(self) -> None:
+    def test_theme_dialog_exposes_settings_and_saves_current_poster(self) -> None:
         document = html.fromstring(self.client.get("/layout/edit").text)
         self.assertEqual(
-            document.xpath('//*[@id="theme-options"]//input/@value'),
-            posters.installed_themes(),
+            document.xpath('//*[@id="theme-options"]//input[@name="color"]/@value'),
+            list(posters.THEME_PICKER_COLORS),
+        )
+        self.assertEqual(
+            document.xpath('//*[@id="theme-options"]//input[@name="corners"]/@value'),
+            list(posters.THEME_CORNERS),
+        )
+        self.assertEqual(
+            document.xpath('//*[@id="theme-options"]//input[@type="checkbox"]/@name'),
+            ["colored_poster_header", "colored_section_headers"],
         )
         self.assertEqual(document.get_element_by_id("theme-dialog").get("data-pid"), "11")
         self.store.set_theme.return_value = True
         self.session["poster_id"] = 99
-        response = self.client.post("/layout/theme", json={"pid": 11, "theme": "greens"})
+        response = self.client.post("/layout/theme", json={
+            "pid": 11, "color": "green", "corners": "rounded",
+            "colored_poster_header": True, "colored_section_headers": False,
+        })
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True})
-        self.store.set_theme.assert_awaited_once_with(7, 11, "greens")
-        self.store.get.return_value = replace(DRAFT, theme="greens")
+        self.store.set_theme.assert_awaited_once_with(
+            7, 11, "green",
+            posters.ThemeSettings(
+                corners="rounded", colored_poster_header=True, colored_section_headers=False,
+            ),
+        )
+        self.store.get.return_value = replace(
+            DRAFT, theme="green",
+            theme_settings={"corners": "rounded", "colored_poster_header": True},
+        )
         document = html.fromstring(self.client.get("/layout/edit?pid=11").text)
-        self.assertIn("greens", document.find("body").get("class").split())
+        self.assertEqual(document.find("body").get("class").split(), [
+            "green", "corners-rounded", "colored-poster-header",
+        ])
+
+    def test_theme_save_accepts_a_legacy_request_from_cached_editor_assets(self) -> None:
+        self.store.set_theme.return_value = True
+        response = self.client.post("/layout/theme", json={"pid": 11, "theme": "greens"})
+        self.assertEqual(response.status_code, 200)
+        self.store.set_theme.assert_awaited_once_with(
+            7, 11, "green",
+            posters.ThemeSettings(
+                corners="very-rounded",
+                colored_poster_header=True,
+                colored_section_headers=True,
+            ),
+        )
 
     def test_font_dialog_lists_installed_sets_and_saves_current_poster(self) -> None:
         document = html.fromstring(self.client.get("/layout/edit").text)
@@ -209,7 +373,10 @@ class LayoutRouteTests(unittest.TestCase):
         self.store.set_fonts.assert_awaited_once_with(7, 11, "technical")
         self.store.get.return_value = replace(DRAFT, theme="blues", fonts="technical")
         document = html.fromstring(self.client.get("/layout/edit?pid=11").text)
-        self.assertEqual(document.find("body").get("class").split(), ["blues", "technical"])
+        self.assertEqual(document.find("body").get("class").split(), [
+            "blue", "corners-very-rounded", "colored-poster-header",
+            "colored-section-headers", "technical",
+        ])
 
     def test_font_save_rejects_invalid_unowned_and_purchased_posters(self) -> None:
         for data in (
@@ -242,11 +409,16 @@ class LayoutRouteTests(unittest.TestCase):
 
     def test_theme_save_rejects_invalid_unowned_and_purchased_posters(self) -> None:
         for data in (
-            {"pid": 11, "theme": "missing"}, {"pid": 11, "theme": ["basic"]},
-            {"pid": True, "theme": "basic"}, {"theme": "basic"},
+            {"pid": 11, "color": "missing", "corners": "square"},
+            {"pid": 11, "color": ["blue"], "corners": "square"},
+            {"pid": 11, "color": "blue", "corners": "invalid"},
+            {"pid": 11, "color": "blue", "corners": "square",
+             "colored_poster_header": "yes"},
+            {"pid": True, "color": "blue", "corners": "square"},
+            {"color": "blue", "corners": "square"},
         ):
             self.assertEqual(self.client.post("/layout/theme", json=data).status_code, 422)
-        data = {"pid": 11, "theme": "basic"}
+        data = {"pid": 11, "color": "blue", "corners": "square"}
         self.assertEqual(self.client.post(
             "/layout/theme", json=data, headers={"Origin": "https://elsewhere.test"},
         ).status_code, 403)
@@ -257,7 +429,7 @@ class LayoutRouteTests(unittest.TestCase):
         self.store.set_theme.assert_not_awaited()
 
     def test_theme_save_reports_storage_errors_and_conflicts(self) -> None:
-        data = {"pid": 11, "theme": "basic"}
+        data = {"pid": 11, "color": "blue", "corners": "square"}
         self.store.set_theme.return_value = False
         self.assertEqual(self.client.post("/layout/theme", json=data).status_code, 409)
         self.store.set_theme.side_effect = psycopg.OperationalError("offline")
@@ -274,7 +446,7 @@ class LayoutRouteTests(unittest.TestCase):
                 self.store.get.return_value = replace(DRAFT, template=template)
                 document = html.fromstring(self.client.get("/layout/edit").text)
                 authors = document.get_element_by_id("authors")
-                self.assertEqual(authors.text_content(), "<Ada> (Institute), Grace, Lin (University)")
+                self.assertEqual(authors.text_content(), "<Ada>\u00a0(Institute), Grace, Lin\u00a0(University)")
                 self.assertFalse(authors.xpath(".//br"))
                 self.assertIn("authors", authors.get("class").split())
                 title = document.get_element_by_id("title")
@@ -298,11 +470,21 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["location"], "/posters/list")
         self.store.get.assert_not_awaited()
 
-    def test_purchased_poster_redirects_to_view(self) -> None:
+    def test_purchased_poster_redirects_to_open_for_download(self) -> None:
         self.store.get.return_value = replace(DRAFT, purchased=True)
         response = self.client.get("/layout/layout", follow_redirects=False)
         self.assertEqual(response.status_code, 303)
-        self.assertEqual(response.headers["location"], "/posters/11/view")
+        self.assertEqual(response.headers["location"], "/posters/11/open")
+
+    def test_explicit_poster_is_selected_before_saving_resumption(self) -> None:
+        self.session.clear()
+        self.store.get.return_value = replace(DRAFT, pid=12)
+        response = self.client.get("/layout/edit?pid=12", follow_redirects=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.session["poster_id"], 12)
+        self.store.set_resumption.assert_awaited_once_with(
+            7, 12, "http://testserver/layout/edit?pid=12&xyzzy=arpa",
+        )
 
     def test_grouped_sections_and_logo_are_rendered_into_a_fresh_template(self) -> None:
         self.store.get.return_value = replace(DRAFT, template="vertical", logo=b"image", logotype="png")
@@ -373,19 +555,326 @@ class LayoutRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('data-page="layout-dimensions"', response.text)
         self.assertIn('id="dimension-correction" hidden', response.text)
+        document = html.fromstring(response.text)
+        pairs = json.loads(document.get_element_by_id("dimension-picker").get("data-sizes"))
+        self.assertIn([[70, 100, "cm"]], pairs)
+        self.assertNotIn([[24, 36, "in"], [36, 24, "in"]], pairs)
         self.assertIs(wikkit.WORKFLOWS["layout-dimensions"], routes.dimensions_workflow)
+        self.store.set_resumption.assert_awaited_once_with(
+            7, 11, "http://testserver/layout/dimensions?xyzzy=arpa",
+        )
+
+    def test_editor_dimensions_page_exposes_current_values_and_return_workflow(self) -> None:
+        document = html.fromstring(self.client.get("/layout/dimensions?from=editor").text)
+        self.assertEqual(document.xpath("//body/@data-page"), ["layout-dimensions-edit"])
+        self.assertEqual(json.loads(document.get_element_by_id("dimension-picker").get("data-current")), {
+            "width": 36, "height": 48, "units": "in",
+        })
+        self.assertIn("36 x 48 in", document.get_element_by_id("current-dimensions").text_content())
+        self.assertEqual(document.get_element_by_id("return-to-poster").text_content(), "Return to Poster")
+        self.assertEqual(
+            document.get_element_by_id("dimension-selection-continue").text_content().strip(),
+            "Return to poster layout",
+        )
+        self.assertIs(wikkit.WORKFLOWS["layout-dimensions-edit"], routes.dimensions_edit_workflow)
+        ordinary = html.fromstring(self.client.get("/layout/dimensions").text)
+        self.assertFalse(ordinary.xpath('//*[@id="return-to-poster" or @id="current-dimensions"]'))
+        self.assertEqual(
+            ordinary.get_element_by_id("dimension-selection-continue").text_content().strip(),
+            "Continue to template selection",
+        )
+
+    def test_template_page_shows_only_matching_orientations_and_marks_current(self) -> None:
+        self.store.get.return_value = replace(DRAFT, template="central")
+        response = self.client.get(
+            "/layout/template",
+            headers={"referer": "http://testserver/layout/dimensions?from=editor"},
+        )
+        self.assertEqual(response.status_code, 200)
+        document = html.fromstring(response.text)
+        self.assertEqual(
+            document.xpath('//*[@id="template-selection"]//button[@data-template]/@data-template'),
+            ["central", "vertical"],
+        )
+        current = document.xpath(
+            '//*[@id="template-selection"]//button[contains(@class, "current-template")]',
+        )
+        self.assertEqual(len(current), 1)
+        self.assertEqual(current[0].get("data-template"), "central")
+        self.assertEqual(current[0].get("aria-current"), "true")
+        self.assertEqual(
+            document.xpath('//*[@id="template-selection"]//input[@type="radio"]'),
+            [],
+        )
+        self.assertFalse(document.xpath('//*[@id="template-selection-apply"]'))
+        self.assertEqual(current[0].xpath('.//span[@class="template-current-label"]/text()'),
+                         ["Current template"])
+        preview = current[0].xpath('.//span[@class="template-preview"]')[0]
+        self.assertIn("0.75000", preview.get("style"))
+        self.assertEqual(
+            current[0].xpath('.//span[contains(@class, "sample-section")]/text()'),
+            ["Introduction", "Materials and Methods", "Results", "Conclusion",
+             "Literature Cited", "Ack\u00adnowl\u00adedg\u00adements", "Additional Information"],
+        )
+        acknowledgements = current[0].xpath(
+            './/span[contains(@class, "sample-section-acknowledgements")]',
+        )[0]
+        self.assertEqual(acknowledgements.text, "Ack\u00adnowl\u00adedg\u00adements")
+        self.assertEqual(acknowledgements.get("lang"), "en")
+        section_group = current[0].xpath('.//span[@class="sample-section-group"]')
+        self.assertEqual(len(section_group), 1)
+        self.assertEqual(
+            section_group[0].xpath('./span[contains(@class, "sample-section")]/text()'),
+            ["Literature Cited", "Ack\u00adnowl\u00adedg\u00adements", "Additional Information"],
+        )
+        self.assertEqual(
+            document.get_element_by_id("template-selection").xpath('.//a[@href]/@href'),
+            ["/layout/dimensions?from=editor"],
+        )
+
+    def test_template_page_cancel_ignores_external_referer(self) -> None:
+        document = html.fromstring(self.client.get(
+            "/layout/template", headers={"referer": "https://attacker.test/layout/dimensions"},
+        ).text)
+        self.assertEqual(document.get_element_by_id("template-selection").get("data-from-dimensions"), "false")
+        self.assertTrue(document.xpath('//*[@id="template-selection"]//a[@hidden]'))
+        self.assertEqual(
+            document.get_element_by_id("template-selection").xpath('.//a[@href]/@href'),
+            ["/layout/edit"],
+        )
+
+    def test_template_continue_button_reflects_origin_and_valid_selection(self) -> None:
+        for path, template, label, disabled in (
+            ("/layout/template?from=dimensions", None, "Continue to content upload", True),
+            ("/layout/template?from=dimensions", "central", "Continue to content upload", False),
+            ("/layout/template", "central", "Return to poster layout", False),
+            ("/layout/template", "arena", "Return to poster layout", True),
+        ):
+            with self.subTest(path=path, template=template):
+                self.store.get.return_value = replace(DRAFT, template=template)
+                document = html.fromstring(self.client.get(path).text)
+                button = document.get_element_by_id("template-selection-continue")
+                self.assertEqual(button.text_content().strip(), label)
+                self.assertEqual(button.get("disabled") is not None, disabled)
+                pressed = document.xpath(
+                    '//*[@id="template-selection"]//button[@aria-pressed="true"]/@data-template',
+                )
+                self.assertEqual(pressed, [] if disabled else [template])
+
+    def test_template_selection_from_dimensions_continues_to_upload(self) -> None:
+        for path, headers in (
+            ("/layout/template?from=dimensions", {}),
+            ("/layout/template", {"referer": "http://testserver/layout/dimensions?from=editor"}),
+        ):
+            with self.subTest(path=path, headers=headers):
+                document = html.fromstring(self.client.get(path, headers=headers).text)
+                self.assertEqual(
+                    document.get_element_by_id("template-selection").get("data-from-dimensions"),
+                    "true",
+                )
+        dimensions = html.fromstring(self.client.get("/layout/dimensions").text)
+        self.assertTrue(dimensions.xpath('//a[@href="/layout/template?from=dimensions"]'))
+        response = self.client.post(
+            "/layout/template",
+            json={"pid": 11, "template": "central", "from_dimensions": True},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["redirect"], "/content/upload?from=template")
+        self.assertEqual(
+            self.client.post(
+                "/layout/template",
+                json={"pid": 11, "template": "central", "from_dimensions": "true"},
+            ).status_code,
+            422,
+        )
+
+    def test_template_page_still_outlines_a_current_orientation_mismatch(self) -> None:
+        self.store.get.return_value = replace(DRAFT, template="arena")
+        document = html.fromstring(self.client.get("/layout/template").text)
+        current = document.xpath(
+            '//*[@id="template-selection"]//button[contains(@class, "current-template")]',
+        )
+        self.assertEqual(len(current), 1)
+        self.assertEqual(current[0].get("data-template"), "arena")
+        self.assertTrue(current[0].get("disabled"))
+        self.assertIn(
+            "not available for this orientation",
+            current[0].xpath('.//span[@class="template-current-label"]/text()')[0],
+        )
+
+    def test_template_updates_require_matching_orientation_and_preserve_dimensions(self) -> None:
+        response = self.client.post(
+            "/layout/template", json={"pid": 11, "template": "central"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "redirect": "/layout/edit"})
+        self.store.set_dimensions.assert_awaited_once_with(
+            7, 11, 36 * 2.54, 48 * 2.54, "in", "central",
+        )
+
+        self.store.set_dimensions.reset_mock()
+        response = self.client.post(
+            "/layout/template", json={"pid": 11, "template": "arena"},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.store.set_dimensions.assert_not_awaited()
+
+    def test_square_posters_offer_and_accept_landscape_templates(self) -> None:
+        self.store.get.return_value = replace(DRAFT, width=48, height=48)
+        document = html.fromstring(self.client.get("/layout/template").text)
+        self.assertEqual(
+            document.xpath('//*[@id="template-selection"]//button[not(@disabled)]/@data-template'),
+            ["arena", "central"],
+        )
+        for template in ("arena", "central"):
+            with self.subTest(template=template):
+                response = self.client.post("/layout/template", json={"pid": 11, "template": template})
+                self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.client.post("/layout/template", json={"pid": 11, "template": "vertical"}).status_code,
+            422,
+        )
+
+    def test_resumed_dimensions_page_restores_its_own_resumption_marker(self) -> None:
+        response = self.client.get("/layout/dimensions?tag=a%2Fb&tag=two&xyzzy=arpa")
+        self.assertEqual(response.status_code, 200)
+        self.store.set_resumption.assert_awaited_once_with(
+            7, 11, "http://testserver/layout/dimensions?tag=a%2Fb&tag=two&xyzzy=arpa",
+        )
+
+    def test_dimension_picker_hides_examples_outside_conference_limits(self) -> None:
+        self.store.conference_details.return_value = (
+            "Meeting",
+            {
+                "maximum_poster_width": 48,
+                "maximum_poster_height": 36,
+                "poster_units": "in",
+            },
+        )
+        response = self.client.get("/layout/dimensions")
+        document = html.fromstring(response.text)
+        pairs = json.loads(document.get_element_by_id("dimension-picker").get("data-sizes"))
+        for group in pairs:
+            for width, height, units, *_ in group:
+                rules = routes.DimensionRules.from_details("Meeting", {
+                    "maximum_poster_width": 48,
+                    "maximum_poster_height": 36,
+                    "poster_units": "in",
+                })
+                self.assertEqual(rules.errors(
+                    width * routes.SCALE[units],
+                    height * routes.SCALE[units],
+                    units,
+                ), [])
+        self.assertTrue(any([48, 36, "in"] in group or [48, 36, "in", "tri"] in group for group in pairs))
+        self.assertFalse(any(
+            [96, 48, "in"] in group or [48, 96, "in"] in group
+            for group in pairs
+        ))
 
     def test_dimension_updates_store_centimeters_and_report_the_display_units(self) -> None:
         response = self.client.post("/layout/dimensions", json={"dimensions": "36 in x 48 in"})
         self.assertEqual(response.status_code, 200)
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 121.92, 91.44, "in")
         self.assertEqual(response.json()["preview"], {"height": 36, "width": 48, "units": "in"})
-        self.assertEqual(response.json()["redirect"], "/layout/edit")
+        self.assertEqual(response.json()["redirect"], "/layout/template?from=dimensions")
 
-    def test_dimension_updates_require_whole_numbers_for_integer_storage(self) -> None:
-        response = self.client.post("/layout/dimensions", json={"dimensions": "36.5 in x 48 in"})
+    def test_editor_dimension_updates_continue_to_template_selection(self) -> None:
+        response = self.client.post(
+            "/layout/dimensions", json={"dimensions": "36 in x 48 in", "from_editor": True},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["redirect"], "/layout/template?from=dimensions")
+        self.assertEqual(self.client.post(
+            "/layout/dimensions", json={"dimensions": "36 in x 48 in", "from_editor": "true"},
+        ).status_code, 422)
+
+    def test_dimension_updates_can_preserve_a_selected_template(self) -> None:
+        response = self.client.post(
+            "/layout/dimensions",
+            json={"dimensions": "48 in x 36 in", "template": "central"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.store.set_dimensions.assert_awaited_once_with(7, 11, 91.44, 121.92, "in", "central")
+        self.assertEqual(response.json()["redirect"], "/layout/edit")
+        response = self.client.post(
+            "/layout/dimensions",
+            json={"dimensions": "48 in x 36 in", "template": "unknown"},
+        )
         self.assertEqual(response.status_code, 422)
-        self.assertIn("whole number using the selected units", " ".join(response.json()["errors"]))
+
+    def test_standard_30_by_40_sizes_are_available(self) -> None:
+        for dimensions in ("30 in x 40 in", "40 in x 30 in"):
+            with self.subTest(dimensions=dimensions):
+                response = self.client.post("/layout/dimensions", json={"dimensions": dimensions})
+                self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.store.set_dimensions.await_count, 2)
+
+    def test_dimension_picker_values_match_wikkit_parser(self) -> None:
+        pairs = json.loads(
+            (Path(__file__).resolve().parent.parent / "stipulations" / "sizes.json").read_text()
+        )["poster_dimension_pairs"]
+        for pair in pairs:
+            for width, height, units, *_ in pair:
+                for display_units in (("cm", "mm") if units in ("cm", "mm") else ("in",)):
+                    factor = routes.SCALE[units] / routes.SCALE[display_units]
+                    text = f"{height * factor:g} {display_units} x {width * factor:g} {display_units}"
+                    parsed_width, parsed_height, parsed_units = routes.parse_dimensions(text, "cm")
+                    self.assertAlmostEqual(parsed_width, width * routes.SCALE[units])
+                    self.assertAlmostEqual(parsed_height, height * routes.SCALE[units])
+                    self.assertEqual(parsed_units, display_units)
+
+    def test_dimension_updates_preserve_fractional_dimensions(self) -> None:
+        response = self.client.post("/layout/dimensions", json={"dimensions": "36.5 in x 48 in"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["preview"], {"height": 36.5, "width": 48, "units": "in"})
+        args = self.store.set_dimensions.await_args.args
+        self.assertEqual(args[:2], (7, 11))
+        self.assertAlmostEqual(args[2], 121.92)
+        self.assertAlmostEqual(args[3], 92.71)
+        self.assertEqual(args[4], "in")
+
+    def test_all_presets_are_accepted_in_both_orientations(self) -> None:
+        for units, presets in posters.POSTER_PRESETS.items():
+            for name, width, height in presets:
+                for w, h in ((width, height), (height, width)):
+                    with self.subTest(units=units, name=name, width=w, height=h):
+                        response = self.client.post(
+                            "/layout/dimensions",
+                            json={"dimensions": f"{h} {units} x {w} {units}", "template": "central"},
+                        )
+                        self.assertEqual(response.status_code, 200, response.text)
+                        args = self.store.set_dimensions.await_args.args
+                        self.assertAlmostEqual(args[2], w * routes.SCALE[units])
+                        self.assertAlmostEqual(args[3], h * routes.SCALE[units])
+                        self.assertEqual(args[4:], (units, "central"))
+
+    def test_iso_presets_still_enforce_conference_constraints(self) -> None:
+        self.store.conference_details.return_value = (
+            "Meeting", {"maximum_poster_height": 100, "poster_units": "cm"},
+        )
+        response = self.client.post("/layout/dimensions", json={"dimensions": "118.9 x 84.1 cm"})
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("height is too big", " ".join(response.json()["errors"]))
+        self.store.set_dimensions.assert_not_awaited()
+
+    def test_landscape_preset_limits_are_rendered_and_enforced_consistently(self) -> None:
+        self.store.conference_details.return_value = (
+            "Meeting", {"maximum_poster_width": 122, "poster_units": "cm"},
+        )
+        response = self.client.get("/layout/layout")
+        self.assertEqual(response.status_code, 200)
+        document = html.fromstring(response.text)
+        errors = json.loads(document.get_element_by_id("template-dialog").get("data-preset-errors"))
+        index = posters.POSTER_PRESETS["in"].index(("", 42, 72))
+        expected = ["Poster width is too big. The maximum is 48.0315 in."]
+        self.assertEqual(errors["in"]["landscape"][index], expected)
+        self.assertEqual(errors["in"]["portrait"][index], [])
+        response = self.client.post(
+            "/layout/dimensions", json={"dimensions": "42 in x 72 in", "template": "central"},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["errors"], expected)
         self.store.set_dimensions.assert_not_awaited()
 
     def test_dimension_route_uses_entered_units_for_limit_messages(self) -> None:
@@ -491,9 +980,7 @@ class DimensionValueTests(unittest.TestCase):
                     self.assertEqual(rules.errors(121.92, 152.4, "in"), [])
                     self.assertEqual(rules.errors(122, 153, "in"), [
                         "Poster width is too big. The maximum is 48 in.",
-                        "Poster width must be a whole number using the selected units.",
                         "Poster height is too big. The maximum is 60 in.",
-                        "Poster height must be a whole number using the selected units.",
                     ])
             rules = routes.DimensionRules.from_details("Meeting", {
                 "maximum_poster_width": 100, "maximum_poster_height": 110,
@@ -534,7 +1021,32 @@ class DimensionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         await routes.dimensions_workflow(self.bot)
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 121.92, 91.44, "in")
         self.assertIn("&lt;Meeting&gt;", self.bot.request_response.await_args.args[0])
+        self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/layout/template?from=dimensions")
+
+    async def test_editor_return_does_not_change_required_dimensions(self) -> None:
+        self.store.conference_details.return_value = ("Meeting", {
+            "required_poster_width": 48, "required_poster_height": 36, "poster_units": "in",
+        })
+        self.bot.request_response.return_value = "return"
+        await routes.dimensions_edit_workflow(self.bot)
+        self.assertIn('data-sends="return">Return to Poster</button>', self.bot.request_response.await_args.args[0])
+        self.store.set_dimensions.assert_not_awaited()
         self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/layout/edit")
+
+    async def test_editor_workflow_retries_and_can_return_or_save(self) -> None:
+        for replies, saved in ((["invalid", "return"], False), (["invalid", "36 in x 48 in"], True)):
+            with self.subTest(replies=replies):
+                self.store.set_dimensions.reset_mock()
+                self.bot.request_response.reset_mock()
+                self.bot.send.reset_mock()
+                self.bot.request_response.side_effect = replies
+                await routes.dimensions_edit_workflow(self.bot)
+                self.assertIn('data-sends="return"', self.bot.request_response.await_args.args[0])
+                self.assertEqual(self.store.set_dimensions.await_count, int(saved))
+                self.assertEqual(
+                    self.bot.send.await_args.args[0]["command"]["payload"],
+                    "/layout/template?from=dimensions" if saved else "/layout/edit",
+                )
 
     async def test_accept_maximum_and_idk_use_cm_and_correct_display_units(self) -> None:
         self.store.conference_details.return_value = ("Meeting", {
@@ -545,6 +1057,7 @@ class DimensionWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.bot.request_response.return_value = reply
             await routes.dimensions_workflow(self.bot)
             self.store.set_dimensions.assert_awaited_once_with(7, 11, 121.92, 91.44, "in")
+            self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/layout/template?from=dimensions")
 
     async def test_declining_maxima_allows_custom_dimensions(self) -> None:
         self.store.conference_details.return_value = ("Meeting", {
@@ -553,6 +1066,7 @@ class DimensionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.bot.request_response.side_effect = ["cancel", "140 x 100 cm"]
         await routes.dimensions_workflow(self.bot)
         self.store.set_dimensions.assert_awaited_once_with(7, 11, 100, 140, "cm")
+        self.assertEqual(self.bot.send.await_args.args[0]["command"]["payload"], "/layout/template?from=dimensions")
 
     async def test_invalid_input_shows_correction_and_retries_until_valid(self) -> None:
         self.bot.request_response.side_effect = ["idk", "nonsense", "10 cm x 100 cm", "100 cm x 150 cm"]
@@ -608,8 +1122,18 @@ class LayoutStorageTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("p.uid = %s AND p.pid = %s", statement)
                 self.assertIn("NOT EXISTS", statement)
                 self.assertEqual(params, (width, height, "cm", template, 7, 11))
-            with self.assertRaisesRegex(ValueError, "whole numbers"):
-                await store.set_dimensions(7, 11, 123.456789, 100, "cm")
+            self.assertTrue(await store.set_dimensions(7, 11, 150, 100, "cm", "central"))
+            self.assertEqual(
+                connection.execute.await_args.args[1],
+                (150, 100, "cm", "central", 7, 11),
+            )
+            for units, width, height in (("cm", 84.1, 118.9), ("mm", 841, 1189)):
+                scale = posters.POSTER_UNIT_TO_CM[units]
+                self.assertTrue(await store.set_dimensions(7, 11, width * scale, height * scale, units))
+                params = connection.execute.await_args.args[1]
+                self.assertAlmostEqual(params[0], width)
+                self.assertAlmostEqual(params[1], height)
+                self.assertEqual(params[2], units)
 
     async def test_source_file_lookup_checks_owner_before_reading_storage(self) -> None:
         store = content.SourceStore()
@@ -659,12 +1183,40 @@ class LayoutDatabaseTests(unittest.TestCase):
             "INSERT INTO poster (uid, created) VALUES (7, now()) RETURNING width, height",
         ).fetchone(), (None, None))
 
+    def test_dimension_migration_preserves_existing_values_and_iso_fractions(self) -> None:
+        self.connection.execute(
+            "ALTER TABLE poster ALTER COLUMN width TYPE INTEGER, ALTER COLUMN height TYPE INTEGER",
+        )
+        self.connection.execute(
+            "UPDATE poster SET width = 36, height = 48, units = 'in' WHERE pid = %s", (self.pid,),
+        )
+        migration = (
+            Path(__file__).resolve().parent.parent / "schema/poster-dimensions.sql"
+        ).read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        self.assertEqual(self.connection.execute(
+            "SELECT width, height, units FROM poster WHERE pid = %s", (self.pid,),
+        ).fetchone(), (36, 48, "in"))
+
+        async def exercise() -> None:
+            for units, width, height in (("cm", 84.1, 118.9), ("mm", 841, 1189)):
+                scale = posters.POSTER_UNIT_TO_CM[units]
+                self.assertTrue(await self.store.set_dimensions(
+                    7, self.pid, width * scale, height * scale, units,
+                ))
+                poster = await self.store.get(7, self.pid)
+                self.assertAlmostEqual(poster.width, width)
+                self.assertAlmostEqual(poster.height, height)
+                self.assertEqual(poster.units, units)
+        asyncio.run(exercise())
+
     def test_persisted_dimensions_reach_rendering_and_cannot_modify_purchased_or_foreign_posters(self) -> None:
         async def exercise() -> None:
             self.assertTrue(await self.store.set_dimensions(7, self.pid, 150, 100, "mm"))
             poster = await self.store.get(7, self.pid)
-            self.assertEqual(poster.centimeters, (15, 10))
-            self.assertEqual((poster.width, poster.height), (150, 100))
+            self.assertEqual(poster.centimeters, (150, 100))
+            self.assertEqual((poster.width, poster.height), (1500, 1000))
             self.assertEqual((poster.template, poster.units), ("arena", "mm"))
             with patch.object(posters, "store", return_value=self.store):
                 rendered = await routes.layout("arena", self.pid, uid=7)

@@ -1,108 +1,311 @@
-# Presto / AutoPoster – Local Development with Docker
+# AutoPoster
 
-This repository contains **AutoPoster**, a browser‑based scientific poster authoring platform built with FastAPI, PostgreSQL, and advanced AI‑powered search.
+AutoPoster is a browser-based application for creating, organizing, archiving, and presenting scientific and educational posters. It combines a rich poster editor, conference and collection management, downloadable rendering, and searchable storage in a single web app.
 
----
+For a detailed feature inventory, see [FEATURES.md](FEATURES.md). For search and retrieval details, see [SEARCH.md](SEARCH.md). For the route inventory and authoring flow, see [specs/endpoints.md](specs/endpoints.md).
 
-## 📦 What this repository offers
-- **FastAPI server** (`presto-demo/app.py`) exposing the web UI and a JSON API.
-- **PostgreSQL schema** (`schema/schema.sql`) with the `pgvector` extension for semantic search.
-- **Docker Compose** configuration that spins up a ready‑to‑use **Postgres** container (including `pgvector`) and the **application** container.
-- A **`.env`** file template that the app reads for configuration (database URL, secrets, AI keys, etc.).
+## What the project does
 
----
+- Manages account access for authors and administrators.
+- Supports poster authoring with a layout-driven editor.
+- Stores poster content, attachments, metadata, and conference associations.
+- Renders posters for browser viewing and PDF download.
+- Organizes posters into conferences, archives, and browseable listings.
+- Provides search and autocomplete using PostgreSQL full-text search and vector embeddings.
 
-## ⚙️ Quick start – Docker‑only (no host DB required)
-1. **Clone the repo** (if you haven’t already) and `cd` into it:
-   ```bash
-   git clone <repo‑url>
-   cd PrestoNew
-   ```
+## Main capabilities
 
-2. **Create/adjust the environment file** – a minimal example is already present at the project root. Ensure the `DATABASE_URL` points to the Docker service name `db`:
-   ```env
-   APPLICATION_NAME="AutoPoster"
-   DATABASE_URL="postgresql://root:Fr33d0m@db/presto"
-   SECRET_KEY="$(openssl rand -hex 32)"
-   SERVER_HOST=0.0.0.0
-   SERVER_PORT=8000
-   # …other optional variables…
-   ```
+- Text, math, image, table and graph content blocks.
+- Poster layouts with drag-and-drop positioning and resizing
+- Conference hosting and poster collection workflows
+- Attachment upload and viewing
+- Download-ready PDF output
+- Optional AI-assisted features for extraction and enrichment
 
-3. **Build and start the containers**:
-   ```bash
-   docker compose up -d        # builds images and runs them in background
-   docker compose logs -f db   # wait for the DB healthcheck to pass
-   docker compose logs -f app  # then watch the FastAPI server start
-   ```
+Wikkit opens as a fixed panel on the right. Use its close button to collapse it
+and the Wikkit tab at the right edge to reopen it. Page content and the poster
+editor viewport resize with the panel.
 
-4. **Open the app** in your browser:
-   - http://localhost:8000/   (the default FastAPI root)
-   - If you added a front‑end, it will be served from the same address.
+## Tech stack
 
-5. **Stop & clean up** when you’re done:
-   ```bash
-   docker compose down -v   # removes containers and the persisted DB volume
-   ```
+- Python 3.14
+- aiohttp and aiohttp-jinja2
+- PostgreSQL with asyncpg
+- pgvector
+- Playwright for PDF generation
+- Stripe for payment-related routes
 
----
+## Repository layout
 
-## 🗄️ Database schema
-The schema lives in `schema/schema.sql`. It creates:
-- Core tables: `user`, `conference`, `poster`, `source`, `download`, …
-- Full‑text search (`tsvector`) and **vector** columns for AI‑based similarity search.
-- The `pgvector` extension is automatically installed in the custom PostgreSQL image.
+- [app.py](app.py): application entrypoint, startup logic, and shared helpers
+- [blueprints/](blueprints/): route modules for the main web areas
+- [templates/](templates/): HTML templates
+- [static/js/render.js](static/js/render.js): editor and renderer behavior
+- [static/css/](static/css/): layout and styling assets
+- [schema/schema.sql](schema/schema.sql): PostgreSQL schema and search functions
+- [specs/](specs/): layout and size definitions used by the renderer
+- [extract3/pdfplumber_pdf_reader.py](extract3/pdfplumber_pdf_reader.py): PDFPlumber-based text/image/table extractor
 
-You can explore the schema with:
-```bash
-psql postgresql://root:Fr33d0m@localhost:5432/presto -c "\dt"
+## Prerequisites
+
+- Python 3.14
+- PostgreSQL 14 or newer, with the pgvector extension
+- A database role that can create tables, indexes, functions, and types
+
+Homebrew's pgvector is built only for PostgreSQL 17 and 18. For PostgreSQL 14,
+build it from source and load the schema:
+
+```sh
+git clone --branch v0.8.2 --depth 1 https://github.com/pgvector/pgvector.git
+cd pgvector
+make PG_CONFIG=/opt/homebrew/opt/postgresql@14/bin/pg_config PG_SYSROOT="$(xcrun --show-sdk-path)"
+make install PG_CONFIG=/opt/homebrew/opt/postgresql@14/bin/pg_config PG_SYSROOT="$(xcrun --show-sdk-path)"
+createdb presto
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/schema.sql
 ```
 
----
+The schema objects must be owned by the role in `DATABASE_URL`. The schema is
+for initializing the maintained local database, not for upgrading older schemas.
 
-## 🧪 Running the test suite
-If you prefer to run tests inside the container (so they use the same DB), you can exec into the `app` service:
-```bash
-docker compose exec app pytest -q
-```
-Otherwise, activate a Python virtual environment locally and run `pytest` against the same PostgreSQL instance.
+For an existing database, apply each feature migration explicitly. Remove
+obsolete source-analysis columns and install the poster thumbnail and image
+assessment features with:
 
----
-
-## 🔑 Optional AI features
-The `.env` template includes placeholders for:
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL` (e.g., `gpt-5.5`)
-- `OPENAI_EMBEDDING` (e.g., `text-embedding-3-small`)
-These enable:
-- AI‑assisted poster extraction
-- Vector‑based autocomplete
-- Content enrichment via the Docling service (see `DOCLING_*` variables)
-
----
-
-## 📂 Repository layout (relevant parts)
-```
-PrestoNew/
-├─ app.py                # entry point for the FastAPI server
-├─ docker/               # Dockerfile for the custom Postgres image
-│   ├─ Dockerfile.postgres
-│   └─ init_vector.sql   # creates the pgvector extension on init
-├─ docker-compose.yml    # orchestration file (services: db, app)
-├─ .env                  # environment configuration (example provided)
-├─ schema/               # PostgreSQL schema files
-│   └─ schema.sql
-├─ presto-demo/          # FastAPI application code
-│   ├─ app.py
-│   └─ ...
-└─ README.md             # <‑ you are reading it now
+```sh
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-analysis-cleanup.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-thumbnail.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/image-assessment.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-image-classification.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/auto-fit.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-complexity.sql
 ```
 
----
+### Poster dimensions
 
-## 🙋‍♀️ Need help?
-- Check the logs: `docker compose logs -f <service>`
-- Verify the DB health: `docker compose exec db pg_isready -U root`
-- Open an issue on the repository or ping the maintainer.
+On the dimensions page, choose units and orientation to browse sizes from
+`stipulations/sizes.json`. Metric sizes are also available in millimeters
+(10 mm per cm). Select a size to save it, or enter height x width in Wikkit.
+Dimensions are checked against the poster and conference rules.
+From the editor's Dimensions button, the page outlines the current size, units,
+and orientation, including square sizes, and offers Return to Poster on the page
+and in Wikkit. A successful change returns to the editor; the setup flow continues
+to content upload. On the template page, select a design and use Continue or
+Return to save it and proceed.
 
-Enjoy building and presenting your scientific posters! 🚀
+### Poster auto-fit
+
+After profiling, the editor queues overflowing editable sections one at a time
+and caches suggestions without changing the poster. The section context menu
+applies a ready suggestion or moves a pending section to the front of the queue.
+The Auto-fit button requests the queued suggestions. If a section has changed
+since its suggestion was made, the editor asks before overwriting it.
+Literature Cited, Acknowledgements, and Additional Information are still checked
+for overflow, but are never queued for auto-fit. Their Auto-fit, Resize graphics,
+and Adjust text content actions ask the author to adjust the section manually.
+After a suggestion is applied, that chosen revision is kept while remaining
+suggestions are canceled and the updated poster is profiled again.
+
+An edit cancels the active queue and clears pending work. Applications from that
+queue are undone newest-first before profiling and building a new queue. The
+editor asks separately before undoing an application whose section has since
+been edited. Declining preserves that section. Purchased posters cannot be changed.
+
+Auto-fit uses `gpt-4o-mini` for shortening and clarity evaluation
+(`OPENAI_API_KEY` required). It measures each candidate in Playwright and accepts
+only non-overflowing revisions with a `good` or `excellent` clarity rating and no more
+than `AUTOFIT_MINIMUM_WORD_PERCENTAGE` percent unused vertical space (default 15,
+valid range 0-100). Each section has at most 12 fitting attempts; an impossible
+fit retains its prior text and Wikkit suggests alternatives.
+If a fitting revision receives a `fair` or `poor` clarity rating, auto-fit checks
+other fitting candidates and uses any remaining attempts to generate alternatives
+at the fitting target; it never accepts a revision below the clarity threshold.
+Word targets guide the model rather than determining acceptance: a slightly
+longer summary is still measured and clarity-checked. Output that does not
+shorten the source is retried with a smaller target within the same attempt
+limit; empty or excessively large output and changed formulas remain errors.
+
+Sections with one inserted graphic are fitted as a whole: auto-fit searches the
+graphic's width together with the text length, keeping the user's placement
+(float left, float right, or centered) and the 2rem graphic margins in
+`static/css/graphics.css`. The result must not overflow and must leave no more
+than `AUTOFIT_MAXIMUM_EMPTY_PERCENTAGE` percent of the section empty (default 40);
+among fitting candidates it prefers the original text, a larger graphic, and
+occupancy near `AUTOFIT_TARGET_OCCUPIED_PERCENTAGE` (default 82). A graphic is
+never shrunk below the size whose shorter side subtends `GRAPHIC_MIN_VISUAL_ANGLE`
+degrees (default 5) at `GRAPHIC_VIEWING_DISTANCE` inches (default 36), about
+3.1 printed inches; enlargement stops at `GRAPHICS_SAFE_DPI` unless that minimum
+requires more. Sections with several graphics, or whose container cannot hold a
+discernible graphic, are left for manual adjustment. Text-only sections that are
+more than the maximum empty percentage use a longer cached sizing when one fits,
+otherwise the original section text, shortened again only as needed; new content
+is never invented. Profiles list these sections in `sparse_sections`, and they
+join the auto-fit queue with `overflowing_sections`.
+
+The repeatable [auto-fit migration](schema/auto-fit.sql) must be applied before
+deployment, using a database role that owns the table. It also upgrades an empty
+legacy `sizings` table; existing metadata-only rows must be backfilled or archived
+first. Reapply it to existing auto-fit installations to make fitting applications
+cascade when their sizing is deleted, so auto-fit history cannot block poster
+deletion. When the migration is applied by another role, grant the application's
+database role `SELECT`, `INSERT`, and `UPDATE` on `sizings`, `fitting_runs`, and
+`fitting_applications`, and `USAGE` on the `sizings_sizing_id_seq` and
+`fitting_applications_application_id_seq` sequences.
+`sizings` stores accepted revision HTML, actual word counts,
+full-length source text, source hashes, and timestamped versions. Each accepted
+adjustment has its own sizing ID, even when its source and length match an
+earlier adjustment. The endpoint returns these IDs and source hashes by section
+in `sizings`. Repeated
+auto-fit uses the preserved source, while edited text starts a new source lineage.
+Cached revisions are rendered and evaluated again before reuse. A suggestion is
+stored only if the saved poster, sections, and layout settings remain unchanged
+and its queue has not been cancelled. The queue-aware JSON endpoints are
+`POST /magic/{pid}/auto-fit/start`, `POST /magic/{pid}/auto-fit` with `run_id`,
+`POST /magic/{pid}/auto-fit/apply`, and `POST /magic/{pid}/auto-fit/cancel`.
+The original auto-fit endpoint without `run_id` still applies revisions directly.
+Application and rollback compare saved section contents under a database lock.
+Pending editor changes are saved before rollback or application.
+
+The graphics evaluation page reuses current assessments for Materials and Methods
+and Results. It screens graphics before reporting the evaluation count and
+estimated time. Only pending graphics that pass both thresholds are sent for
+evaluation; rejected graphics are shown
+as unsuitable without an assessment. When finished, it offers Continue to Poster
+on the page and in Wikkit; either proceeds to section review.
+Section review offers "Continue to poster layout" in the initial template flow
+and "Return to poster layout" when revisiting it from the editor.
+`/content/evaluate` is its own resumption page: returning after
+an interruption reuses current assessments and finishes the remaining graphics.
+Each image evaluation is recorded in `assessment` for its Materials and Methods
+and Results sections, including criteria, supported elements, limitations, and
+suggested improvements, linked to the image source; the conference is optional.
+Interrupted connections are retried automatically twice before offering a manual
+retry; saved assessments are reused on each attempt.
+Raster source images and extracted raster assets are scored using blurred Canny
+edge density with an area penalty; the score is stored in `source.complexity`.
+`IMAGE_COMPLEXITY_THRESHOLD` defaults to `0.5` and
+`IMAGE_COMPLEXITY_PENALTY_POWER` defaults to `0.15`; scores strictly above the
+threshold are omitted from the editor's suggested graphics. Threshold changes
+apply immediately to stored scores; penalty-power changes affect newly processed
+images. Existing placed graphics remain editable.
+During poster evaluation, images with legibility scores below
+`DIAGRAM_LEGIBILITY_THRESHOLD` (default `0.95`) are also marked unsuitable, with
+the score and threshold shown as the reason. Complexity remains a maximum-score
+check: scores above `IMAGE_COMPLEXITY_THRESHOLD` make the image unsuitable.
+Classified charts are normalized and stored as PNG images. For a classified
+math-expression image, each extracted LaTeX expression is stored in `source.text`
+on its own child source record, while the original image remains available.
+Extracted and saved formulas are rendered with MathJax in source listings, the
+Source graphics panel during section review, and
+poster content; editing and saving poster sections preserves the original LaTeX.
+Overflowing math graphics smoothly return to their top-left scroll position
+after five seconds without further scrolling. The return uses a 600ms animation
+with jQuery-style swing easing; interacting with the graphic interrupts it.
+
+In the layout editor, select a section and use Image to choose from that
+poster's sources. Methods and Results offer supported graphics rated at least
+`significantly` in either assessed section, ordered by type and section
+assessment; over-complex raster images are omitted. Abstract, Introduction,
+Conclusion, and Future Plans offer math expressions. Literature Cited and
+Acknowledgements do not accept graphics. Additional Information accepts a
+single locally generated QR code; replacing it updates the stored source and
+section together.
+
+Click an inserted graphic to show its resize handles and Move control. Drag
+near a section edge to select a snap placement, or into the text for free
+placement. Placements use document flow and floats, so bottom and middle snap
+positions follow the surrounding text rather than anchoring to the physical
+section boundary. Raster graphics warn when their effective resolution drops
+below 150 DPI. Selected graphics can be cut or copied and pasted into another
+compatible section of the same poster. Charts currently use their stored PNGs,
+not reconstructed Chart.js data. Auto-fit and Wikkit section rewriting require
+manual adjustment for sections containing inserted graphics, so neither can
+silently discard them.
+
+The current draft's stored PNG thumbnail appears in both List and Large
+thumbnails views. Opening the poster list refreshes it when the poster or its
+sources are newer. Thumbnails preserve the saved poster aspect ratio inside a
+640 x 640 PNG on a contrasting gray background, without stretching or cropping.
+Both display modes use square thumbnail containers. Previews include wrapping
+author lists and themed section borders.
+
+Printable PDFs restore the selected template's saved geometry and manual gutter
+adjustments, including column, row, and section sizes. They retain the editor's
+font set, font sizing, and Google Fonts stylesheet; export requires access to
+Google Fonts and reports a rendering error rather than downloading a PDF with
+failed font loads.
+
+- Poppler (`pdftocairo`) for importing vector figures from PDFs
+- Playwright browser binaries installed
+
+# To Do's
+
+Create a .env file in the project root:
+
+```env
+APPLICATION_NAME=AutoPoster
+DATABASE_URL=postgresql://localhost/poster
+SECRET_KEY=replace-with-a-random-secret
+SESSION_BACKEND=redis
+REDIS_URL=redis://localhost:6379/0
+SERVER_HOST=0.0.0.0
+SERVER_PORT=8000
+SESSION_MAX_AGE=600
+POSTER_UPLOAD_MAX_MB=32
+
+# Optional AI features
+OPENAI_API_KEY=
+OPENAI_POSTER_MODEL=gpt-4.1
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+
+# Optional autocomplete tuning
+AUTOCOMPLETE_VECTOR_CANDIDATE_MULTIPLIER=5
+AUTOCOMPLETE_VECTOR_CANDIDATE_MIN=25
+AUTOCOMPLETE_MERGE_METHOD=rrf
+AUTOCOMPLETE_MERGE_RRF_K=60
+AUTOCOMPLETE_MERGE_FTS_WEIGHT=1
+AUTOCOMPLETE_MERGE_VECTOR_WEIGHT=1
+```
+
+## Server-side sessions
+
+After sign-in, an existing unpurchased poster is selected even in a fresh session.
+Without a saved workflow resume URL (or when it points to the poster list), the
+user goes directly to `/layout/edit`. Purchased posters retain the list fallback.
+
+Sessions use Redis 7 or newer. Start Redis before the application and set
+`SECRET_KEY` to a random secret of at least 32 bytes. `REDIS_URL` defaults to
+`redis://localhost:6379/0`; use a private, access-controlled Redis service in
+production. Redis keys use the `presto:session:` prefix and expire automatically.
+Signed payloads retain the existing server-side chatbot memory and optimistic
+concurrency checks. Redis failures fail requests rather than falling back to
+PostgreSQL or accepting an unverified session.
+
+`SESSION_MAX_AGE` (seconds, default 600) is an inactivity timeout: normal HTTP
+requests renew it. `/system/timecheck` validates the HttpOnly session cookie and
+returns `remaining_seconds`, `expires_at` (Unix seconds), and the display `name`
+without renewing or creating a session by default. A timecheck marked with
+`X-Session-Activity: 1` renews a live session after mouse movement, clicking,
+touching, or a key press. Missing/expired sessions redirect to
+`/account/signout`. Both `/account/signout` forms show Wikkit's personalized
+expiry notice, clear session cookies, and do not start a new session.
+Wikkit waits locally for the `login` button, which opens `/account/signin` just
+like the page's sign-in link, without reconnecting the expired session.
+
+Pages poll every minute and schedule five- and two-minute Wikkit warnings only
+in the respective (5, 7) and (2, 4) minute windows. Repeated polls never reset
+warnings for the same expiration; real activity starts a new expiration cycle.
+The deadline is rechecked before redirecting, to honor renewal in another tab.
+
+`SESSION_COOKIE_SECURE=true` is the default and requires HTTPS. Only local HTTP
+development should set it to `false`. `SESSION_BACKEND=none` explicitly disables
+sessions; `auto` enables Redis when `SECRET_KEY` or `REDIS_URL` is configured.
+The old `postgres` backend is no longer supported. Deployment invalidates old
+PostgreSQL sessions; users must sign in again. The unused `chatbot_session` table
+can be dropped after deployment; no user or poster data is migrated.
+
+Run session integration tests against an isolated Redis database:
+
+```sh
+TEST_REDIS_URL=redis://localhost:6379/15 bin/python -m unittest tests.test_sessions
+node --test tests/sessions.test.js
+```

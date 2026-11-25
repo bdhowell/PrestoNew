@@ -1,0 +1,41 @@
+body {
+    font-family: system-ui, sans-serif;
+    margin: 2rem;
+}
+
+dt {
+    font-weight: bold;
+    margin-top: 1.5rem;
+}
+
+dd {
+    margin: 0.5rem 0 0;
+}
+
+pre {
+    background: #f3f3f3;
+    padding: 1rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.image-preview-scroll {
+    overflow-x: auto;
+}
+
+.table-preview {
+    overflow-x: auto;
+}
+
+.table-preview table {
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+}
+
+.table-preview th,
+.table-preview td {
+    border: 1px solid #999;
+    padding: 0.5rem;
+    text-align: left;
+    white-space: pre-wrap;
+}

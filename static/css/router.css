@@ -1,51 +1,118 @@
+@property --wikkit-panel-space {
+    syntax: "<length>";
+    inherits: true;
+    initial-value: 0px;
+}
+
+body {
+    --wikkit-panel-space: 0px;
+    transition: --wikkit-panel-space var(--chat-window-transition, 440ms) ease;
+}
+
+body:has(> #chatbot:not(.chat-hidden)) {
+    --wikkit-panel-space: min(16rem, 100vw);
+}
+
+body:has(> #chatbot) > main {
+    box-sizing: border-box;
+    width: calc(100% - var(--wikkit-panel-space));
+    padding-inline: min(1.5rem, max(0px, (100vw - var(--wikkit-panel-space)) / 2));
+}
+
+body:has(> #chatbot) > #poster-container,
+body:has(> #chatbot) > #controls {
+    width: calc(100% - var(--wikkit-panel-space));
+}
+
+body:has(> #chatbot) > #controls {
+    min-width: 0;
+    padding-inline: min(0.5rem, max(0px, (100vw - var(--wikkit-panel-space)) / 2));
+}
+
 #chatbot {
     box-sizing: border-box;
     position: fixed;
-    right: 1rem;
-    bottom: 1rem;
+    top: min(var(--chat-menu-bottom, 0px), 100vh);
+    right: 0;
+    bottom: 0;
     z-index: 9999;
     display: flex;
     flex-direction: column;
-    width: 24rem;
-    height: 28rem;
-    min-width: min(14rem, 100vw);
-    min-height: min(12rem, 100vh);
+    width: var(--wikkit-panel-space);
     max-width: 100vw;
-    max-height: 100vh;
+    line-height: 1.3rem;
     overflow: hidden;
-    resize: both;
-    border: 2px solid #c9a227;
-    border-radius: 8px;
+    outline: 2px solid #c9a227;
+    outline-offset: -2px;
+    border-radius: 8px 0 0 8px;
     background: rgb(24 20 48 / 94%);
     box-shadow: 0 6px 24px rgb(0 0 0 / 45%);
     color: #ddd;
     transition:
-        opacity var(--chat-window-transition, 330ms) ease,
+        outline-width var(--chat-window-transition, 440ms) ease,
         visibility 0s linear;
 }
 
 #chatbot.chat-hidden {
-    opacity: 0;
+    outline-width: 0;
     visibility: hidden;
     pointer-events: none;
     transition:
-        opacity var(--chat-window-transition, 330ms) ease,
-        visibility 0s linear var(--chat-window-transition, 330ms);
+        outline-width var(--chat-window-transition, 440ms) ease,
+        visibility 0s linear var(--chat-window-transition, 440ms);
 }
 
 #chatbot .chatbot-handle {
+    box-sizing: border-box;
+    display: flex;
     flex: none;
-    padding: 0.35rem 0.75rem;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0.2rem 0.75rem;
     background: #2f2766;
     color: #f4d35e;
     font-family: "Aladin", system-ui;
-    cursor: grab;
-    touch-action: none;
+    font-size: 2rem;
+    font-weight: 400;
+    line-height: 1.6;
     user-select: none;
 }
 
-#chatbot.dragging .chatbot-handle {
-    cursor: grabbing;
+#chatbot .chatbot-handle::before {
+    content: "";
+    flex: none;
+    width: 2.00rem;
+    height: 2.00rem;
+    background: url("/static/graphics/wikkicon.png") center / contain no-repeat;
+}
+
+#chatbot .chatbot-close {
+    margin-left: auto;
+    padding: 0 0.4rem;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.chatbot-launcher {
+    position: fixed;
+    bottom: 1rem;
+    right: 0;
+    z-index: 9999;
+    padding: 0.5rem 0.75rem;
+    border: 2px solid #c9a227;
+    border-radius: 8px 0 0 8px;
+    background: #2f2766;
+    color: #f4d35e;
+    font: 1.25rem "Aladin", system-ui;
+    cursor: pointer;
+}
+
+.chatbot-launcher[hidden] {
+    display: none;
 }
 
 #chatlog {
@@ -54,6 +121,10 @@
     overflow-y: auto;
     padding: 0 0.75rem;
 }
+
+/* #chatlog .chat {
+    white-space: pre-wrap;
+} */
 
 #chatlog .chat.user {
     color: #9fd3ff;
@@ -156,8 +227,9 @@
 }
 
 #chatinput {
-    flex: none;
+    flex: 0 1 auto;
     height: 4.5rem;
+    min-height: 0;
     overflow-y: auto;
     margin: 0.5rem 1rem 1rem 0.5rem;
     padding: 0.4rem 0.5rem;

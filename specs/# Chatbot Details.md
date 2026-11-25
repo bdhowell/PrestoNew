@@ -30,6 +30,10 @@ and are discarded when that page unloads.
 Page-specific commands are registered in the `.does` files and override intrinsic commands with the same key
 Pages can also dynamically register or unregister commands at runtime using the same `window.registerWikkitCommands` API.
 
+The chat log and main input share the overlay's available height. As the input
+opens or closes, the log resizes with it; the input can shrink in a short
+overlay instead of overflowing its bottom edge.
+
 # Chatbot Embedded Content Controls
 When chatbot output is rendered in the #chatbot container, look for any HTML controls in the output, such as buttons, selects, input fields, and textareas.
 
@@ -52,11 +56,20 @@ Example:
 A `data-group` attribute identifies a group of buttons. 
 When one is clicked, all buttons in the same group are automatically deselected,
 the clicked button is selected, and all buttons in that group are disabled.
-Groups span the current chat log. Ungrouped buttons disable only themselves.
+Groups span the current chat log. Ungrouped command-only buttons disable only themselves.
+After a response is accepted, all existing embedded buttons, inputs, textareas,
+and selects become inactive, whether the reply comes from a control or the main
+chat input. This also applies to page-local response waits. New chat output can
+introduce active controls for the next decision; invalid replies or failed
+memory writes do not complete the wait. Delayed memory acknowledgements cannot
+resubmit or reactivate controls from an already completed decision.
 Newly rendered buttons can start a new decision. If both attributes are present,
 the response is submitted first, then the client command runs through the same
 dispatcher as server commands (including page overrides and registered defaults).
 Buttons are for decisions being passed to the chatbot for processing.
+
+Clicking an outlined element, including a child inside it, hides its visible
+outline without preventing the click's normal action.
 
 ## Embedded Input Fields
 
@@ -126,6 +139,32 @@ memory write is attempted.
 
 ## Server replies
 
+Any new output appended to the chat log reveals the chatbot, including page-local
+messages, user echoes, and notices. This does not reopen a closed input; requesting
+a response does that.
+
+New output appears one whitespace-delimited word at a time, retaining the original
+whitespace and HTML markup. The first word appears immediately. Each subsequent
+word waits a uniformly sampled integer delay in milliseconds from
+`CHAT_WORD_INTERVAL - CHAT_WORD_DEVIATION` through
+`CHAT_WORD_INTERVAL + CHAT_WORD_DEVIATION`, inclusive. The settings are read as
+integers from the environment, defaulting to `400` and `100`. Both must be
+non-negative and deviation must not exceed interval; `0`/`0` disables the pauses.
+All word timing is performed on the client. The client starts with the defaults;
+on websocket connection the server sends a `configure` command containing its
+environment values. Timing is not embedded in page HTML. This applies to ordinary
+pages and the poster editor.
+
+All new messages (including user echoes and notices) are queued in arrival order.
+Embedded controls, their labels, and generated OK buttons render immediately in
+full, without word animation. They remain inert until their message finishes. Commands accompanying
+server output run after that output finishes, and response reminders start then.
+Memory acknowledgements are handled immediately, outside the display queue.
+`configure` commands are also handled immediately, outside the display queue.
+Restored chat history is displayed immediately, without replaying the animation.
+`await window.wikkit.say(html)` waits for page-local output to finish; callers should
+wait before navigating or requesting a response.
+
 User input is processed by the conversation's `IntentStack`. The server sends
 the following protocol; both `say` and `command` are optional:
 
@@ -154,11 +193,20 @@ Unknown commands and execution errors are logged and shown as a chatbot notice.
 
 ## Intrinsic commands
 
+- `configure`: merge the payload object into the client's configuration data.
+  For example:
+  `{"command":{"does":"configure","payload":{"CHAT_WORD_INTERVAL":400,"CHAT_WORD_DEVIATION":100}}}`.
+  Partial updates retain unspecified values, including other configuration keys.
+  Timing values must be non-negative integers, with deviation no greater than
+  interval; invalid updates report an error and leave configuration unchanged.
+  Updates affect subsequent word delays, including those in current output.
+  A delay already scheduled is not restarted.
 - `clear-chat`: clear the visible chat log.
   Account AJAX replies can include `command`; the page awaits
   `window.wikkit.execute(command)` before displaying `say` or redirecting.
 - `redirect`: save the chatbot state and navigate the page to the same-origin URL in the string payload.
-- `request-response`: start waiting for user input on the client.
+- `request-response`: show the chatbot, reopen its input, and start waiting for
+  user input on the client, including when a previous page saved it hidden.
   `request` is an alias for the example's original command key.
 
 While a response is requested, the client displays a reminder after 120,000 ms
@@ -219,6 +267,11 @@ values and draft input, plus its position and dimensions in sessionStorage.
 The next page creates a new chatbot and websocket, restores the saved state,
 and reattaches control handlers. Browser back/forward cache restores reload the
 page to establish a fresh connection.
+
+The chatbot can be moved by dragging its header and resized from all four edges
+and all four corners using a mouse, pen, or touch pointer. Resizing keeps the
+opposite edge fixed, respects the minimum dimensions, and stays within the viewport.
+Resize handles are recreated when saved content is restored.
 
 
 # Chatbot memory:
@@ -362,15 +415,20 @@ The database role needs table/index creation permissions. Expired rows are
 removed on session loads. Static assets under `/static/` bypass sessions.
 No additional PostgreSQL extensions are needed.
 
-The `presto_session` cookie is HttpOnly, SameSite=Lax, host-only, and scoped to
-`/`. It contains only a cryptographically random opaque identifier. Session
-objects are pickled **only on the server**, with an HMAC-SHA256 integrity check
-verified before unpickling. The signature also binds the payload to its session
-identifier. Database access must still be restricted to trusted application
-roles: signing is not encryption, and pickle is not a format for untrusted data.
-Changing `SECRET_KEY` invalidates stored payload signatures; clear existing
-sessions as part of an intentional key rotation rather than silently falling
-back after an integrity error.
+With `SESSION_COOKIE_SECURE=true`, the server sends a `__Host-session` cookie
+with `Secure`, `HttpOnly`, `SameSite=Strict`, and `Path=/` attributes and no
+`Domain` attribute. Local HTTP development with
+`SESSION_COOKIE_SECURE=false` uses the `presto_session` name because browsers
+require `__Host-` cookies to be Secure. The separate `presto_user` cookie only
+remembers the visitor's display name; it does not authenticate the user. The
+session cookie contains only a cryptographically random opaque identifier.
+Session objects are pickled **only on the server**, with an HMAC-SHA256
+integrity check verified before unpickling. The signature also binds the
+payload to its session identifier. Database access must still be restricted to
+trusted application roles: signing is not encryption, and pickle is not a
+format for untrusted data. Changing `SECRET_KEY` invalidates stored payload
+signatures; clear existing sessions as part of an intentional key rotation
+rather than silently falling back after an integrity error.
 
 HTTP sessions are saved before response headers. The app uses function-scoped
 memory dependencies so their cleanup completes before this save. Changes from

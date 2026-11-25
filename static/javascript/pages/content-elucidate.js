@@ -36,7 +36,7 @@
                 throw new Error(reply.detail ?? "Your poster content could not be prepared.");
             }
             status.textContent = "Your poster content is ready.";
-            location.assign(reply.redirect);
+            location.assign(preserveTemplateOrigin(reply.redirect));
         } catch (error) {
             if (!leaving && error.name !== "AbortError") {
                 console.error("Poster elucidation failed", error);

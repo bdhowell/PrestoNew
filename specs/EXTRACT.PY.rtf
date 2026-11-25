@@ -1,0 +1,45 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2870
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fnil\fcharset0 HelveticaNeue;\f1\fnil\fcharset0 .SFNS-Regular_wdth_opsz110000_GRAD_wght2580000;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;\red193\green193\blue193;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;\cssrgb\c80000\c80000\c80000;}
+{\*\listtable{\list\listtemplateid1\listhybrid{\listlevel\levelnfc0\levelnfcn0\leveljc0\leveljcn0\levelfollow0\levelstartat1\levelspace360\levelindent0{\*\levelmarker \{decimal\}}{\leveltext\leveltemplateid1\'01\'00;}{\levelnumbers\'01;}\fi-360\li720\lin720 }{\listname ;}\listid1}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}
+\margl1440\margr1440\vieww15940\viewh8940\viewkind0
+\deftab720
+\pard\pardeftab720\sa320\partightenfactor0
+
+\f0\fs26 \cf2 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec3 Create a new blueprint extract.py\
+Within extract.py, create an endpoint /extract which receives either a digital-born a PDF document as a post parameter or the URL of a PDF document to download as the URL parameter \'91fetch\'92. An always required URL parameter is layout, which is name of one of the HTML layouts in /specs/layouts.json. A second always required URL parameter is dimensions, which are always expressed as \'93a x b in\'94 or \'93a x b cm\'94 and must conform to one of the sizes expressed in /specs/sizes.json. Two other optional URL parameters are topics, which is the maximum major topics, and subtopics, which is the maximum subtopics per major topic. Finally, an optional URL parameter is confidence, which defaults to 0.5 and is used below.\
+Using xtractor.py, extract the document\'92s text, images, and layout details.\
+Consolidate the texts in order and pass it OpenAI with the following prompt:\
+You are an expert scientific-paper analyst. Your task is to identify the primary topic of a scientific paper and produce a clear hierarchy of the major topics and subtopics discussed in the paper.\
+Analyze only the provided paper text, metadata, captions, headings, tables, and figure descriptions. Do not use outside knowledge unless explicitly provided. Do not infer claims that are not supported by the paper. Prefer precise scientific language over broad generic labels.\
+Return a structured JSON object matching the supplied schema.\
+Instructions:\
+\pard\tx220\tx720\pardeftab720\li720\fi-720\sa80\partightenfactor0
+\ls1\ilvl0\cf2 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	1	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec3 Identify the paper\'92s primary topic.\
+\ls1\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	2	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec3 Identify the major topics within the paper.\
+\ls1\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	3	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec3 Identify subtopics under each major topic.\
+\ls1\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	4	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec3 Distinguish topic types.\
+\ls1\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	5	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec3 Report uncertainty.\
+\ls1\ilvl0\kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	6	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec3 Keep the output concise but complete.\
+\pard\pardeftab720\sa320\partightenfactor0
+\cf2 Input paper:\
+\{\{PAPER_TEXT_OR_EXTRACTED_DOCUMENT_JSON\}\}\
+\pard\pardeftab720\sa227\partightenfactor0
+
+\f1\b \cf2 \
+\pard\pardeftab720\sa320\partightenfactor0
+
+\f0\b0 \cf2 For each returned topic, use OpenAI to write 500 words on each topic based on the paper\'92s content.\
+Pass image crop descript\
+\pard\pardeftab720\partightenfactor0
+\cf2 Create an integrated list of texts, charts, tables, images in content order using geometric/layout-based anchoring, corrected by OpenAI semantic interpretation: give the the extracted coordinates and page screenshot, then ask OpenAI to validate or label the relationships, yielding a confidence metric. If the metric is below the URL parameter confidence, then stop processing and report an error.\
+}

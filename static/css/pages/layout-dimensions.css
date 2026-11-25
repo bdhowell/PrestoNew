@@ -1,3 +1,101 @@
+#dimension-picker {
+    max-width: 60rem;
+    margin: 2rem auto;
+}
+
+@media (min-width: 50rem) {
+    #dimension-picker {
+        width: calc(100% - 25rem);
+        margin-left: 0;
+    }
+}
+
+.dimension-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.dimension-filters button[aria-pressed="true"] {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+
+.dimension-filters button.current-dimension,
+.wikkit-page .dimension-size[aria-pressed="true"],
+#current-dimensions {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+
+#current-dimensions {
+    display: inline-block;
+    padding: .5rem;
+}
+
+.orientation-icon {
+    display: inline-block;
+    border: 1px solid currentColor;
+    vertical-align: middle;
+}
+
+.orientation-icon.landscape {
+    width: 1.3rem;
+    height: .8rem;
+}
+
+.orientation-icon.portrait {
+    width: .8rem;
+    height: 1.3rem;
+}
+
+.orientation-icon.square {
+    width: 1rem;
+    height: 1rem;
+}
+
+#dimension-sizes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .75rem;
+    margin: 1.5rem 0;
+}
+
+.wikkit-page .dimension-size {
+    display: grid;
+    grid-template-rows: 1fr auto;
+    justify-items: center;
+    align-items: center;
+    gap: .5rem;
+    width: 9rem;
+    min-height: 8rem;
+    padding: .5rem;
+    scroll-margin-top: 5rem;
+}
+
+.dimension-rectangle {
+    display: block;
+    align-self: center;
+    border: 2px solid currentColor;
+    background: white;
+    box-sizing: border-box;
+}
+
+.dimension-selection-actions {
+    display: flex;
+    max-width: 70rem;
+    margin: 4rem auto 0;
+}
+
+#dimension-selection-continue {
+    position: relative;
+    top: -50px;
+    min-width: 0;
+    max-width: 100%;
+    margin-left: auto;
+    overflow-wrap: anywhere;
+}
+
 #dimension-correction {
     max-width: 40rem;
     margin: 2rem auto;

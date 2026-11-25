@@ -16,10 +16,10 @@
         });
         const reply = await response.json();
         if (reply.say) {
-            window.wikkit.say(reply.say);
+            await window.wikkit.say(reply.say);
         }
         if (!response.ok && !reply.say) {
-            throw new Error(reply.detail ?? "Your content could not be read.");
+            throw new Error(reply.detail ?? "I&rsquo;m sorry, your content could not be read.");
         }
         return reply;
     }
@@ -32,7 +32,9 @@
         retry.hidden = true;
         controller = new AbortController();
         const timer = setInterval(() => {
-            window.wikkit.say("<p>I&rsquo;m still reading through your content. Thanks for your patience.</p>");
+            const name = document.createElement("span");
+            name.textContent = document.body.dataset.userName || "Friend";
+            window.wikkit.say(`<p>${name.innerHTML}, I&rsquo;m still reading through your content. Thanks for your patience.</p>`);
         }, 20000);
         try {
             while (pending.length) {
@@ -45,7 +47,7 @@
             const reply = await post("/content/extracted");
             if (reply.ok && reply.redirect) {
                 status.textContent = "Your content has been read.";
-                location.assign(reply.redirect);
+                location.assign(preserveTemplateOrigin(reply.redirect));
             } else {
                 status.textContent = "More source content is needed. Return to uploads to add files.";
             }

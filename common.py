@@ -5,6 +5,7 @@ import psycopg
 import random
 import re
 import string
+from urllib.parse import parse_qsl, urlsplit
 
 from fastapi import HTTPException, Request
 from starlette.datastructures import URL
@@ -32,7 +33,7 @@ async def resume(request: Request, url: str | URL | None = None, clear: bool = T
     value = str(request.url if url is None else url)
     if not value.strip():
         raise HTTPException(422, "A resumption URL is required.")
-    if clear:
+    if clear and ("xyzzy", "arpa") not in parse_qsl(urlsplit(value).query):
         page, fragment_separator, fragment = value.partition("#")
         separator = "&" if "?" in page else "?"
         if page.endswith(("?", "&")):
@@ -78,6 +79,14 @@ PUNCTUATION_TRANSLATION_TABLE = str.maketrans('', '', string.punctuation + "â€˜â
 
 AGENT_NAME = "Wikkit"
 AGENT_THE_NAME = f"{AGENT_NAME}, the PrestoPresentations Wizard"
+
+
+def friendly_list(items: list[str]) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " and " + items[-1]
 
 
 def format_date(datetime_obj):

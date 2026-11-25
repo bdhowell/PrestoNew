@@ -1,0 +1,13 @@
+{% extends "account/base.html" %}
+
+{% block title %}Purchase your poster · {{ app_name() }}{% endblock %}
+{% block content %}
+    {% include "brand.html" %}
+    <section class="panel">
+        <h2>Purchase your poster</h2>
+        <p><strong>{{ poster.name }}</strong></p>
+        <p>Price: {{ price }}</p>
+        <p>Online payment is not available yet. You can return to your poster and continue editing.</p>
+        <p><a href="/layout/edit">Return to poster</a></p>
+    </section>
+{% endblock %}

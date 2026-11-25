@@ -4,12 +4,87 @@
     const toolbar = document.getElementById("editor-controls");
     if (!toolbar) return;
 
-    const extended = document.getElementById("extended");
-    const extendedControls = document.getElementById("extended-controls");
-    if (extended && extendedControls) {
-        extended.addEventListener("click", () => {
-            extendedControls.hidden = !extendedControls.hidden;
-            extended.setAttribute("aria-expanded", String(!extendedControls.hidden));
+    const sources = document.getElementById("sources");
+    if (sources) {
+        sources.addEventListener("click", () => window.location.assign("/content/review"));
+    }
+
+    const dimensions = document.getElementById("dimensions");
+    if (dimensions) {
+        dimensions.addEventListener("click", async () => {
+            dimensions.disabled = true;
+            try {
+                if (typeof window.flushPosterContent !== "function") {
+                    throw new Error("Poster changes could not be saved. Please try again.");
+                }
+                await window.flushPosterContent();
+                window.location.assign("/layout/dimensions?from=editor");
+            } catch (error) {
+                console.error("Could not open poster dimensions", error);
+                window.wikkit.say("<p>Your poster changes could not be saved. Please try again.</p>");
+                dimensions.disabled = false;
+            }
+        });
+    }
+
+    const print = document.getElementById("print");
+    if (print) {
+        let confirming = false;
+        print.addEventListener("click", async () => {
+            if (confirming) return;
+            confirming = true;
+            try {
+                const poster = document.getElementById("layout");
+                const name = (document.body.dataset.userName || "there").replace(
+                    /[&<>"']/g,
+                    character => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[character],
+                );
+                window.wikkit.say(
+                    `<p>${name}, are you ready to purchase your poster? ` +
+                    "After purchasing, you can download a printable PDF but you won't be able to make changes.</p>" +
+                    '<p class="centered"><button data-sends="ready">I\'m Ready to Print</button> ' +
+                    '<button data-sends="cancel">My Poster Isn\'t Finished</button></p>',
+                );
+                const response = await window.wikkit.requestResponse();
+                if (response === "ready") {
+                    if (typeof window.flushPosterContent !== "function") {
+                        throw new Error("Poster changes could not be saved. Please try again.");
+                    }
+                    await window.flushPosterContent();
+                    const result = await fetch("/account/purchase", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({pid: Number(poster?.dataset.pid)}),
+                    });
+                    const body = await result.json();
+                    if (!result.ok || body.ok !== true || body.redirect !== "/account/download") {
+                        throw new Error(body.detail || "Your poster could not be purchased. Please try again.");
+                    }
+                    window.location.assign(body.redirect);
+                    return;
+                }
+                window.wikkit.say("<p>All right. Keep working on your poster, and let me know when it&rsquo;s ready.</p>");
+            } catch (error) {
+                console.error("Could not complete poster purchase", error);
+                window.wikkit.say("<p>I couldn&rsquo;t complete that request. Please try again.</p>");
+            } finally {
+                confirming = false;
+            }
+        });
+    }
+
+    const controlGroups = ["extended", "appearance"]
+        .map(id => [document.getElementById(id), document.getElementById(`${id}-controls`)])
+        .filter(([button, controls]) => button && controls);
+
+    for (const [button, controls] of controlGroups) {
+        button.addEventListener("click", () => {
+            const opening = controls.hidden;
+            for (const [otherButton, otherControls] of controlGroups) {
+                const visible = otherControls === controls && opening;
+                otherControls.hidden = !visible;
+                otherButton.setAttribute("aria-expanded", String(visible));
+            }
         });
     }
     const commands = {
@@ -31,6 +106,11 @@
     let activeEditor = null;
     let placeholder = null;
     let insertingCode = false;
+
+    window.posterEditorSelection = () => ({
+        editor: activeEditor,
+        range: savedRange?.cloneRange() || null,
+    });
 
     function editorFor(range) {
         const element = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
@@ -138,12 +218,14 @@
         }
         let value = "";
         let command = "insertText";
+        let richHTML = null;
         if (navigator.clipboard.read) {
             const items = await navigator.clipboard.read();
             const rich = items.find(item => item.types.includes("text/html"));
             const plain = items.find(item => item.types.includes("text/plain"));
             if (rich) {
-                value = clipboardHTML(await (await rich.getType("text/html")).text());
+                richHTML = await (await rich.getType("text/html")).text();
+                value = clipboardHTML(richHTML);
                 command = "insertHTML";
             } else if (plain) {
                 value = await (await plain.getType("text/plain")).text();
@@ -160,6 +242,7 @@
                 .some(key => savedRange[key] !== range[key])) {
             throw new Error("The selection changed. Select where to paste and try again.");
         }
+        if (richHTML && window.pastePosterGraphic?.(editor, range, richHTML)) return;
         editor.focus({preventScroll: true});
         const selection = window.getSelection();
         selection.removeAllRanges();
@@ -286,11 +369,14 @@
     });
 
     document.addEventListener("keydown", event => {
-        if (event.key === "Escape" && extended && extendedControls && !extendedControls.hidden) {
-            extendedControls.hidden = true;
-            extended.setAttribute("aria-expanded", "false");
-            if (extendedControls.contains(document.activeElement)) extended.focus();
-            event.preventDefault();
+        if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
+            for (const [button, controls] of controlGroups) {
+                if (controls.hidden) continue;
+                controls.hidden = true;
+                button.setAttribute("aria-expanded", "false");
+                if (controls.contains(document.activeElement)) button.focus();
+                event.preventDefault();
+            }
         }
     });
 

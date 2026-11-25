@@ -4,30 +4,55 @@
     </div>
     <div id="controls" aria-label="Poster controls">
         <div id="editor-controls">
-            <button id="bold" aria-label="Bold" title="Bold"><i class="fa-solid fa-bold"></i></button>
+            <button id="appearance" aria-label="Appearance" title="Appearance" aria-expanded="false" aria-controls="appearance-controls"><i class="fa-solid fa-eye"></i></button>
+            <div id="appearance-controls" class="appearance-controls" role="group" aria-label="Appearance controls" hidden>
+                <button id="theme" aria-label="Theme" title="Theme settings" aria-haspopup="dialog" aria-controls="theme-dialog"><i class="fa-solid fa-palette"></i></button>
+                <button id="font" aria-label="Font" title="Font sets" aria-haspopup="dialog" aria-controls="font-dialog"><i class="fa-solid fa-font"></i></button>
+                <button id="dimensions" aria-label="Dimensions" title="Poster dimensions"><i class="fa-sharp fa-solid fa-arrows-up-down-left-right"></i></button>
+                <button id="template" aria-label="Template" title="Poster emplate" aria-haspopup="dialog" aria-expanded="false" aria-controls="template-dialog"><i class="fa-solid fa-columns-3"></i></button>
+                <a id="template-previews" href="/layout/template" aria-label="Template previews" title="Template previews"><i class="fa-solid fa-table-cells-large"></i></a>
+            </div>
+            <button id="sources" aria-label="Sources" title="Sources"><i class="fa-solid fa-rectangle-vertical-history"></i></button>
+            | <button id="bold" aria-label="Bold" title="Bold"><i class="fa-solid fa-bold"></i></button>
             <button id="italic" aria-label="Italic" title="Italic"><i class="fa-solid fa-italic"></i></button>
             <button id="underline" aria-label="Underline" title="Underline"><i class="fa-solid fa-underline"></i></button>
             <button id="strikethrough" aria-label="Strikethrough" title="Strikethrough"><i class="fa-solid fa-strikethrough"></i></button>
             <button id="plaintext" aria-label="Plain Text" title="Plain Text"><i class="fa-solid fa-text-slash"></i></button>
-            | <button id="extended" aria-label="Extended controls" title="More text settings" aria-expanded="false" aria-controls="extended-controls"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+            <button id="extended" aria-label="Extended controls" title="More text settings" aria-expanded="false" aria-controls="extended-controls"><i class="fa-solid fa-ellipsis-vertical"></i></button>
             <div id="extended-controls" class="extended-controls" role="group" aria-label="Extended text controls" hidden>
                 <button id="code" aria-label="Code" title="Code"><i class="fa-solid fa-code"></i></button> 
                 <button id="superscript" aria-label="Superscript" title="Superscript"><i class="fa-solid fa-superscript"></i></button>
                 <button id="subscript" aria-label="Subscript" title="Subscript"><i class="fa-solid fa-subscript"></i></button>
                 <button id="ullist" aria-label="Unordered List" title="Unordered List"><i class="fa-solid fa-list-ul"></i></button>
                 <button id="ollist" aria-label="Ordered List" title="Ordered List"><i class="fa-solid fa-list-ol"></i></button>
+                | <button id="graphics-left" aria-label="Float Graphic Left" title="Float left"><i class="fa-solid fa-left"></i></button>
+                <button id="graphics-center" aria-label="No Float" title="No float"><i class="fa-solid fa-arrows-left-right-to-line"></i></button>
+                <button id="graphics-right" aria-label="Float Graphic Right" title="Float right"><i class="fa-solid fa-right"></i></button>
+                | <div id="font-size-controls" role="group" aria-label="Poster font sizing">
+                    <i class="fa-solid fa-text-size" aria-hidden="true"></i>
+                    <select id="font-sizing" aria-label="Font sizing target">
+                        <option value="sections">Sections</option>
+                        <option value="title">Title</option>
+                        <option value="authors">Authors</option>
+                    </select>
+                    <input id="font-size" type="range" min="50" max="150" step="1" value="100"
+                           aria-label="Sections font size" aria-describedby="font-size-value">
+                    <output id="font-size-value" for="font-size">100%</output>
+                    <button id="font-size-retry" type="button" hidden aria-label="Retry saving font sizing"
+                            title="Retry saving font sizing"><i class="fa-solid fa-rotate-right"></i></button>
+                </div>
             </div>
+            | <button id="image" aria-label="Image" title="Image" aria-haspopup="dialog" aria-controls="graphics-dialog"><i class="fa-solid fa-image"></i></button>
+            <button id="chart-line" aria-label="Chart" title="Chart"><i class="fa-solid fa-chart-line"></i></button>
+            <button id="formula" aria-label="Formula" title="Formula"><i class="fa-solid fa-square-root-variable"></i></button>
             | <button id="cut" aria-label="Cut" title="Cut"><i class="fa-solid fa-cut"></i></button>
             <button id="copy" aria-label="Copy" title="Copy"><i class="fa-solid fa-copy"></i></button>
             <button id="paste" aria-label="Paste" title="Paste"><i class="fa-solid fa-paste"></i></button>
-            | <button id="image" aria-label="Image" title="Image"><i class="fa-solid fa-image"></i></button>
-            <button id="chart-line" aria-label="Chart" title="Chart"><i class="fa-solid fa-chart-line"></i></button>
-<!--            <button id="square-root-variable" aria-label="Formula" title="Formula"><i class="fa-solid fa-square-root-variable"></i></button> -->
-            | <button id="font" aria-label="Font" title="Font" aria-haspopup="dialog" aria-controls="font-dialog"><i class="fa-solid fa-font"></i></button>
-            <button id="theme" aria-label="Theme" title="Theme" aria-haspopup="dialog" aria-controls="theme-dialog"><i class="fa-solid fa-palette"></i></button>
-            | <button id="undo" aria-label="Undo" title="Undo"><i class="fa-solid fa-arrow-rotate-left"></i></button>
+            <button id="undo" aria-label="Undo" title="Undo"><i class="fa-solid fa-arrow-rotate-left"></i></button>
             <button id="redo" aria-label="Redo" title="Redo"><i class="fa-solid fa-arrow-rotate-right"></i></button>
-            | <button id="wikkit" aria-label="Wikkit" title="Wikkit"><i class="fa-solid fa-hat-wizard"></i></button>
+            | <button id="auto-fit" aria-label="Auto-fit" title="Auto-fit"><i class="fa-solid fa-flip-horizontal fa-wand-sparkles"></i></button>
+            <button id="wikkit" aria-label="Wikkit" title="Wikkit"><i class="fa-solid fa-hat-wizard"></i></button>
+            | <button id="print" aria-label="Print" title="Print"><i class="fa-solid fa-print"></i></button>
             <output id="content-save-status" role="status" aria-live="polite"></output>
         </div>
         <div id="zoom-controls">
@@ -37,6 +62,21 @@
             <output id="poster-zoom-value" for="poster-zoom">100%</output>
         </div>
     </div>
+    <dialog id="graphics-dialog" aria-labelledby="graphics-dialog-title">
+        <h2 id="graphics-dialog-title">Insert a graphic</h2>
+        <p>Select a source graphic. Double-click to preview it.</p>
+        <div id="graphics-grid" role="group" aria-label="Poster source graphics"></div>
+        <p id="graphics-status" role="status" aria-live="polite"></p>
+        <div class="graphics-actions">
+            <button type="button" id="graphics-cancel">Cancel</button>
+            <button type="button" id="graphics-insert" disabled>Insert</button>
+        </div>
+    </dialog>
+    <dialog id="graphics-preview" aria-labelledby="graphics-preview-title">
+        <h2 id="graphics-preview-title">Graphic preview</h2>
+        <div id="graphics-preview-content"></div>
+        <button type="button" id="graphics-preview-close">Close preview</button>
+    </dialog>
     <dialog id="font-dialog" aria-labelledby="font-dialog-title" data-pid="{{ poster.pid }}">
         <form id="font-form">
             <h2 id="font-dialog-title">Choose a font set</h2>
@@ -64,31 +104,116 @@
             </div>
         </form>
     </dialog>
-    <dialog id="theme-dialog" aria-labelledby="theme-dialog-title" data-pid="{{ poster.pid }}">
+    <dialog id="theme-dialog" aria-labelledby="theme-dialog-title" data-pid="{{ poster.pid }}"
+            data-colors="{{ themes | join(' ') }}">
         <form id="theme-form">
-            <h2 id="theme-dialog-title">Choose a theme</h2>
-            <p>Preview a section against each theme's poster background.</p>
-            <fieldset id="theme-options">
-                <legend>Available themes</legend>
-                {% for option in themes %}
-                <label class="theme-option">
-                    <span class="theme-option-name">
-                        <input type="radio" name="theme" value="{{ option }}" required>
-                        {{ option | capitalize }}
-                    </span>
-                    <span class="theme-preview {{ option }}" aria-hidden="true">
-                        <span class="section">
-                            <span class="header">Results</span>
-                            <span class="content">Our findings show how this theme renders section text and borders.</span>
-                        </span>
-                    </span>
-                </label>
-                {% endfor %}
-            </fieldset>
+            <h2 id="theme-dialog-title">Set theme</h2>
+            <p>Choose a color, corner shape, and optional colored headers.</p>
+            <div id="theme-options-scroll">
+                <fieldset id="theme-options">
+                    <fieldset class="theme-setting">
+                        <legend>Theme Color</legend>
+                        <div class="theme-color-options">
+                            {% for option in theme_options %}
+                            <label class="theme-color-option {{ option }}">
+                                <input type="radio" name="color" value="{{ option }}">
+                                <span>{% if option == "black-and-white" %}Black &amp; White{% else %}{{ option | replace("-", " ") | title }}{% endif %}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </fieldset>
+                    <fieldset class="theme-setting">
+                        <legend>Corners</legend>
+                        <div class="theme-corner-options">
+                            {% for option, label, radius in [
+                                ("square", "Square", "0px"),
+                                ("slightly-rounded", "Slightly Rounded", "20px"),
+                                ("rounded", "Rounded", "40px"),
+                                ("very-rounded", "Very Rounded", "60px")
+                            ] %}
+                            <label class="theme-choice-option theme-corner-option"
+                                   style="--corner-radius: {{ radius }}">
+                                <input type="radio" name="corners" value="{{ option }}" required>
+                                <span>{{ label }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </fieldset>
+                    <fieldset class="theme-setting">
+                        <legend>Colored Headers</legend>
+                        <div class="theme-header-options">
+                            <label class="theme-choice-option theme-toggle-option">
+                                <input type="checkbox" name="colored_poster_header">
+                                <span>Colored Poster Header</span>
+                            </label>
+                            <label class="theme-choice-option theme-toggle-option">
+                                <input type="checkbox" name="colored_section_headers">
+                                <span>Colored Section Headers</span>
+                            </label>
+                        </div>
+                    </fieldset>
+                </fieldset>
+            </div>
             <p id="theme-status" role="status" aria-live="polite"></p>
             <div class="theme-dialog-actions">
                 <button id="theme-cancel" type="button">Cancel</button>
                 <button id="theme-apply" type="submit">Apply theme</button>
+            </div>
+        </form>
+    </dialog>
+    <dialog id="template-dialog" aria-labelledby="template-dialog-title"
+            data-pid="{{ poster.pid }}" data-width="{{ poster.width or '' }}"
+            data-height="{{ poster.height or '' }}" data-units="{{ poster.units }}"
+            data-template="{{ layout_template }}"
+            data-preset-errors="{{ poster_preset_errors | default({}) | tojson | forceescape }}"
+            data-presets="{{ poster_presets | default({}) | tojson | forceescape }}">
+        <form id="template-form">
+            <h2 id="template-dialog-title">Dimensions and Template</h2>
+            <fieldset id="template-units">
+                <label for="template-units-select">Units</label>
+                <select id="template-units-select" name="units">
+                    <option value="in">in</option>
+                    <option value="cm">cm</option>
+                    <option value="mm">mm</option>
+                </select>
+            </fieldset>
+            <fieldset id="template-categories">
+                <legend>Category</legend>
+                <div class="template-category-options">
+                    {% for category in ["square", "landscape", "portrait", "custom"] %}
+                    <label class="template-choice">
+                        <input type="radio" name="category" value="{{ category }}" required>
+                        <span>{{ category | capitalize }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </fieldset>
+            <fieldset id="template-options">
+                <legend>Template</legend>
+                <div class="template-selector-row">
+                    <div class="template-layout-options">
+                        {% for option in ["arena", "central", "vertical"] %}
+                        <label class="template-choice">
+                            <input type="radio" name="template" value="{{ option }}" required>
+                            <span>{{ option | capitalize }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    <span class="template-choice-preview" aria-hidden="true"></span>
+                </div>
+            </fieldset>
+            <fieldset id="template-dimensions">
+                <legend>Dimensions</legend>
+                <div class="template-size-options"></div>
+                <div class="template-custom-dimensions" hidden>
+                    <label>Width <input name="width" type="number" min="0.000001" step="any" required></label>
+                    <label>Height <input name="height" type="number" min="0.000001" step="any" required></label>
+                </div>
+            </fieldset>
+            <div class="template-dialog-actions">
+                <p id="template-status" role="status" aria-live="polite"></p>
+                <button id="template-cancel" type="button">Cancel</button>
+                <button id="template-apply" type="submit">Apply</button>
             </div>
         </form>
     </dialog>

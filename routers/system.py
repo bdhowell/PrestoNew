@@ -1,25 +1,49 @@
-"""Explicitly enabled, direct-local development maintenance."""
+"""Session lifecycle routes and explicitly enabled local maintenance."""
 
 import ipaddress
+import json
 import logging
 import os
-from pathlib import Path
 import shutil
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlsplit
 
 import psycopg
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import Path as PathParam
+from fastapi.responses import JSONResponse, RedirectResponse, Response
+from google.api_core.exceptions import GoogleAPIError
+from google.auth.exceptions import GoogleAuthError
+from PIL import Image
 from psycopg import sql
 from starlette.concurrency import run_in_threadpool
 
 import content
 import identity
 import posters
-from routers.wikkit import read_json
+import source_processing
+from routers.wikkit import read_json, render_page, templates
+from sessions import Session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/system", tags=["system"])
+
+
+@router.get("/timecheck")
+async def timecheck(request: Request) -> Response:
+    session = request.scope.get("server_session")
+    if not isinstance(session, Session):
+        raise HTTPException(503, "Server-side sessions are not enabled.")
+    remaining = (session.expires_at - datetime.now(UTC)).total_seconds()
+    if session.version == 0 or remaining <= 0:
+        return RedirectResponse("/account/signout", status_code=303)
+    return JSONResponse({
+        "remaining_seconds": remaining,
+        "expires_at": session.expires_at.timestamp(),
+        "name": request.state.user["user-name"],
+    })
 
 
 def require_local(request: Request) -> None:
@@ -69,6 +93,71 @@ def remove_directories(directories: list[Path]) -> None:
 
 
 class SystemStore(posters.PosterStore):
+    @staticmethod
+    async def _is_superuser(connection: psycopg.AsyncConnection, uid: int) -> bool:
+        cursor = await connection.execute(
+            'SELECT superuser FROM "user" WHERE uid = %s', (uid,),
+        )
+        user = await cursor.fetchone()
+        return user is not None and bool(user[0])
+
+    async def dump_source(self, uid: int, sid: int) -> tuple[bool, dict | None]:
+        connection = await self._connect()
+        async with connection:
+            if not await self._is_superuser(connection, uid):
+                return False, None
+            cursor = await connection.execute(
+                "SELECT row_to_json(s) FROM source s WHERE s.sid = %s", (sid,),
+            )
+            row = await cursor.fetchone()
+            return True, row[0] if row is not None else None
+
+    async def dump_graphic(self, uid: int, sid: int) -> tuple[bool, tuple[bytes, str] | None]:
+        connection = await self._connect()
+        async with connection:
+            if not await self._is_superuser(connection, uid):
+                return False, None
+            cursor = await connection.execute(
+                "SELECT storage_uri, mimetype FROM source "
+                "WHERE sid = %s AND mimetype LIKE 'image/%%'", (sid,),
+            )
+            row = await cursor.fetchone()
+        if row is None or not row[0]:
+            return True, None
+        data = await run_in_threadpool(content.SourceFiles().read, row[0])
+        return True, (data, row[1])
+
+    async def catalog(self, pid: int) -> list[content.Source] | None:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute("SELECT pid FROM poster WHERE pid = %s", (pid,))
+            if await cursor.fetchone() is None:
+                return None
+            cursor = await connection.execute(
+                "SELECT " + content.SourceStore._SOURCE_COLUMNS +
+                " FROM source s LEFT JOIN source parent ON parent.sid = s.parent "
+                "WHERE s.pid = %s AND s.kind <> 'thumbnail' "
+                "ORDER BY s.added, s.sid", (pid,),
+            )
+            return [
+                content.Source(*row[:11], legibility=row[11] if len(row) > 11 else None)
+                for row in await cursor.fetchall()
+            ]
+
+    async def catalog_graphic(self, pid: int, sid: int) -> tuple[bytes, str] | None:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT storage_uri, mimetype FROM source WHERE pid = %s AND sid = %s "
+                "AND kind <> 'thumbnail' "
+                "AND (mimetype LIKE 'image/%%' OR kind IN "
+                "('svg', 'image', 'chart', 'logo', 'moreinfo', 'qrcode'))", (pid, sid),
+            )
+            row = await cursor.fetchone()
+        if row is None or not row[0]:
+            return None
+        return await run_in_threadpool(content.SourceFiles().read, row[0]), row[1]
+
     async def purge(self, *, users: bool = False) -> dict[str, int]:
         connection = await self._connect()
         async with connection:
@@ -99,6 +188,127 @@ class SystemStore(posters.PosterStore):
 
 
 _store = SystemStore()
+
+
+@router.get("/dump")
+async def dump(
+    request: Request, sid: Annotated[int, Query(ge=1, le=2147483647)],
+) -> Response:
+    uid = getattr(request.state, "user_id", None)
+    if type(uid) is not int or uid <= 0:
+        raise HTTPException(401, "Please sign in.")
+    try:
+        authorized, source = await _store.dump_source(uid, sid)
+    except psycopg.Error:
+        logger.exception("Could not dump source %s", sid)
+        raise HTTPException(503, "The source could not be loaded.") from None
+    if not authorized:
+        raise HTTPException(403, "Superuser access required.")
+    if source is None:
+        raise HTTPException(404, "Source not found.")
+    fields = {
+        key: value if isinstance(value, str) else json.dumps(value, indent=2, ensure_ascii=False)
+        for key, value in source.items()
+    }
+    table_preview = None
+    text = source.get("text")
+    if source.get("kind") == "table" and isinstance(text, str):
+        cleaned = content.clean_graphic_table(text)
+        if "<table>" in cleaned:
+            table_preview = cleaned
+    response = templates.TemplateResponse(
+        request, "system/dump.html",
+        {"sid": sid, "fields": fields, "table_preview": table_preview,
+         "legibility": source.get("legibility"),
+         "image_source": isinstance(source.get("mimetype"), str)
+         and source["mimetype"].startswith("image/"),
+         "has_image_file": bool(source.get("storage_uri"))},
+    )
+    response.headers.update({
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+    })
+    return response
+
+
+@router.get("/dump/{sid}/thumbnail")
+async def dump_thumbnail(request: Request, sid: Annotated[int, PathParam(ge=1, le=2147483647)]) -> Response:
+    return await _dump_image(request, sid, thumbnail=True)
+
+
+@router.get("/dump/{sid}/image")
+async def dump_image(request: Request, sid: Annotated[int, PathParam(ge=1, le=2147483647)]) -> Response:
+    return await _dump_image(request, sid, thumbnail=False)
+
+
+async def _dump_image(request: Request, sid: int, *, thumbnail: bool) -> Response:
+    uid = getattr(request.state, "user_id", None)
+    if type(uid) is not int or uid <= 0:
+        raise HTTPException(401, "Please sign in.")
+    try:
+        authorized, graphic = await _store.dump_graphic(uid, sid)
+        if not authorized:
+            raise HTTPException(403, "Superuser access required.")
+        if graphic is None:
+            raise HTTPException(404, "Source graphic not found.")
+        data, mimetype = graphic
+        if thumbnail and mimetype != "image/svg+xml":
+            data = await run_in_threadpool(source_processing.image_thumbnail, data)
+            mimetype = "image/png"
+        elif mimetype == "image/tiff":
+            data = await run_in_threadpool(source_processing.image_as_png, data)
+            mimetype = "image/png"
+    except (psycopg.Error, OSError, GoogleAPIError, GoogleAuthError, Image.DecompressionBombError, ValueError):
+        logger.exception("Could not load dump image %s", sid)
+        raise HTTPException(503, "The source image could not be loaded.") from None
+    return Response(data, media_type=mimetype, headers={
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+    })
+
+
+@router.get("/catalog")
+async def catalog(
+    request: Request, pid: Annotated[int | None, Query(ge=1, le=2147483647)] = None,
+) -> Response:
+    require_local(request)
+    items = None
+    if pid is not None:
+        try:
+            items = await _store.catalog(pid)
+        except psycopg.Error:
+            logger.exception("Could not load source catalog for poster %s", pid)
+            raise HTTPException(503, "The source catalog could not be loaded.") from None
+        if items is None:
+            raise HTTPException(404, "Poster not found")
+    response = render_page(
+        request, "system/catalog.html", "system-catalog", pid=pid, items=items,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.get("/catalog/{pid}/{sid}/thumbnail")
+async def catalog_thumbnail(request: Request, pid: int, sid: int) -> Response:
+    require_local(request)
+    try:
+        graphic = await _store.catalog_graphic(pid, sid)
+        if graphic is None:
+            raise HTTPException(404, "Source graphic not found")
+        data, mimetype = graphic
+        if mimetype != "image/svg+xml":
+            data = await run_in_threadpool(source_processing.image_thumbnail, data)
+            mimetype = "image/png"
+    except (psycopg.Error, OSError, GoogleAPIError, GoogleAuthError, Image.DecompressionBombError):
+        logger.exception("Could not load catalog thumbnail %s for poster %s", sid, pid)
+        raise HTTPException(503, "The source thumbnail could not be loaded.") from None
+    return Response(data, media_type=mimetype, headers={
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+    })
 
 
 @router.post("/purge")

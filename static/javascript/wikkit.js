@@ -2,7 +2,7 @@
  * Wikkit chatbot client.
  *
  * Loaded on every page. Owns the in-page overlay and websocket, restoring
- * the overlay's content and geometry from this tab's sessionStorage.
+ * the overlay's content and state from this tab's sessionStorage.
  */
 (() => {
     "use strict";
@@ -11,6 +11,21 @@
     const pageReady = document.readyState === "loading"
         ? new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true }))
         : Promise.resolve();
+
+    document.addEventListener("click", (event) => {
+        for (let element = event.target; element instanceof Element; element = element.parentElement) {
+            if (element.matches(
+                "#editor-controls button, #dimension-picker button, .theme-color-option, .theme-choice-option, .theme-option, "
+                    + "#review nav a[aria-current='location'], "
+                    + "#poster-content [contenteditable='true'], "
+                    + "#poster-content [contenteditable='plaintext-only']",
+            ) || element.classList.contains("layout-profile-attention")) continue;
+            const style = getComputedStyle(element);
+            if (!["none", "hidden"].includes(style.outlineStyle) && parseFloat(style.outlineWidth) > 0) {
+                element.style.outline = "none";
+            }
+        }
+    }, {capture: true});
 
     window.registerWikkitCommands = function registerWikkitCommands({ commands }) {
         if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
@@ -46,7 +61,7 @@
         chatbot.id = "chatbot";
         chatbot.setAttribute("aria-label", "Wikkit chatbot");
         chatbot.dataset.socket = document.body.dataset.socket || "/wikkit/ws";
-        chatbot.style.setProperty("--chat-window-transition", `${document.body.dataset.chatWindowTransition || 330}ms`);
+        document.body.style.setProperty("--chat-window-transition", `${document.body.dataset.chatWindowTransition || 440}ms`);
         chatbot.style.setProperty("--chat-input-transition", `${document.body.dataset.chatInputTransition || 500}ms`);
         chatbot.innerHTML = '<header class="chatbot-handle">Wikkit</header>'
             + '<div id="chatlog" role="log" aria-live="polite"></div>'
@@ -55,9 +70,7 @@
         try {
             const saved = JSON.parse(sessionStorage.getItem(storageKey) || "null");
             if (saved) {
-                if (typeof saved.content !== "string" || !saved.geometry
-                    || !["left", "top", "width", "height"].every((key) => Number.isFinite(saved.geometry[key]))
-                    || saved.geometry.width <= 0 || saved.geometry.height <= 0) {
+                if (typeof saved.content !== "string") {
                     throw new Error("Invalid saved chatbot state.");
                 }
                 const content = document.createElement("template");
@@ -68,11 +81,6 @@
                     throw new Error("Saved chatbot content is missing required elements.");
                 }
                 chatbot.replaceChildren(content.content.cloneNode(true));
-                for (const key of ["left", "top", "width", "height"]) {
-                    chatbot.style[key] = `${saved.geometry[key]}px`;
-                }
-                chatbot.style.right = "auto";
-                chatbot.style.bottom = "auto";
                 for (const name of ["chat-hidden", "input-closed"]) {
                     chatbot.classList.toggle(name, saved[name] === true);
                 }
@@ -87,18 +95,23 @@
         if (document.body.dataset.clearChat === "true") {
             chatbot.querySelector("#chatlog").replaceChildren();
         }
+        chatbot.querySelectorAll(".chatbot-resize, .chatbot-close").forEach((element) => element.remove());
+        const close = document.createElement("button");
+        close.className = "chatbot-close";
+        close.type = "button";
+        close.setAttribute("aria-label", "Close Wikkit");
+        close.textContent = "\u00d7";
+        chatbot.querySelector(".chatbot-handle").appendChild(close);
         document.body.appendChild(chatbot);
-        function keepInView() {
-            const rect = chatbot.getBoundingClientRect();
-            if (chatbot.style.left || rect.left < 0 || rect.top < 0) {
-                chatbot.style.left = `${Math.max(0, Math.min(rect.left, innerWidth - rect.width))}px`;
-                chatbot.style.top = `${Math.max(0, Math.min(rect.top, innerHeight - rect.height))}px`;
-                chatbot.style.right = "auto";
-                chatbot.style.bottom = "auto";
-            }
+        const menu = document.querySelector("body > .basic-menu");
+        if (menu) {
+            const alignWithMenu = () => {
+                chatbot.style.setProperty("--chat-menu-bottom", `${Math.max(0, menu.getBoundingClientRect().bottom)}px`);
+            };
+            alignWithMenu();
+            new ResizeObserver(alignWithMenu).observe(menu, {box: "border-box"});
+            window.addEventListener("resize", alignWithMenu);
         }
-        keepInView();
-        window.addEventListener("resize", keepInView);
         return chatbot;
     }
 
@@ -122,11 +135,9 @@
                     copy.toggleAttribute("checked", control.checked);
                 }
             });
-            const rect = chatbot.getBoundingClientRect();
             try {
                 sessionStorage.setItem(storageKey, JSON.stringify({
                     content: clone.innerHTML,
-                    geometry: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
                     "chat-hidden": chatbot.classList.contains("chat-hidden"),
                     "input-closed": chatbot.classList.contains("input-closed"),
                 }));
@@ -136,11 +147,8 @@
         }
         const mutations = new MutationObserver(save);
         mutations.observe(chatbot, { subtree: true, childList: true, characterData: true, attributes: true });
-        const resize = new ResizeObserver(save);
-        resize.observe(chatbot);
         chatbot.addEventListener("input", save);
         chatbot.addEventListener("change", save);
-        window.addEventListener("resize", save);
         save();
         return save;
     }
@@ -149,37 +157,125 @@
         const chatlog = chatbot.querySelector("#chatlog");
         const chatinput = chatbot.querySelector("#chatinput");
         chatinput.contentEditable = "plaintext-only";
-        const handle = chatbot.querySelector(".chatbot-handle");
+        const launcher = document.createElement("button");
+        launcher.type = "button";
+        launcher.className = "chatbot-launcher";
+        launcher.textContent = "Wikkit";
+        launcher.setAttribute("aria-label", "Open Wikkit");
+        launcher.setAttribute("aria-controls", "chatbot");
+        launcher.hidden = !chatbot.classList.contains("chat-hidden");
+        document.body.appendChild(launcher);
         const pending = [];
         const attachmentWaiters = [];
         let client = null;
         let closed = false;
         let reminderTimer = null;
         let requestingResponse = false;
+        let reminderShown = false;
         let pageResponse = null;
         let memoryRequestId = 0;
+        let responseVersion = 0;
         let leaving = false;
         const memoryRequests = new Map();
         const reminderInterval = 120000;
+        let configuration = { CHAT_WORD_INTERVAL: 400, CHAT_WORD_DEVIATION: 100 };
 
-        function append(div) {
+        function configure(payload) {
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+                throw new TypeError("configure requires a configuration object.");
+            }
+            const updated = { ...configuration, ...payload };
+            if (!Number.isSafeInteger(updated.CHAT_WORD_INTERVAL)
+                || !Number.isSafeInteger(updated.CHAT_WORD_DEVIATION)
+                || updated.CHAT_WORD_INTERVAL < 0 || updated.CHAT_WORD_DEVIATION < 0
+                || updated.CHAT_WORD_DEVIATION > updated.CHAT_WORD_INTERVAL) {
+                throw new RangeError("Invalid chatbot word timing.");
+            }
+            configuration = updated;
+        }
+        let output = Promise.resolve();
+        let finishAnimation = null;
+
+        function enqueue(operation) {
+            const result = output.then(operation);
+            output = result.catch(commandFailed);
+            return result;
+        }
+
+        async function append(div) {
+            prepareControls(div);
+            const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+            const parts = [];
+            let previousWasWord = false;
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                if (node.parentElement.closest("script, style, button, input, textarea, select, label")) continue;
+                for (const text of node.data.match(/\s+|\S+/gu) || []) {
+                    const word = /\S/u.test(text);
+                    parts.push({ node, text, pause: word && !previousWasWord });
+                    previousWasWord = word;
+                }
+                node.data = "";
+            }
+            div.inert = true;
+            div.setAttribute("aria-busy", "true");
+            showChat();
             chatlog.appendChild(div);
-            chatlog.scrollTop = chatlog.scrollHeight;
+            let index = 0;
+            let words = 0;
+            let timer;
+            await new Promise((resolve) => {
+                function reveal(finish = false) {
+                    clearTimeout(timer);
+                    while (index < parts.length) {
+                        const part = parts[index];
+                        if (!finish && part.pause && words > 0) {
+                            const delay = configuration.CHAT_WORD_INTERVAL + Math.floor(
+                                Math.random() * (1 + configuration.CHAT_WORD_DEVIATION)
+                            ) - configuration.CHAT_WORD_DEVIATION;
+                            if (delay > 0) {
+                                timer = setTimeout(() => {
+                                    part.node.appendData(part.text);
+                                    index++;
+                                    words++;
+                                    chatlog.scrollTop = chatlog.scrollHeight;
+                                    reveal();
+                                }, delay);
+                                return;
+                            }
+                        }
+                        part.node.appendData(part.text);
+                        index++;
+                        if (part.pause) words++;
+                    }
+                    finishAnimation = null;
+                    div.inert = false;
+                    div.removeAttribute("aria-busy");
+                    if (closed) {
+                        div.querySelectorAll("button, input, textarea, select").forEach((control) => {
+                            control.disabled = true;
+                        });
+                    }
+                    chatlog.scrollTop = chatlog.scrollHeight;
+                    resolve();
+                }
+                finishAnimation = () => reveal(true);
+                reveal(leaving);
+            });
         }
 
         function say(html) {
             const div = document.createElement("div");
             div.className = "chat";
             div.innerHTML = html;
-            prepareControls(div);
-            append(div);
+            return enqueue(() => append(div));
         }
 
         function sayText(text, kind) {
             const div = document.createElement("div");
             div.className = `chat ${kind}`;
             div.textContent = text;
-            append(div);
+            return enqueue(() => append(div));
         }
 
         function stopRequest() {
@@ -188,18 +284,29 @@
             reminderTimer = null;
         }
 
+        function finishResponse() {
+            stopRequest();
+            responseVersion++;
+            chatlog.querySelectorAll("button, input, textarea, select").forEach((control) => {
+                control.disabled = true;
+            });
+        }
+
         function resetReminder() {
             clearTimeout(reminderTimer);
-            if (requestingResponse) {
+            if (requestingResponse && !reminderShown) {
                 reminderTimer = setTimeout(() => {
+                    reminderShown = true;
                     sayText("Are you still there? Let me know if you need help.", "notice");
-                    resetReminder();
                 }, reminderInterval);
             }
         }
 
         function requestResponse() {
+            showChat();
+            openInput();
             requestingResponse = true;
+            reminderShown = false;
             resetReminder();
         }
 
@@ -208,16 +315,32 @@
         }
 
         function hideChat() {
+            const hadFocus = chatbot.contains(document.activeElement);
             chatbot.classList.add("chat-hidden");
             chatbot.inert = true;
             chatbot.setAttribute("aria-hidden", "true");
+            launcher.hidden = false;
+            if (hadFocus) launcher.focus();
         }
 
         function showChat() {
+            const hadFocus = document.activeElement === launcher;
             chatbot.inert = false;
             chatbot.removeAttribute("aria-hidden");
             chatbot.classList.remove("chat-hidden");
+            launcher.hidden = true;
+            if (hadFocus) chatbot.querySelector(".chatbot-close").focus();
         }
+
+        document.getElementById("wikkit")?.addEventListener("click", () => {
+            if (chatbot.classList.contains("chat-hidden")) {
+                showChat();
+            } else {
+                hideChat();
+            }
+        });
+        chatbot.querySelector(".chatbot-close").addEventListener("click", hideChat);
+        launcher.addEventListener("click", showChat);
 
         function closeInput() {
             if (document.activeElement === chatinput) {
@@ -235,6 +358,7 @@
         }
 
         const intrinsicCommands = new Map([
+            ["configure", configure],
             ["redirect", (payload) => {
                 if (typeof payload !== "string") {
                     throw new TypeError("redirect requires a URL string.");
@@ -264,17 +388,21 @@
         ]);
 
         const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-        const socket = new WebSocket(`${scheme}//${location.host}${chatbot.dataset.socket}`);
+        const socket = document.body.dataset.wikkitOffline === "true"
+            ? null : new WebSocket(`${scheme}//${location.host}${chatbot.dataset.socket}`);
+        if (!socket) {
+            chatinput.contentEditable = "false";
+        }
 
         function send(text, response = true) {
-            if (socket.readyState === WebSocket.OPEN) {
+            if (socket?.readyState === WebSocket.OPEN) {
                 if (response && text.trim()) {
-                    stopRequest();
+                    finishResponse();
                 }
                 socket.send(text);
-            } else if (socket.readyState === WebSocket.CONNECTING) {
+            } else if (socket?.readyState === WebSocket.CONNECTING) {
                 if (response && text.trim()) {
-                    stopRequest();
+                    finishResponse();
                 }
                 pending.push(text);
             } else {
@@ -293,7 +421,7 @@
             if (pageResponse) {
                 const response = pageResponse;
                 pageResponse = null;
-                stopRequest();
+                finishResponse();
                 response.resolve(text);
             } else if (!send(text)) {
                 return false;
@@ -335,11 +463,12 @@
                         : [...chatlog.querySelectorAll("button[data-group]")]
                             .filter((other) => other.dataset.group === group);
                     const enabled = buttons.filter((other) => !other.disabled);
+                    const version = responseVersion;
                     enabled.forEach((other) => { other.disabled = true; });
                     try {
                         if (button.hasAttribute("data-sends")
                             && !submitResponse(button.dataset.sends, false)) {
-                            enabled.forEach((other) => { other.disabled = closed; });
+                            enabled.forEach((other) => { other.disabled = closed || version !== responseVersion; });
                             return;
                         }
                         if (button.hasAttribute("data-does")) {
@@ -354,7 +483,7 @@
                     } catch (error) {
                         // A sent decision cannot be retracted even if its command fails.
                         if (!button.hasAttribute("data-sends")) {
-                            enabled.forEach((other) => { other.disabled = closed; });
+                            enabled.forEach((other) => { other.disabled = closed || version !== responseVersion; });
                         }
                         commandFailed(error);
                     }
@@ -392,6 +521,7 @@
                         return;
                     }
                     const value = control.value;
+                    const version = responseVersion;
                     if (!value.trim() || value.length > 2000) {
                         sayText(value.trim() ? "That message is too long. Please keep it under 2000 characters."
                             : "Please enter a response.", "notice");
@@ -403,6 +533,9 @@
                     }
                     try {
                         await remember(control);
+                        if (closed || version !== responseVersion) {
+                            return;
+                        }
                         if (submitResponse(value, false)) {
                             return;
                         }
@@ -410,9 +543,9 @@
                         console.error("Wikkit embedded control failed", error);
                         sayText(error.message, "notice");
                     }
-                    control.disabled = closed;
+                    control.disabled = closed || version !== responseVersion;
                     if (ok) {
-                        ok.disabled = closed;
+                        ok.disabled = control.disabled;
                     }
                 };
                 control.addEventListener("input", resetReminder);
@@ -475,9 +608,9 @@
             }
             stopRequest();
             const message = JSON.stringify({ page });
-            if (socket.readyState === WebSocket.OPEN) {
+            if (socket?.readyState === WebSocket.OPEN) {
                 socket.send(message);
-            } else if (socket.readyState === WebSocket.CONNECTING) {
+            } else if (socket?.readyState === WebSocket.CONNECTING) {
                 pending.push(message);
             }
         }
@@ -502,8 +635,6 @@
             sayText("Wikkit could not complete a page action. Please try again.", "notice");
         }
 
-        let delivery = Promise.resolve();
-
         function deliver(message) {
             if (message.memory) {
                 const result = message.memory;
@@ -518,31 +649,38 @@
                 }
                 return;
             }
+            let command = message.command ?? message.client;
+            if ((command?.does ?? command?.action) === "configure") {
+                try {
+                    configure(command.payload);
+                } catch (error) {
+                    commandFailed(error);
+                }
+                command = null;
+            }
             const html = message.say ?? message.user;
             if (typeof html === "string" && html) {
                 say(html);
             }
-            const entry = client;
-            if (entry) {
-                try {
-                    entry.listen(message);
-                } catch (error) {
-                    console.error("Wikkit listener failed", error);
+            enqueue(async () => {
+                const entry = client;
+                if (entry) {
+                    try {
+                        entry.listen(message);
+                    } catch (error) {
+                        console.error("Wikkit listener failed", error);
+                    }
                 }
-            }
-            const command = message.command ?? message.client;
-            if (!command) {
-                return;
-            }
-            delivery = delivery.then(() => executeCommand(command)).catch(commandFailed);
+                if (command) await executeCommand(command);
+            });
         }
 
-        socket.addEventListener("open", () => {
+        socket?.addEventListener("open", () => {
             while (pending.length) {
                 socket.send(pending.shift());
             }
         });
-        socket.addEventListener("message", (event) => {
+        socket?.addEventListener("message", (event) => {
             let message;
             try {
                 message = JSON.parse(event.data);
@@ -554,7 +692,7 @@
                 deliver(message);
             }
         });
-        socket.addEventListener("close", (event) => {
+        socket?.addEventListener("close", (event) => {
             if (leaving) {
                 return;
             }
@@ -584,8 +722,9 @@
         window.addEventListener("pagehide", () => {
             leaving = true;
             stopRequest();
+            if (finishAnimation) finishAnimation();
             save();
-            socket.close();
+            socket?.close();
         }, { once: true });
         window.addEventListener("pageshow", (event) => {
             if (event.persisted) {
@@ -606,30 +745,6 @@
             }
         });
 
-        handle.addEventListener("pointerdown", (event) => {
-            if (event.button !== 0) {
-                return;
-            }
-            const rect = chatbot.getBoundingClientRect();
-            const offsetX = event.clientX - rect.left;
-            const offsetY = event.clientY - rect.top;
-            const clamp = (value, max) => Math.min(Math.max(value, 0), Math.max(max, 0));
-            const move = (moveEvent) => {
-                chatbot.style.left = `${clamp(moveEvent.clientX - offsetX, innerWidth - chatbot.offsetWidth)}px`;
-                chatbot.style.top = `${clamp(moveEvent.clientY - offsetY, innerHeight - chatbot.offsetHeight)}px`;
-                chatbot.style.right = "auto";
-                chatbot.style.bottom = "auto";
-            };
-            handle.setPointerCapture(event.pointerId);
-            chatbot.classList.add("dragging");
-            handle.addEventListener("pointermove", move);
-            handle.addEventListener("lostpointercapture", () => {
-                handle.removeEventListener("pointermove", move);
-                chatbot.classList.remove("dragging");
-            }, { once: true });
-            event.preventDefault();
-        });
-
         for (const message of [...chatlog.children]) {
             prepareControls(message);
         }
@@ -643,20 +758,43 @@
                     return client.apiobj;
                 }
                 const apiobj = Object.freeze({
-                    execute: (command) => executeCommand(command),
+                    execute: (command) => {
+                        if ((command?.does ?? command?.action) === "configure") {
+                            return Promise.resolve().then(() => configure(command.payload));
+                        }
+                        return enqueue(() => executeCommand(command));
+                    },
                     setSignedIn: updateMenu,
+                    setInput: (text) => {
+                        chatinput.textContent = String(text);
+                        chatinput.dispatchEvent(new Event("input", { bubbles: true }));
+                    },
+                    submitInput: () => {
+                        if (!requestingResponse) return false;
+                        const text = chatinput.innerText.trim();
+                        if (!submitResponse(text)) return false;
+                        chatinput.replaceChildren();
+                        return true;
+                    },
                     // Appends text or an HTML fragment to #chatlog as <div class="chat">.
                     say: (html) => say(String(html)),
                     requestResponse: () => {
                         if (closed || pageResponse || requestingResponse) {
                             return Promise.reject(new Error("Wikkit is unavailable or already waiting for a response."));
                         }
-                        showChat();
-                        openInput();
-                        requestResponse();
-                        chatinput.focus();
                         return new Promise((resolve, reject) => {
-                            pageResponse = { resolve, reject, win };
+                            const response = { resolve, reject, win };
+                            pageResponse = response;
+                            enqueue(() => {
+                                if (pageResponse !== response) return;
+                                requestResponse();
+                                if (socket) {
+                                    chatinput.focus();
+                                } else {
+                                    closeInput();
+                                    chatlog.querySelector("button[data-sends]:not(:disabled)")?.focus();
+                                }
+                            });
                         });
                     },
                     // Sends text to the server; with echo, also shows it via say().

@@ -2,9 +2,13 @@
 
 import logging
 import html
+import json
 import math
+import os
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from urllib.parse import urlsplit
 
 import psycopg
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -12,10 +16,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from lxml import etree
 from lxml import html as dom
 from playwright.async_api import Error as PlaywrightError
+from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 import common
 import content
-import elucidation
+import graphics
 import identity
 import posters
 from poster_rendering import balance_header_widths
@@ -28,6 +34,7 @@ from wikkit import Chatbot
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/layout", tags=["layout"])
 PRIVATE = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+MAX_PROFILE_VALIDATION_INTERVAL = 2_147_483_647
 SCALE = {"cm": 1.0, "mm": 0.1, "in": 2.54}
 ALIASES = {
     "methods": "materials and methods", "conclusions": "conclusion",
@@ -38,6 +45,16 @@ SECTION_WHICH = frozenset({
     "conclusion", "future plans", "literature cited", "additional information",
     "acknowledgements",
 })
+MANUAL_ADJUSTMENT_SECTIONS = {
+    "literature cited": "Literature Cited",
+    "acknowledgements": "Acknowledgements",
+    "additional information": "Additional Information",
+}
+
+
+def manual_adjustment_message(which: str) -> str:
+    label = MANUAL_ADJUSTMENT_SECTIONS[which]
+    return f"I&rsquo;m sorry, {{{{user.username}}}}, you have to adjust {label} yourself."
 
 
 def uid_for(request: Request) -> int:
@@ -45,6 +62,15 @@ def uid_for(request: Request) -> int:
     if type(uid) is not int:
         raise HTTPException(401, "Please sign in to access your poster.")
     return uid
+
+
+def profile_validation_interval() -> int:
+    value = int(os.environ.get("PROFILE_VALIDATION_INTERVAL", '300'))
+    if not 0 <= value <= MAX_PROFILE_VALIDATION_INTERVAL:
+        raise ValueError(
+            f"PROFILE_VALIDATION_INTERVAL must be between 0 and {MAX_PROFILE_VALIDATION_INTERVAL} milliseconds"
+        )
+    return value
 
 
 async def owned(request: Request, pid: int | None = None, *, draft: bool = False) -> posters.Poster:
@@ -72,6 +98,23 @@ def append_html(element: etree._Element, value: str) -> None:
             element.append(fragment)
 
 
+def horizontal_resize_groups(document: etree._Element) -> dict[str, int]:
+    groups: dict[str, int] = {}
+    for pane in document.xpath('//*[@data-sections]'):
+        if "horizontal" not in pane.get("class", "").split():
+            continue
+        sections = [
+            [item.strip() for item in group.split("|") if item.strip()]
+            for group in pane.get("data-sections", "").split(",") if group.strip()
+        ]
+        if len(sections) > 1:
+            groups[pane.attrib["id"]] = len(sections)
+        for items in sections:
+            if len(items) > 1:
+                groups[f"{'-'.join(items)}-parent"] = len(items)
+    return groups
+
+
 async def layout(template: str, pid: int, *, uid: int, request: Request | None = None) -> str:
     """Render a fresh template, using the trusted owner's ID for all database reads."""
     if template not in posters.TEMPLATES:
@@ -80,7 +123,7 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
     if poster is None:
         raise HTTPException(404, "Poster not found")
     sections, authors = await posters.store().content(uid, pid)
-    values = {which: elucidation.clean_html(value) for which, value in sections}
+    values = {which: graphics.clean_section(value) for which, value in sections}
     values["authors"] = ", ".join(
         html.escape(name).replace(" ", "&nbsp;") + (f"&nbsp;({html.escape(affiliation)})" if affiliation else "")
         for name, affiliation in authors
@@ -88,14 +131,33 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
     values["author"] = values["authors"]
     if request is None:
         request = Request({"type": "http", "headers": [], "state": {"user_id": uid}})
+    dimension_rules = await rules_for(uid, pid)
     raw = templates.env.get_template(f"layouts/{template}.html").render(
         request=request, poster=poster, layout_template=template,
-        theme=poster.theme if poster.theme in posters.installed_themes() else "",
+        user_name=(
+            (getattr(request.state, "user", None) or {}).get("user-name")
+            or identity.DEFAULT_NAME
+        ),
+        theme=posters.theme_classes(poster.theme, poster.theme_settings),
         fonts=poster.fonts if poster.fonts in posters.installed_fonts() else "",
         themes=posters.installed_themes(),
+        theme_options=posters.THEME_PICKER_COLORS,
         font_sets=posters.installed_fonts(),
+        poster_presets=posters.POSTER_PRESETS,
+        poster_preset_errors=dimension_rules.preset_errors(),
     )
     document = dom.document_fromstring(raw)
+    sizing = posters.LayoutSizing.model_validate((poster.layout_settings or {}).get(template, {}))
+    layout_element = document.get_element_by_id("layout")
+    layout_element.set("data-resize-settings", sizing.model_dump_json())
+    layout_element.set("data-pid", str(pid))
+    layout_element.set("data-template", template)
+    layout_element.set("data-graphics-safe-dpi", str(graphics.GRAPHICS_SAFE_DPI))
+    layout_element.set("data-profile-validation-interval", str(profile_validation_interval()))
+    geometry = (poster.layout_geometry or {}).get(template)
+    layout_element.set("data-initial-geometry", (
+        posters.LayoutGeometry.model_validate(geometry).model_dump_json() if geometry is not None else "null"
+    ))
     if poster.logo:
         logo = document.get_element_by_id("logo")
         etree.SubElement(logo, "img", src=f"/layout/logo?pid={pid}", alt="Poster logo")
@@ -121,10 +183,18 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
                     parent, "div", id=item,
                     attrib={"class": "section vertical" if vertical else "section"},
                 )
+                which = ALIASES.get(item, item)
+                if which in MANUAL_ADJUSTMENT_SECTIONS:
+                    section.set("data-manual-adjustment", html.unescape(
+                        manual_adjustment_message(which).replace(
+                            "{{user.username}}", identity.display_name(request),
+                        )
+                    ))
                 heading = etree.SubElement(section, "div", attrib={"class": "header"})
                 heading.text = {
                     "methods": "Materials and Methods",
                     "citations": "Literature Cited",
+                    "information": "Additional Information",
                 }.get(item, item.title())
                 body = etree.SubElement(
                     section, "div", attrib={
@@ -140,7 +210,18 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
                     body.remove(body[0])
     width, height = poster.inches
     canvas = document.get_element_by_id("poster-canvas")
-    canvas.set("style", f"width: {width * 96:.6f}px; height: {height * 96:.6f}px")
+    canvas.set("style", (
+        f"width: {width * 96:.6f}px; height: {height * 96:.6f}px; "
+        f"--poster-font-scale: {poster.font_scale:.9f}; "
+        + "; ".join(f"--{target}-font-scale: {value:g}" for target, value in poster.font_sizes.model_dump().items())
+    ))
+    template_dialog = document.get_element_by_id("template-dialog")
+    template_dialog.set("data-width", str(poster.width))
+    template_dialog.set("data-height", str(poster.height))
+    template_dialog.set("data-units", poster.units)
+    font_controls = document.get_element_by_id("font-size-controls")
+    font_controls.set("data-pid", str(pid))
+    font_controls.set("data-sizing", poster.font_sizes.model_dump_json())
     rendered = etree.tostring(document, method="html", encoding="unicode", doctype="<!DOCTYPE html>")
     widths = await balance_header_widths(rendered, width * 96)
     for selector, percentage in widths.items():
@@ -163,8 +244,6 @@ async def edit_layout(
     if type(uid) is not int:
         return RedirectResponse("/account/signin", status_code=303)
 
-    await common.resume(request)
-
     session = identity.session(request)
     selected_pid = pid if pid is not None else (
         session.get("poster_id") if session is not None else None
@@ -182,13 +261,18 @@ async def edit_layout(
             raise HTTPException(404, "Poster not found")
         return RedirectResponse("/posters/list", status_code=303)
     if poster.purchased:
-        return RedirectResponse(f"/posters/{poster.pid}/view", status_code=303)
+        return RedirectResponse(f"/posters/{poster.pid}/open", status_code=303)
 
     if pid is not None:
         session = identity.session(request)
         if session is None:
             raise HTTPException(503, "Poster editing requires server-side sessions.")
         session["poster_id"] = poster.pid
+
+    if poster.width is None or poster.height is None:
+        return RedirectResponse("/layout/dimensions", status_code=303)
+
+    await common.resume(request)
 
     template = poster.template if poster.template in posters.TEMPLATES else "arena"
     try:
@@ -197,6 +281,181 @@ async def edit_layout(
         logger.exception("Could not render poster %s", poster.pid)
         raise HTTPException(503, "Your layout could not be loaded.") from None
     return HTMLResponse(rendered, headers=PRIVATE)
+
+
+def poster_orientation(width: float, height: float) -> str:
+    return "landscape" if width > height else "portrait" if height > width else "square"
+
+
+def template_cancel_url(request: Request) -> str:
+    referer = request.headers.get("referer")
+    if referer:
+        parsed = urlsplit(referer)
+        if (
+            parsed.netloc == request.headers.get("host")
+            and parsed.path in {"/layout/dimensions", "/layout/edit", "/layout/layout"}
+        ):
+            return parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    return "/layout/edit"
+
+
+@router.get("/template")
+async def template_page(request: Request) -> Response:
+    if getattr(request.state, "user_id", None) is None:
+        return RedirectResponse("/account/signin", status_code=303)
+    try:
+        poster = await owned(request)
+    except psycopg.Error:
+        logger.exception("Could not load poster template choices")
+        raise HTTPException(503, "Your poster could not be loaded.") from None
+    if poster.purchased:
+        return RedirectResponse(f"/posters/{poster.pid}/open", status_code=303)
+    if poster.width is None or poster.height is None:
+        return RedirectResponse("/layout/dimensions", status_code=303)
+    try:
+        display_dimensions = poster.display_dimensions
+    except (KeyError, ValueError):
+        logger.exception("Poster %s has invalid dimensions", poster.pid)
+        raise HTTPException(503, "Your poster dimensions could not be loaded.") from None
+    orientation = poster_orientation(poster.width, poster.height)
+    available_templates = [
+        template for template, orientations in posters.TEMPLATES.items()
+        if orientation in orientations
+    ]
+    display_templates = list(available_templates)
+    if poster.template in posters.TEMPLATES and poster.template not in display_templates:
+        display_templates.append(poster.template)
+    cancel_url = template_cancel_url(request)
+    from_dimensions = (
+        request.query_params.get("from") == "dimensions"
+        or urlsplit(cancel_url).path == "/layout/dimensions"
+    )
+    await common.resume(request)
+    return render_page(
+        request, "layout/template.html", "layout-template-select",
+        poster=poster, orientation=orientation, display_dimensions=display_dimensions,
+        available_templates=available_templates,
+        display_templates=display_templates,
+        cancel_url=cancel_url, from_dimensions=from_dimensions,
+    )
+
+
+@router.post("/template")
+async def update_template(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    pid, template = data.get("pid"), data.get("template")
+    from_dimensions = data.get("from_dimensions", False)
+    if (
+        type(pid) is not int or pid <= 0
+        or not isinstance(template, str) or template not in posters.TEMPLATES
+        or not isinstance(from_dimensions, bool)
+    ):
+        raise HTTPException(422, "Choose a valid poster template.")
+    try:
+        poster = await owned(request, pid, draft=True)
+        if poster.width is None or poster.height is None:
+            raise HTTPException(409, "Set the poster dimensions before choosing a template.")
+        orientation = poster_orientation(poster.width, poster.height)
+        if orientation not in posters.TEMPLATES[template]:
+            raise HTTPException(422, "Choose a template for this poster's orientation.")
+        width, height = poster.centimeters
+        saved = await posters.store().set_dimensions(
+            uid_for(request), poster.pid, width, height, poster.units, template,
+        )
+    except (KeyError, ValueError):
+        logger.exception("Could not save poster template for poster %s", pid)
+        raise HTTPException(
+            409, "Your poster dimensions are invalid. Update them before choosing a template.",
+        ) from None
+    except psycopg.Error:
+        logger.exception("Could not save poster template for poster %s", pid)
+        raise HTTPException(503, "Your poster template could not be saved.") from None
+    if not saved:
+        raise HTTPException(409, "This poster can no longer be edited.")
+    return JSONResponse({
+        "ok": True, "redirect": "/content/upload?from=template" if from_dimensions else "/layout/edit",
+    }, headers=PRIVATE)
+
+
+@router.post("/geometry")
+async def initialize_geometry(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    pid, template = data.get("pid"), data.get("template")
+    if type(pid) is not int or pid <= 0 or template not in posters.TEMPLATES:
+        raise HTTPException(422, "Choose a valid poster and template.")
+    try:
+        geometry = posters.LayoutGeometry.model_validate(data.get("geometry"))
+    except ValidationError:
+        raise HTTPException(422, "Initial poster layout dimensions are invalid.") from None
+    try:
+        poster = await owned(request, pid, draft=True)
+        if template != (poster.template or "arena"):
+            raise HTTPException(409, "The poster template changed. Reload before initializing its layout.")
+        raw = templates.env.get_template(f"layouts/{template}.html").render(
+            request=request, poster=poster, layout_template=template, themes=[], font_sets=[],
+        )
+        document = dom.document_fromstring(raw)
+        expected = {"vertical": {}, "horizontal": {}}
+        panes = document.xpath('//*[@id="layout"]/*[@data-sections]')
+        for pane in panes:
+            classes = pane.get("class", "").split()
+            horizontal = "horizontal" in classes
+            groups = [group.split("|") for group in pane.get("data-sections", "").split(",")]
+            expected["horizontal" if horizontal else "vertical"][pane.attrib["id"]] = len(groups)
+            for items in groups:
+                if len(items) > 1:
+                    expected["vertical" if "vertical" in classes else "horizontal"][
+                        f"{'-'.join(items)}-parent"
+                    ] = len(items)
+        if len(geometry.rows) != (2 if len(panes) > 3 else 1) or any(
+            {key: len(shares) for key, shares in getattr(geometry, direction).items()} != groups
+            for direction, groups in expected.items()
+        ):
+            raise HTTPException(422, "Initial dimensions must match the poster's layout areas.")
+        saved = await posters.store().set_layout_geometry(uid_for(request), pid, template, geometry)
+    except psycopg.Error:
+        logger.exception("Could not initialize layout dimensions for poster %s", pid)
+        raise HTTPException(503, "Your initial layout dimensions could not be saved.") from None
+    if saved is None:
+        raise HTTPException(409, "This poster can no longer be edited.")
+    return JSONResponse({"ok": True, "geometry": saved.model_dump()})
+
+
+@router.post("/sizing")
+async def update_sizing(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    pid, template = data.get("pid"), data.get("template")
+    if type(pid) is not int or pid <= 0 or template not in posters.TEMPLATES:
+        raise HTTPException(422, "Choose a valid poster and template.")
+    if not isinstance(data.get("sizing"), dict):
+        raise HTTPException(422, "Poster resizing settings are invalid.")
+    try:
+        sizing = posters.LayoutSizing.model_validate(data["sizing"])
+    except ValidationError:
+        raise HTTPException(422, "Poster resizing settings are outside the permitted limits.") from None
+    try:
+        poster = await owned(request, pid, draft=True)
+        if template != (poster.template or "arena"):
+            raise HTTPException(409, "The poster template changed. Reload before resizing.")
+        raw = templates.env.get_template(f"layouts/{template}.html").render(
+            request=request, poster=poster, layout_template=template, themes=[], font_sets=[],
+        )
+        document = dom.document_fromstring(raw)
+        groups = horizontal_resize_groups(document)
+        if any(group not in groups or len(shares) != groups[group]
+               for group, shares in sizing.sections.items()):
+            raise HTTPException(422, "Choose a valid row of poster sections.")
+        if sizing.bottom and not document.xpath(
+            '//*[@id="layout"]/*[contains(concat(" ", normalize-space(@class), " "), " horizontal ")]'
+        ):
+            raise HTTPException(422, "This layout has no horizontal bottom pane.")
+        saved = await posters.store().set_layout_sizing(uid_for(request), pid, template, sizing)
+    except psycopg.Error:
+        logger.exception("Could not save poster resizing for poster %s", pid)
+        raise HTTPException(503, "Your layout sizing could not be saved.") from None
+    if not saved:
+        raise HTTPException(409, "This poster can no longer be edited.")
+    return JSONResponse({"ok": True})
 
 
 @router.post("/content")
@@ -208,15 +467,59 @@ async def update_content(request: Request) -> JSONResponse:
         raise HTTPException(422, "Choose a valid poster section.")
     if not isinstance(value, str) or len(value) > 100_000:
         raise HTTPException(422, "Poster section content is invalid or too long.")
+    pid = data.get("pid")
+    if pid is not None and (type(pid) is not int or pid <= 0):
+        raise HTTPException(422, "Choose a valid poster.")
+    expected = data.get("expected")
+    if expected is not None and (
+        not isinstance(expected, str) or len(expected) > 100_000
+    ):
+        raise HTTPException(422, "The original section content is invalid or too long.")
 
     try:
-        poster = await owned(request, draft=True)
-        saved = await posters.store().save_section(
-            uid_for(request), poster.pid, which, elucidation.clean_html(value),
+        poster = await owned(request, pid, draft=True)
+        sources = (
+            await content.store().graphic_sources(uid_for(request), poster.pid)
+            if graphics.graphic_ids(value) else None
         )
-    except psycopg.Error:
+        cleaned = graphics.clean_section(value, sources=sources, section=which)
+        if "expected" in data:
+            saved = await posters.store().save_section_if_unchanged(
+                uid_for(request), poster.pid, which, cleaned, expected,
+            )
+        else:
+            saved = await posters.store().save_section(
+                uid_for(request), poster.pid, which, cleaned,
+            )
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
+    except STORAGE_ERRORS:
         logger.exception("Could not save poster section %s", which)
         raise HTTPException(503, "Your changes could not be saved.") from None
+    if not saved:
+        raise HTTPException(409, "The section changed or this poster can no longer be edited. "
+                                "Copy your edits and reload before trying again.")
+    return JSONResponse({"ok": True, "content": cleaned}, headers=PRIVATE)
+
+
+@router.post("/font-sizing")
+async def update_font_sizing(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    pid, target = data.get("pid"), data.get("target")
+    if type(pid) is not int or pid <= 0 or target not in ("sections", "title", "authors"):
+        raise HTTPException(422, "Choose a valid poster and font-sizing target.")
+    try:
+        sizing = posters.FontSizing.model_validate({target: data.get("value")})
+    except ValidationError:
+        raise HTTPException(422, "Font sizing must be between 50% and 150%.") from None
+    try:
+        poster = await owned(request, pid, draft=True)
+        saved = await posters.store().set_font_sizing(
+            uid_for(request), poster.pid, target, sizing.model_dump()[target],
+        )
+    except psycopg.Error:
+        logger.exception("Could not save font sizing for poster %s", pid)
+        raise HTTPException(503, "Your font sizing could not be saved.") from None
     if not saved:
         raise HTTPException(409, "This poster can no longer be edited.")
     return JSONResponse({"ok": True})
@@ -245,21 +548,70 @@ async def update_fonts(request: Request) -> JSONResponse:
 @router.post("/theme")
 async def update_theme(request: Request) -> JSONResponse:
     data = await read_json(request)
-    theme = data.get("theme")
+    color = data.get("color")
     pid = data.get("pid")
-    if not isinstance(theme, str) or theme not in posters.installed_themes():
-        raise HTTPException(422, "Choose an installed poster theme.")
+    legacy_theme: str | None = None
+    if color is None:
+        candidate = data.get("theme")
+        if isinstance(candidate, str) and candidate in posters.LEGACY_THEME_COLORS:
+            legacy_theme = candidate
+            color = posters.LEGACY_THEME_COLORS[candidate]
+    if not isinstance(color, str) or color not in posters.installed_themes():
+        raise HTTPException(422, "Choose an installed theme color.")
     if type(pid) is not int or pid <= 0:
         raise HTTPException(422, "Choose a valid poster.")
     try:
+        if legacy_theme is not None:
+            settings = posters.ThemeSettings(
+                corners=(
+                    "very-rounded" if legacy_theme in posters.LEGACY_ROUNDED_THEMES else "square"
+                ),
+                colored_poster_header=True,
+                colored_section_headers=True,
+            )
+        else:
+            settings = posters.ThemeSettings.model_validate({
+                "corners": data.get("corners"),
+                "colored_poster_header": data.get("colored_poster_header", False),
+                "colored_section_headers": data.get("colored_section_headers", False),
+            })
+    except ValidationError:
+        raise HTTPException(422, "Choose valid theme settings.") from None
+    try:
         poster = await owned(request, pid, draft=True)
-        saved = await posters.store().set_theme(uid_for(request), poster.pid, theme)
+        saved = await posters.store().set_theme(uid_for(request), poster.pid, color, settings)
     except psycopg.Error:
         logger.exception("Could not save poster theme for poster %s", pid)
         raise HTTPException(503, "Your theme could not be saved.") from None
     if not saved:
         raise HTTPException(409, "This poster can no longer be edited.")
     return JSONResponse({"ok": True})
+
+
+@router.get("/graphics")
+async def available_graphics(
+    request: Request, section: str, pid: int = Query(gt=0),
+) -> JSONResponse:
+    if section not in graphics.MATH_SECTIONS | graphics.ASSESSED_SECTIONS:
+        raise HTTPException(422, "Graphics are not available for this section.")
+    try:
+        poster = await owned(request, pid, draft=True)
+        sources = await content.store().graphic_sources(uid_for(request), poster.pid)
+        candidates = graphics.suitable_graphics(section, sources)
+        available = []
+        for item in candidates:
+            if item.mimetype in ("image/png", "image/jpeg"):
+                threshold = graphics.complexity_threshold()
+                if item.complexity is not None and item.complexity > threshold:
+                    continue
+            available.append(item)
+    except (*STORAGE_ERRORS, ValueError):
+        logger.exception("Could not load poster graphics for section %s", section)
+        raise HTTPException(503, "Your graphics could not be loaded. Please try again.") from None
+    return JSONResponse({
+        "ok": True,
+        "graphics": [asdict(item) for item in available],
+    }, headers=PRIVATE)
 
 
 @router.get("/qrcode")
@@ -272,6 +624,40 @@ async def qrcode(request: Request, pid: int = Query(gt=0)) -> Response:
     if not poster.moreinfopng:
         raise HTTPException(404, "Poster QR code not found")
     return Response(bytes(poster.moreinfopng), media_type="image/png", headers=PRIVATE)
+
+
+@router.get("/qrcode/status")
+async def qrcode_status(request: Request, pid: int = Query(gt=0)) -> JSONResponse:
+    try:
+        poster = await owned(request, pid, draft=True)
+        exists = await content.store().qr_exists(uid_for(request), poster.pid)
+    except content.SourceConflictError as error:
+        raise HTTPException(409, str(error)) from None
+    except STORAGE_ERRORS:
+        logger.exception("Could not check poster QR code")
+        raise HTTPException(503, "Your QR code could not be checked. Please try again.") from None
+    return JSONResponse({"ok": True, "exists": exists}, headers=PRIVATE)
+
+
+@router.post("/qrcode")
+async def create_qrcode(request: Request) -> JSONResponse:
+    data = await read_json(request)
+    pid, url, replace = data.get("pid"), data.get("url"), data.get("replace")
+    if type(pid) is not int or pid <= 0 or not isinstance(url, str) or type(replace) is not bool:
+        raise HTTPException(422, "Choose a poster, a URL, and whether to replace an existing QR code.")
+    try:
+        poster = await owned(request, pid, draft=True)
+        png = await run_in_threadpool(graphics.qr_png, url)
+        section = await content.store().save_qr(uid_for(request), poster.pid, png, replace=replace)
+        posters.store().invalidate(uid_for(request), poster.pid)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
+    except content.SourceConflictError as error:
+        raise HTTPException(409, str(error)) from None
+    except STORAGE_ERRORS:
+        logger.exception("Could not save poster QR code")
+        raise HTTPException(503, "Your QR code could not be saved. Please try again.") from None
+    return JSONResponse({"ok": True, "content": section}, headers=PRIVATE)
 
 
 @router.get("/logo")
@@ -356,10 +742,44 @@ class DimensionRules:
     def fixed(self) -> bool:
         return self.required_width is not None and self.required_height is not None
 
+    def preset_errors(self) -> dict[str, dict[str, list[list[str]]]]:
+        return {
+            units: {
+                category: [
+                    self.errors(
+                        (max(width, height) if category == "landscape" else min(width, height)) * SCALE[units],
+                        (min(width, height) if category == "landscape" else max(width, height)) * SCALE[units],
+                        units,
+                    )
+                    for _, width, height in presets
+                ]
+                for category in ("square", "portrait", "landscape")
+            }
+            for units, presets in posters.POSTER_PRESETS.items()
+        }
+
+    def eligible_dimension_pairs(self, pairs: list[list[list]]) -> list[list[list]]:
+        eligible = []
+        for group in pairs:
+            fitting = [
+                pair for pair in group
+                if len(pair) >= 3
+                and not self.errors(pair[0] * SCALE[pair[2]], pair[1] * SCALE[pair[2]], pair[2])
+            ]
+            if fitting:
+                eligible.append(fitting)
+        return eligible
+
     def errors(self, width: float, height: float, units: str | None = None) -> list[str]:
         units = units or self.units
         scale = SCALE[units]
         errors = []
+        is_preset = any(
+            math.isclose(min(width, height), min(preset_width, preset_height) * SCALE[preset_units], abs_tol=0.001)
+            and math.isclose(max(width, height), max(preset_width, preset_height) * SCALE[preset_units], abs_tol=0.001)
+            for preset_units, presets in posters.POSTER_PRESETS.items()
+            for _, preset_width, preset_height in presets
+        )
         for label, value, minimum, required, maximum in (
             ("width", width, posters.POSTER_MIN_WIDTH_CM, self.required_width,
              min(self.max_width, posters.POSTER_MAX_WIDTH_CM)
@@ -372,20 +792,16 @@ class DimensionRules:
                 errors.append(f"Poster {label} must be a positive finite number.")
             elif required is not None and not math.isclose(value, required, abs_tol=0.001):
                 errors.append(f"Poster {label} must match the conference requirement.")
-            elif value < minimum and required is None:
+            elif value < minimum and required is None and not is_preset:
                 errors.append(f"Your poster {label} is too small. Nobody will be able to read it. The minimum is {minimum / scale:g} {units}.")
             if value > maximum + 0.001:
                 errors.append(f"Poster {label} is too big. The maximum is {maximum / scale:g} {units}.")
-            if math.isfinite(value) and value > 0 and not math.isclose(
-                value / scale, round(value / scale), abs_tol=0.001,
-            ):
-                errors.append(f"Poster {label} must be a whole number using the selected units.")
         return errors
 
 
 def parse_dimensions(text: str, default_units: str) -> tuple[float, float, str]:
     match = re.fullmatch(
-        r'\s*(\d+(?:\.\d+)?)\s*(cm|mm|in|")?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(cm|mm|in|")?\s*',
+        r'\s*(\d+(?:\.\d+)?)\s*(cm|mm|in|")?\s*(?:by|[x×])\s*(\d+(?:\.\d+)?)\s*(cm|mm|in|")?\s*',
         text, re.IGNORECASE,
     )
     if match is None:
@@ -395,7 +811,7 @@ def parse_dimensions(text: str, default_units: str) -> tuple[float, float, str]:
         first = "in"
     if second == '"':
         second = "in"
-    units = second or first or default_units
+    units = (second or first or default_units).lower()
     second = (second or units).lower()
     first = (first or units).lower()
     width = float(match[3]) * SCALE[second]
@@ -414,8 +830,15 @@ def dimensions_payload(width: float, height: float, units: str) -> dict[str, obj
     return {"width": width / SCALE[units], "height": height / SCALE[units], "units": units}
 
 
-async def save_dimensions(uid: int, pid: int, width: float, height: float, units: str) -> None:
-    if not await posters.store().set_dimensions(uid, pid, width, height, units):
+async def save_dimensions(
+    uid: int, pid: int, width: float, height: float, units: str,
+    template: str | None = None,
+) -> None:
+    if template is None:
+        saved = await posters.store().set_dimensions(uid, pid, width, height, units)
+    else:
+        saved = await posters.store().set_dimensions(uid, pid, width, height, units, template)
+    if not saved:
         raise HTTPException(409, "This poster can no longer be edited.")
 
 
@@ -429,8 +852,17 @@ async def dimensions_page(request: Request) -> Response:
         logger.exception("Could not load poster dimensions")
         raise HTTPException(503, "Your poster could not be loaded.") from None
     if poster.purchased:
-        return RedirectResponse(f"/posters/{poster.pid}/view", status_code=303)
-    return render_page(request, "layout/dimensions.html", "layout-dimensions", poster=poster)
+        return RedirectResponse(f"/posters/{poster.pid}/open", status_code=303)
+    await common.resume(request)
+    sizes = json.loads((Path(__file__).resolve().parent / "stipulations" / "sizes.json").read_text())
+    rules = await rules_for(uid_for(request), poster.pid)
+    from_editor = request.query_params.get("from") == "editor"
+    return render_page(
+        request, "layout/dimensions.html", "layout-dimensions", poster=poster,
+        from_editor=from_editor,
+        wikkit_workflow="layout-dimensions-edit" if from_editor else "layout-dimensions",
+        dimension_pairs=rules.eligible_dimension_pairs(sizes["poster_dimension_pairs"]),
+    )
 
 
 @router.post("/dimensions")
@@ -439,6 +871,12 @@ async def update_dimensions(request: Request) -> JSONResponse:
     text = data.get("dimensions")
     if not isinstance(text, str) or len(text) > 100:
         raise HTTPException(422, "Enter height x width and units.")
+    template = data.get("template")
+    if template is not None and (not isinstance(template, str) or template not in posters.TEMPLATES):
+        raise HTTPException(422, "Choose a valid poster template.")
+    from_editor = data.get("from_editor", False)
+    if not isinstance(from_editor, bool):
+        raise HTTPException(422, "Invalid dimensions source.")
     try:
         poster = await owned(request, draft=True)
         rules = await rules_for(uid_for(request), poster.pid)
@@ -447,13 +885,58 @@ async def update_dimensions(request: Request) -> JSONResponse:
         payload = dimensions_payload(width, height, units)
         if errors:
             return JSONResponse({"ok": False, "errors": errors, "preview": payload}, status_code=422)
-        await save_dimensions(uid_for(request), poster.pid, width, height, units)
+        await save_dimensions(uid_for(request), poster.pid, width, height, units, template)
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
     except psycopg.Error:
         logger.exception("Could not save poster dimensions")
         raise HTTPException(503, "Your poster dimensions could not be saved.") from None
-    return JSONResponse({"ok": True, "preview": payload, "redirect": "/layout/edit"})
+    return JSONResponse({
+        "ok": True, "preview": payload,
+        "redirect": "/layout/edit" if template is not None else "/layout/template?from=dimensions",
+    })
+
+
+async def dimensions_edit_workflow(bot: Chatbot) -> None:
+    uid = getattr(bot.websocket.state, "user_id", None)
+    pid = getattr(bot.websocket.state, "poster_id", None)
+    if type(uid) is not int or type(pid) is not int:
+        await bot.send({"say": "<p>Please create or open a poster first.</p>"})
+        return
+    try:
+        poster = await posters.store().get(uid, pid)
+        if poster is None or poster.purchased:
+            await bot.send({"say": "<p>This poster is not available for editing.</p>"})
+            return
+        rules = await rules_for(uid, pid)
+        prompt = (
+            "<p>Choose a size or enter height x width in cm, mm, or in.</p>"
+            '<button class="action" data-sends="return">Return to Poster</button>'
+        )
+        while True:
+            reply = await bot.request_response(prompt)
+            if reply.strip().lower() == "return":
+                await bot.send({"command": {"does": "redirect", "payload": "/layout/edit"}})
+                return
+            try:
+                width, height, units = parse_dimensions(reply, rules.units if rules.name else poster.units)
+            except ValueError as error:
+                prompt = f"<p>{html.escape(str(error))}</p>"
+                await bot.send({"command": {"does": "correct-dimensions", "payload": None}})
+            else:
+                errors = rules.errors(width, height, units)
+                if not errors:
+                    await save_dimensions(uid, pid, width, height, units)
+                    await bot.send({"command": {"does": "redirect", "payload": "/layout/template?from=dimensions"}})
+                    return
+                prompt = "<p>" + " ".join(errors) + "</p>"
+                await bot.send({"command": {
+                    "does": "correct-dimensions", "payload": dimensions_payload(width, height, units),
+                }})
+            prompt += '<button class="action" data-sends="return">Return to Poster</button>'
+    except (psycopg.Error, ValueError, HTTPException):
+        logger.exception("Could not set dimensions for poster %s", pid)
+        await bot.send({"say": "<p>Your poster dimensions could not be saved. Please reload and try again.</p>"})
 
 
 async def dimensions_workflow(bot: Chatbot) -> None:
@@ -492,10 +975,9 @@ async def dimensions_workflow(bot: Chatbot) -> None:
                     f"<p>Okay, {name}, {conference} has a maximum poster height of "
                     f"{rules.max_height / SCALE[rules.units]:g} {rules.units} and width of "
                     f"{rules.max_width / SCALE[rules.units]:g} {rules.units}.</p>"
-                    "<p>Do you want to set your poster dimensions to these maximum values? "
+                    "<p>I can set your poster dimensions to these maximum values or you can specify your own."
                     "You can always change them later.</p>"
                     '<button class="action" data-sends="ok">Set the dimensions to maximum</button>'
-                    '<button class="action" data-sends="cancel">I want to set my dimensions</button>'
                 )
                 if (clean_response(reply) or {}).get("response") in ("yes", "idk"):
                     width, height = rules.max_width, rules.max_height
@@ -532,10 +1014,11 @@ async def dimensions_workflow(bot: Chatbot) -> None:
                     "does": "correct-dimensions", "payload": dimensions_payload(width, height, units),
                 }})
                 width = height = None
-        await bot.send({"command": {"does": "redirect", "payload": "/layout/edit"}})
+        await bot.send({"command": {"does": "redirect", "payload": "/layout/template?from=dimensions"}})
     except (psycopg.Error, ValueError, HTTPException):
         logger.exception("Could not set dimensions for poster %s", pid)
         await bot.send({"say": "<p>Your poster dimensions could not be saved. Please reload and try again.</p>"})
 
 
 wikkit.WORKFLOWS["layout-dimensions"] = dimensions_workflow
+wikkit.WORKFLOWS["layout-dimensions-edit"] = dimensions_edit_workflow

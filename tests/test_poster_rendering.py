@@ -1,13 +1,17 @@
 import unittest
+from io import BytesIO
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from lxml import html
 from playwright.async_api import Error as PlaywrightError, async_playwright
+from PIL import Image, ImageChops
 
 import layout
 import posters
-from poster_rendering import balance_header_widths, balance_text_width
+import source_processing
+from poster_rendering import balance_header_widths, balance_text_width, poster_thumbnail
 from tests.test_layout import DRAFT
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -112,8 +116,10 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_header_renderer_loads_local_styles_and_measures_both_sections(self) -> None:
         rendered = """
-            <html><head><link rel="stylesheet" href="/static/css/layout.css"></head>
-            <body style="--heading-font-face: monospace; width: 640px">
+            <html><head><link rel="stylesheet" href="/static/css/layout.css">
+                <style>.title, .authors { font: 20px/1.6 monospace; }</style>
+            </head>
+            <body style="--heading-font-face: monospace; width: 750px">
                 <div class="poster-header">
                     <div class="logo-title">
                         <div id="logo"></div>
@@ -125,7 +131,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 </div>
             </body></html>
         """
-        widths = await balance_header_widths(rendered, 640)
+        widths = await balance_header_widths(rendered, 750)
         self.assertEqual(set(widths), {"#title", "#authors"})
         for width in widths.values():
             self.assertGreater(width, 0)
@@ -149,12 +155,13 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await element.evaluate(LINE_WIDTHS), after)
                 bounds = await element.bounding_box()
                 self.assertIsNotNone(bounds)
-                self.assertAlmostEqual(bounds["x"] + bounds["width"] / 2, 320, delta=0.1)
+                self.assertAlmostEqual(bounds["x"] + bounds["width"] / 2, 375, delta=0.1)
 
-    async def editor(self, template: str = "arena") -> None:
+    async def editor(self, template: str = "arena", poster: posters.Poster = DRAFT) -> None:
         store = AsyncMock()
-        store.get.return_value = DRAFT
+        store.get.return_value = poster
         store.content.return_value = ([("title", "Poster title"), ("results", "<p>Results</p>")], [])
+        store.conference_details.return_value = ("", {})
         with patch.object(posters, "store", return_value=store), patch.object(
             layout, "balance_header_widths", AsyncMock(return_value={"#title": 80, "#authors": 100}),
         ):
@@ -175,6 +182,194 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         await self.page.wait_for_function(
             "() => document.getElementById('poster-stage').style.height !== ''",
         )
+
+    async def test_base_typography_scales_with_physical_area_not_zoom_or_content(self) -> None:
+        for template in posters.TEMPLATES:
+            for width, height in ((36, 36), (36, 48), (72, 72), (96, 96)):
+                with self.subTest(template=template, width=width, height=height):
+                    await self.editor(template, replace(DRAFT, width=width, height=height))
+                    ratio = width * height / (36 * 36)
+                    for selector, baseline in (
+                        ("#layout", 32), ("#results .header", 48),
+                        ("#title", 112), ("#authors", 44),
+                    ):
+                        values = await self.page.locator(selector).evaluate("""element => {
+                            const style = getComputedStyle(element);
+                            return [parseFloat(style.fontSize), parseFloat(style.lineHeight)];
+                        }""")
+                        self.assertAlmostEqual(values[0], baseline * ratio, delta=0.01)
+                        self.assertAlmostEqual(values[1], baseline * 1.6 * ratio, delta=0.01)
+                    before = await self.page.locator("#layout").evaluate(
+                        "element => getComputedStyle(element).fontSize",
+                    )
+                    await self.set_zoom("100")
+                    await self.page.locator("#results .content").fill("More results. " * 100)
+                    await self.set_zoom("fit")
+                    self.assertEqual(await self.page.locator("#layout").evaluate(
+                        "element => getComputedStyle(element).fontSize",
+                    ), before)
+                    self.assertEqual(await self.page.locator("#controls").evaluate(
+                        "element => getComputedStyle(element).fontSize",
+                    ), "16px")
+
+    async def test_read_only_typography_uses_the_same_area_ratio(self) -> None:
+        for width, height in ((36, 36), (36, 48), (72, 72)):
+            with self.subTest(width=width, height=height):
+                poster = replace(DRAFT, width=width, height=height)
+                rendered = layout.templates.env.get_template("posters/document.html").render(
+                    poster=poster, width=width * 96, height=height * 96,
+                    sections=[("results", "Findings")], authors=[("Ada", "Institute")],
+                    theme="blues", fonts="technical", layout="arena",
+                )
+                await self.page.set_content(rendered)
+                await self.page.add_style_tag(path=str(ROOT / "static/css/pages/poster-document.css"))
+                for selector, baseline in (
+                    (".poster-document", 32), ("h1", 80), ("h2", 40), (".author", 32),
+                ):
+                    values = await self.page.locator(selector).evaluate("""element => {
+                        const style = getComputedStyle(element);
+                        return [parseFloat(style.fontSize), parseFloat(style.lineHeight)];
+                    }""")
+                    self.assertAlmostEqual(values[0], baseline * poster.font_scale, delta=0.01)
+                    self.assertAlmostEqual(values[1], baseline * 1.4 * poster.font_scale, delta=0.01)
+
+    async def test_poster_thumbnail_is_a_fixed_size_png(self) -> None:
+        rendered = """
+            <html><head>
+                <link rel="stylesheet" href="/static/css/themes.css">
+                <link rel="stylesheet" href="/static/css/pages/poster-document.css">
+            </head><body class="blue technical arena">
+                <article class="poster-document" style="width: 1200px; height: 800px">
+                    <header><h1>Research poster</h1></header>
+                    <div class="poster-sections"><section><h2>Results</h2></section></div>
+                </article>
+            </body></html>
+        """
+        image = await poster_thumbnail(rendered)
+        self.assertTrue(image.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(source_processing.image_dimensions(image), (640, 640))
+
+    async def test_thumbnail_preserves_landscape_square_and_portrait_dimensions(self) -> None:
+        for width, height in ((4800, 3600), (7200, 2400), (3600, 3600), (2400, 7200)):
+            with self.subTest(width=width, height=height):
+                rendered = f"""
+                    <html><body>
+                        <article class="poster-document" style="width: {width}px;
+                            height: {height}px; background: #123456"></article>
+                    </body></html>
+                """
+                image = Image.open(BytesIO(await poster_thumbnail(rendered))).convert("RGB")
+                bounds = ImageChops.difference(
+                    image, Image.new("RGB", image.size, "#d6d8da"),
+                ).getbbox()
+                self.assertIsNotNone(bounds)
+                left, top, right, bottom = bounds
+                self.assertEqual(image.size, (640, 640))
+                self.assertEqual(image.getpixel((0, 0)), (214, 216, 218))
+                scale = min(616 / width, 616 / height)
+                self.assertAlmostEqual(right - left, width * scale, delta=2)
+                self.assertAlmostEqual(bottom - top, height * scale, delta=2)
+                self.assertAlmostEqual((left + right) / 2, 320, delta=1)
+                self.assertAlmostEqual((top + bottom) / 2, 320, delta=1)
+
+    async def test_preview_authors_flow_horizontally_and_wrap_as_a_list(self) -> None:
+        rendered = layout.templates.env.get_template("posters/document.html").render(
+            poster=DRAFT, width=3600, height=2400,
+            sections=[("results", "Findings")],
+            authors=[("Ada Lovelace", "Institute"), ("Grace Hopper", "University"),
+                     ("Alan Turing", None)],
+            theme="yellow", fonts="technical", layout="arena",
+        )
+        await self.page.set_content(rendered)
+        await self.page.add_style_tag(path=str(ROOT / "static/css/pages/poster-document.css"))
+        authors = self.page.locator(".author")
+        first, second = [await authors.nth(index).bounding_box() for index in (0, 1)]
+        self.assertAlmostEqual(first["y"], second["y"], delta=1)
+        self.assertGreater(second["x"], first["x"])
+        self.assertIn("Ada Lovelace (Institute),", await self.page.locator("header").inner_text())
+        await self.page.locator(".poster-document").evaluate(
+            "element => element.style.width = '700px'",
+        )
+        last = await authors.last.bounding_box()
+        self.assertGreater(last["y"], first["y"])
+
+    async def test_thumbnail_containers_are_square_in_both_display_modes(self) -> None:
+        for mode in ("list", "grid"):
+            for width in (200, 600):
+                with self.subTest(mode=mode, width=width):
+                    await self.page.set_content(f"""
+                        <div class="poster-items {mode}" style="width: {width}px">
+                            <div class="poster-thumbnail"><img alt="Poster"></div>
+                        </div>
+                    """)
+                    await self.page.add_style_tag(
+                        path=str(ROOT / "static/css/pages/posters-list.css"),
+                    )
+                    bounds = await self.page.locator(".poster-thumbnail").bounding_box()
+                    self.assertAlmostEqual(bounds["width"], bounds["height"], delta=1)
+                    self.assertEqual(await self.page.locator("img").evaluate(
+                        "element => getComputedStyle(element).objectFit",
+                    ), "contain")
+
+    async def test_preview_sections_fill_the_poster_below_the_header(self) -> None:
+        rendered = layout.templates.env.get_template("posters/document.html").render(
+            poster=DRAFT, width=4608, height=3456,
+            sections=[(f"section {index}", "Findings") for index in range(9)],
+            authors=[("Ada Lovelace", "Institute")],
+            theme="yellow", fonts="technical", layout="arena",
+        )
+        await self.page.set_content(rendered)
+        await self.page.add_style_tag(path=str(ROOT / "static/css/pages/poster-document.css"))
+        poster = await self.page.locator(".poster-document").bounding_box()
+        header = await self.page.locator("header").bounding_box()
+        sections = await self.page.locator(".poster-sections").bounding_box()
+        last = await self.page.locator(".poster-sections > section").last.bounding_box()
+        self.assertAlmostEqual(sections["y"], header["y"] + header["height"], delta=1)
+        self.assertAlmostEqual(
+            last["y"] + last["height"], poster["y"] + poster["height"] - 96, delta=1,
+        )
+
+    async def test_preview_sections_have_white_backgrounds_across_themes(self) -> None:
+        for theme in posters.THEME_COLORS:
+            with self.subTest(theme=theme):
+                rendered = layout.templates.env.get_template("posters/document.html").render(
+                    poster=DRAFT, width=1200, height=800,
+                    sections=[("results", "<p>Findings</p>")], authors=[],
+                    theme=f"{theme} corners-rounded colored-section-headers",
+                    fonts="technical", layout="arena",
+                )
+                await self.page.set_content(rendered)
+                for stylesheet in ("themes.css", "pages/poster-document.css"):
+                    await self.page.add_style_tag(path=str(ROOT / "static/css" / stylesheet))
+                section = self.page.locator(".poster-sections > section")
+                self.assertEqual(await section.evaluate(
+                    "element => getComputedStyle(element).backgroundColor",
+                ), "rgb(255, 255, 255)")
+                self.assertEqual(await section.evaluate(
+                    "element => getComputedStyle(element).borderTopStyle",
+                ), "solid")
+                self.assertEqual(await section.evaluate(
+                    "element => getComputedStyle(element).borderTopWidth",
+                ), "3px")
+                self.assertEqual(await section.evaluate(
+                    "element => getComputedStyle(element).borderTopColor",
+                ), await section.evaluate("""element => {
+                    const probe = document.createElement('span');
+                    probe.style.color = 'var(--border-color)';
+                    element.append(probe);
+                    const color = getComputedStyle(probe).color;
+                    probe.remove();
+                    return color;
+                }"""))
+                self.assertEqual(await section.evaluate(
+                    "element => getComputedStyle(element).borderRadius",
+                ), await self.page.locator(".poster-document").evaluate(
+                    "element => getComputedStyle(element).getPropertyValue('--border-radius').trim()",
+                ))
+
+    async def test_placeholder_preview_can_be_saved_as_a_thumbnail(self) -> None:
+        image = await poster_thumbnail("<p>Preview unavailable: dimensions are not set.</p>")
+        self.assertEqual(source_processing.image_dimensions(image), (640, 640))
 
     async def dimensions(self) -> dict:
         return await self.page.evaluate("""() => {
@@ -197,88 +392,116 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_theme_dialog_previews_selects_and_saves_without_changing_fonts(self) -> None:
         await self.editor()
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-editor.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-theme.js"))
         await self.page.evaluate("""() => {
-            document.body.className = "blues technical";
+            document.body.className = "blue corners-square technical";
             window.themeRequests = [];
             window.fetch = async (url, options) => {
                 window.themeRequests.push({url, data: JSON.parse(options.body)});
                 return {ok: true, json: async () => ({ok: true})};
             };
         }""")
+        await self.page.locator("#appearance").click()
         await self.page.locator("#theme").click()
         self.assertTrue(await self.page.locator("#theme-dialog").is_visible())
-        self.assertTrue(await self.page.locator("input[value='blues']").is_checked())
-        self.assertEqual(await self.page.locator(".theme-preview").count(), len(posters.installed_themes()))
-        colors = await self.page.locator(".theme-preview").evaluate_all("""previews =>
-            previews.map(preview => getComputedStyle(preview).backgroundColor)""")
-        self.assertEqual(len(set(colors)), len(colors))
-        await self.page.locator(".theme-preview.greens").click()
-        self.assertTrue(await self.page.locator("input[value='greens']").is_checked())
-        self.assertEqual(await self.page.locator("input[value='greens']").evaluate(
-            "input => getComputedStyle(input).clipPath",
-        ), "inset(50%)")
-        await self.page.locator("input[value='greens']").focus()
-        await self.page.keyboard.press("ArrowLeft")
-        self.assertTrue(await self.page.locator("input[value='reds']").is_checked())
-        await self.page.locator(".theme-preview.greens").click()
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "blues technical")
+        self.assertTrue(await self.page.locator("input[name='color'][value='blue']").is_checked())
+        self.assertTrue(await self.page.locator("input[name='corners'][value='square']").is_checked())
+        await self.page.locator("label:has(input[name='color'][value='green'])").click()
+        await self.page.locator("label:has(input[name='corners'][value='slightly-rounded'])").click()
+        await self.page.locator("label:has(input[name='colored_section_headers'])").click()
         await self.page.locator("#theme-apply").click()
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "technical greens")
-        styles = await self.page.evaluate("""() => {
-            const preview = getComputedStyle(document.querySelector(".theme-preview.greens .section"));
-            const section = getComputedStyle(document.querySelector("#results"));
-            return ["color", "backgroundColor", "borderColor", "fontFamily"].map(
-                property => [preview[property], section[property]],
-            );
-        }""")
-        for preview, section in styles:
-            self.assertEqual(preview, section)
+        self.assertEqual(set((await self.page.locator("body").get_attribute("class")).split()), {
+            "technical", "green", "corners-slightly-rounded", "colored-section-headers",
+        })
         self.assertEqual(await self.page.evaluate("window.themeRequests"), [
-            {"url": "/layout/theme", "data": {"pid": 11, "theme": "greens"}},
+            {"url": "/layout/theme", "data": {
+                "pid": 11, "color": "green", "corners": "slightly-rounded",
+                "colored_poster_header": False, "colored_section_headers": True,
+            }},
         ])
         await self.page.locator("#theme").click()
-        self.assertTrue(await self.page.locator("input[value='greens']").is_checked())
-        await self.page.locator(".theme-preview.reds").click()
+        self.assertTrue(await self.page.locator("input[name='color'][value='green']").is_checked())
+        await self.page.locator("label:has(input[name='color'][value='red'])").click()
         await self.page.keyboard.press("Escape")
+        await self.page.wait_for_function("!document.getElementById('theme-dialog').open")
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "technical greens")
+        self.assertTrue(await self.page.locator("#appearance-controls").is_visible())
+        self.assertEqual(set((await self.page.locator("body").get_attribute("class")).split()), {
+            "technical", "green", "corners-slightly-rounded", "colored-section-headers",
+        })
         await self.page.locator("#theme").click()
         await self.page.locator("#theme-cancel").click()
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
         self.assertEqual(await self.page.evaluate("window.themeRequests.length"), 1)
+        await self.page.evaluate("""() => {
+            document.body.className = "yellow corners-rounded technical";
+            window.themeRequests = [];
+        }""")
+        await self.page.locator("#theme").click()
+        self.assertFalse(await self.page.locator("#theme-options input[name='color']:checked").count())
+        await self.page.locator("#theme-apply").click()
+        self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
+        self.assertEqual(set((await self.page.locator("body").get_attribute("class")).split()), {
+            "technical", "yellow", "corners-rounded",
+        })
+        self.assertEqual(await self.page.evaluate("window.themeRequests[0].data.color"), "yellow")
+
+    async def test_theme_options_show_all_controls_and_fit_small_screens(self) -> None:
+        await self.page.set_viewport_size({"width": 1200, "height": 1100})
+        await self.editor()
+        await self.page.evaluate("document.getElementById('theme-dialog').showModal()")
+        color_inputs = self.page.locator("#theme-options input[name='color']")
+        self.assertEqual(
+            await color_inputs.evaluate_all("inputs => inputs.map(input => input.value)"),
+            list(posters.THEME_COLORS),
+        )
+        self.assertEqual(await self.page.locator("#theme-options input[name='corners']").count(), 4)
+        self.assertEqual(await self.page.locator("#theme-options input[type='checkbox']").count(), 2)
+        for width, height in ((1200, 1100), (360, 500)):
+            await self.page.set_viewport_size({"width": width, "height": height})
+            bounds = await self.page.locator("#theme-dialog").bounding_box()
+            self.assertGreaterEqual(bounds["x"], 0)
+            self.assertLessEqual(bounds["x"] + bounds["width"], width)
+            self.assertGreaterEqual(bounds["y"], 0)
+            self.assertLessEqual(bounds["y"] + bounds["height"], height)
 
     async def test_theme_dialog_save_failure_allows_retry_and_small_screens(self) -> None:
         await self.editor()
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-editor.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-theme.js"))
         await self.page.evaluate("""() => {
-            document.body.className = "basic modern";
+            document.body.className = "blue corners-square modern";
             window.fetch = async () => ({
                 ok: false, json: async () => ({detail: "Storage unavailable."}),
             });
         }""")
         await self.page.set_viewport_size({"width": 360, "height": 500})
+        await self.page.locator("#appearance").click()
         await self.page.locator("#theme").click()
         bounds = await self.page.locator("#theme-dialog").bounding_box()
         self.assertIsNotNone(bounds)
         self.assertGreaterEqual(bounds["x"], 0)
         self.assertLessEqual(bounds["x"] + bounds["width"], 360)
         self.assertTrue(await self.page.locator("#theme-dialog").evaluate(
-            "dialog => dialog.scrollWidth <= dialog.clientWidth",
+            """dialog => dialog.scrollWidth <= dialog.clientWidth
+                && dialog.scrollHeight <= dialog.clientHeight && dialog.scrollTop === 0""",
         ))
-        await self.page.locator(".theme-preview.reds").click()
+        self.assertGreaterEqual(bounds["y"], 0)
+        self.assertLessEqual(bounds["y"] + bounds["height"], 500)
+        await self.page.locator("label:has(input[name='color'][value='red'])").click()
         await self.page.locator("#theme-apply").click()
         self.assertTrue(await self.page.locator("#theme-dialog").is_visible())
         self.assertIn("Storage unavailable.", await self.page.locator("#theme-status").inner_text())
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "basic modern")
+        self.assertEqual(await self.page.locator("body").get_attribute("class"), "blue corners-square modern")
         self.assertTrue(await self.page.locator("#theme-apply").is_enabled())
         await self.page.evaluate("""() => {
             window.fetch = async () => ({ok: true, json: async () => ({ok: true})});
         }""")
         await self.page.locator("#theme-apply").click()
         self.assertFalse(await self.page.locator("#theme-dialog").is_visible())
-        self.assertEqual(await self.page.locator("body").get_attribute("class"), "modern reds")
+        self.assertEqual(await self.page.locator("body").get_attribute("class"), "modern red corners-square")
 
     async def set_zoom(self, value: str) -> None:
         await self.page.locator("#poster-zoom").evaluate("""(slider, value) => {
@@ -363,6 +586,28 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(dimensions["scrollHeight"], dimensions["clientHeight"] + 1)
         await self.assert_content_bounds()
 
+    async def test_fit_tracks_wikkit_panel(self) -> None:
+        await self.page.route("https://presto.test/**", lambda route: route.fulfill(body="<!doctype html>"))
+        await self.page.goto("https://presto.test/")
+        await self.page.set_viewport_size({"width": 900, "height": 1000})
+        await self.editor()
+        await self.set_zoom("fit")
+        original = await self.dimensions()
+        await self.page.evaluate("document.body.dataset.wikkitOffline = 'true'")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+        await self.page.evaluate("window.wikkit = connect(() => {})")
+        await self.page.wait_for_timeout(600)
+        opened = await self.dimensions()
+        self.assertAlmostEqual(opened["clientWidth"], original["clientWidth"] - 256, delta=1)
+        self.assertLess(opened["sliderMin"], original["sliderMin"])
+        self.assertLessEqual(opened["scrollWidth"], opened["clientWidth"] + 1)
+        self.assertLessEqual(opened["scrollHeight"], opened["clientHeight"] + 1)
+        await self.page.evaluate("wikkit.execute({does: 'hide-chat'})")
+        await self.page.wait_for_timeout(600)
+        closed = await self.dimensions()
+        self.assertAlmostEqual(closed["clientWidth"], original["clientWidth"], delta=1)
+        self.assertAlmostEqual(closed["sliderMin"], original["sliderMin"], delta=0.01)
+
     async def test_zoom_centers_poster_without_clipping_scrollable_edges(self) -> None:
         for template in posters.TEMPLATES:
             with self.subTest(template=template):
@@ -427,6 +672,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
     async def test_zoom_preserves_panned_viewport_center(self) -> None:
         await self.page.set_viewport_size({"width": 900, "height": 700})
         await self.editor()
+        await self.set_zoom("100")
         await self.page.locator("#poster-container").evaluate("""element => {
             const canvas = document.getElementById("poster-canvas").getBoundingClientRect();
             element.scrollLeft = canvas.width * 0.4 - element.clientWidth / 2;
@@ -464,16 +710,20 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                         const area = content.getBoundingClientRect();
                         const rect = layout.getBoundingClientRect();
                         const scale = area.height / content.offsetHeight;
-                        const margin = 2 * parseFloat(getComputedStyle(layout).gap) * scale;
+                        const style = getComputedStyle(layout);
                         return {
                             gap: area.bottom - rect.bottom,
                             left: rect.left - area.left,
                             right: area.right - rect.right,
-                            margin,
+                            margins: {
+                                gap: parseFloat(style.marginBottom) * scale,
+                                left: parseFloat(style.marginLeft) * scale,
+                                right: parseFloat(style.marginRight) * scale,
+                            },
                         };
                     }""")
                     for side in ("gap", "left", "right"):
-                        self.assertGreaterEqual(bounds[side], bounds["margin"] - 1)
+                        self.assertGreaterEqual(bounds[side], bounds["margins"][side] - 1)
 
     async def assert_content_bounds(self) -> None:
         bounds = await self.page.evaluate("""() => {
@@ -549,7 +799,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
             for font_size in ("1.2rem", "2.0rem"):
                 for zoom in ("100", "fit"):
                     with self.subTest(template=template, font_size=font_size, zoom=zoom):
-                        await self.page.locator("body").evaluate(
+                        await self.page.locator("#poster-canvas").evaluate(
                             "(element, size) => element.style.fontSize = size", font_size,
                         )
                         await self.set_zoom(zoom)
@@ -672,18 +922,19 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 await self.set_zoom("100")
                 bounds = await self.page.locator("#layout").evaluate("""layout => {
                     const footer = layout.querySelector(".pane.horizontal");
+                    const rect = layout.getBoundingClientRect();
+                    const scale = rect.width / layout.offsetWidth;
                     return {
                         height: layout.clientHeight,
                         gutter: parseFloat(getComputedStyle(layout).rowGap),
                         footerHeight: footer ? footer.offsetHeight : 0,
-                        footerBottom: footer ? footer.offsetTop + footer.offsetHeight : null,
+                        footerBottom: footer ? (footer.getBoundingClientRect().bottom - rect.top) / scale : null,
                         panes: [...layout.querySelectorAll(".pane:not(.horizontal)")]
                             .map(pane => ({
-                                top: pane.offsetTop - layout.offsetTop,
-                                bottom: pane.offsetTop - layout.offsetTop + pane.offsetHeight,
+                                top: (pane.getBoundingClientRect().top - rect.top) / scale,
+                                bottom: (pane.getBoundingClientRect().bottom - rect.top) / scale,
                             })),
-                        footerTop: footer ? footer.offsetTop : null,
-                        layoutTop: layout.offsetTop,
+                        footerTop: footer ? (footer.getBoundingClientRect().top - rect.top) / scale : null,
                     };
                 }""")
                 if footer_present:
@@ -692,10 +943,10 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                         (bounds["height"] - bounds["gutter"]) * 0.2, delta=1,
                     )
                     self.assertAlmostEqual(
-                        bounds["footerBottom"] - bounds["layoutTop"], bounds["height"], delta=1,
+                        bounds["footerBottom"], bounds["height"], delta=1,
                     )
                     self.assertAlmostEqual(
-                        bounds["footerTop"] - bounds["layoutTop"],
+                        bounds["footerTop"],
                         bounds["height"] - bounds["footerHeight"], delta=1,
                     )
                 for pane in bounds["panes"]:
@@ -712,6 +963,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         for template in posters.TEMPLATES:
             with self.subTest(template=template):
                 await self.editor(template)
+                await self.set_zoom("100")
                 await self.page.locator("#results .content").evaluate(
                     "(element, text) => element.textContent = text",
                     "Detailed experimental results and observations. " * 2500,
@@ -757,8 +1009,8 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
     async def test_header_measurement_uses_the_same_margins_as_the_editor(self) -> None:
         await self.editor()
         await self.page.locator("#poster-canvas").evaluate("""element => {
-            element.style.width = "900px";
-            element.style.height = "1400px";
+            element.style.width = "1400px";
+            element.style.height = "2000px";
         }""")
         await self.page.locator("#title").evaluate("""element => {
             element.style.width = "100%";
@@ -766,7 +1018,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 + "with experimental observations and implications for future research";
         }""")
         await self.page.wait_for_timeout(100)
-        widths = await balance_header_widths(await self.page.content(), 900)
+        widths = await balance_header_widths(await self.page.content(), 1400)
         expected = await balance_text_width(self.page, "#title")
         self.assertAlmostEqual(widths["#title"], expected, delta=0.01)
 
@@ -797,6 +1049,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 await self.page.wait_for_function(
                     "() => document.getElementById('poster-content').style.transform !== 'scale(1)'",
                 )
+                await self.set_zoom("100")
                 await self.assert_content_bounds()
                 dimensions = await self.dimensions()
                 self.assertAlmostEqual(dimensions["canvasWidth"], width, delta=0.1)
@@ -807,6 +1060,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("#poster-canvas").evaluate("""element => {
             element.style.width = "300px";
             element.style.height = "250px";
+            element.style.setProperty("--gutter", "1rem");
             element.querySelector("#layout").style.display = "none";
         }""")
         await self.page.wait_for_function(

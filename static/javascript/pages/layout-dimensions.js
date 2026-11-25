@@ -6,8 +6,124 @@
     const form = document.querySelector("#dimension-form");
     const input = document.querySelector("#poster-dimensions");
     const status = document.querySelector("#dimension-status");
+    const picker = document.querySelector("#dimension-picker");
+    const controls = document.querySelector("#dimension-picker-controls");
+    const pickerStatus = document.querySelector("#dimension-picker-status");
+    const sizeList = document.querySelector("#dimension-sizes");
+    const empty = document.querySelector("#dimension-empty");
+    const next = document.querySelector("#dimension-selection-continue");
+    const pairs = JSON.parse(picker.dataset.sizes);
+    const fromEditor = picker.dataset.fromEditor === "true";
+    const current = picker.dataset.current ? JSON.parse(picker.dataset.current) : null;
+    let units = current?.units || "in";
+    const currentOrientation = current ? (current.width > current.height ? "landscape"
+        : current.height > current.width ? "portrait" : "square") : "landscape";
+    let orientation = currentOrientation === "square" && !fromEditor ? "landscape" : currentOrientation;
+    let selected = null;
+    let customInputPending = false;
     let active;
     let timer;
+
+    document.querySelector("#return-to-poster")?.addEventListener("click", () => {
+        window.location.assign("/layout/edit");
+    });
+
+    if (current) {
+        for (const [selector, value] of [
+            ["#dimension-units", units], ["#dimension-orientations", orientation],
+        ]) {
+            for (const button of document.querySelectorAll(`${selector} button`)) {
+                const matches = button.dataset.unit === value || button.dataset.orientation === value;
+                button.setAttribute("aria-pressed", String(matches));
+                button.classList.toggle("current-dimension", matches);
+            }
+        }
+    }
+
+    function updateNext() {
+        next.textContent = fromEditor && !selected
+            ? "Return to poster layout" : "Continue to template selection";
+        next.disabled = Boolean(active) || (!fromEditor && !selected && !current);
+    }
+
+    function matchesSize(size, width, height) {
+        return size && size.units === units
+            && Math.abs(width - size.width) < 0.0001 && Math.abs(height - size.height) < 0.0001;
+    }
+
+    function renderSizes() {
+        sizeList.replaceChildren();
+        const sizes = pairs.flat().filter(([width, height, sourceUnits]) =>
+            (units === "in" ? sourceUnits === "in" : sourceUnits === "cm" || sourceUnits === "mm")
+            && (orientation === "landscape" ? width > height
+                : orientation === "portrait" ? height > width : width === height)
+        ).map(([sourceWidth, sourceHeight, sourceUnits]) => {
+            const factor = sourceUnits === units ? 1 : units === "mm" ? 10 : 0.1;
+            return [Number((sourceWidth * factor).toFixed(4)), Number((sourceHeight * factor).toFixed(4))];
+        });
+        const scale = sizes.length ? Math.min(
+            96 / Math.max(...sizes.map(([width]) => width)),
+            80 / Math.max(...sizes.map(([, height]) => height)),
+        ) : 1;
+        for (const [width, height] of sizes) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "dimension-size";
+            if (current && orientation === currentOrientation && matchesSize(current, width, height)) {
+                button.classList.add("current-dimension");
+                button.setAttribute("aria-current", "true");
+            }
+            button.setAttribute("aria-pressed", String(Boolean(matchesSize(selected || current, width, height))));
+            button.setAttribute("aria-label", `${width} by ${height} ${units}, width by height`);
+            const rectangle = document.createElement("span");
+            rectangle.className = "dimension-rectangle";
+            rectangle.style.width = `${width * scale}px`;
+            rectangle.style.height = `${height * scale}px`;
+            const label = document.createElement("span");
+            label.textContent = `${width} × ${height} ${units}`;
+            button.append(rectangle, label);
+            button.addEventListener("click", () => {
+                clearTimeout(timer);
+                customInputPending = false;
+                selected = { width, height, units };
+                for (const option of sizeList.querySelectorAll("button")) {
+                    option.setAttribute("aria-pressed", String(option === button));
+                }
+                pickerStatus.textContent = "";
+                updateNext();
+            });
+            sizeList.append(button);
+        }
+        empty.hidden = sizes.length > 0;
+    }
+
+    for (const [selector, attribute, update] of [
+        ["#dimension-units", "unit", (value) => { units = value; }],
+        ["#dimension-orientations", "orientation", (value) => { orientation = value; }],
+    ]) {
+        document.querySelector(selector).addEventListener("click", (event) => {
+            const button = event.target.closest("button");
+            if (!button) return;
+            for (const option of event.currentTarget.querySelectorAll("button")) {
+                option.setAttribute("aria-pressed", String(option === button));
+            }
+            update(button.dataset[attribute]);
+            renderSizes();
+        });
+    }
+    renderSizes();
+    updateNext();
+
+    next.addEventListener("click", () => {
+        if (active) return;
+        if (customInputPending) {
+            saveDimensions(input.value, true);
+        } else if (selected) {
+            saveDimensions(`${selected.height} ${selected.units} x ${selected.width} ${selected.units}`, true);
+        } else {
+            window.location.assign(fromEditor ? "/layout/edit" : "/layout/template?from=dimensions");
+        }
+    });
 
     function show(payload) {
         region.hidden = false;
@@ -20,39 +136,62 @@
         }
     }
 
-    async function update(event) {
-        if (event) event.preventDefault();
+    async function saveDimensions(dimensions, fromPicker = false) {
         clearTimeout(timer);
         if (active) active.abort();
         const controller = new AbortController();
         active = controller;
-        status.textContent = "Checking dimensions...";
+        controls.disabled = true;
+        updateNext();
+        if (fromPicker) form.inert = true;
+        const message = fromPicker ? pickerStatus : status;
+        message.textContent = "Checking dimensions...";
         try {
             const response = await fetch("/layout/dimensions", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ dimensions: input.value }),
+                body: JSON.stringify({ dimensions, ...(fromEditor ? { from_editor: true } : {}) }),
                 signal: controller.signal,
             });
             const result = await response.json();
             if (controller.signal.aborted) return;
             if (result.preview) show(result.preview);
             if (!response.ok) {
-                status.textContent = result.errors ? result.errors.join(" ") : result.detail;
+                if (fromPicker) {
+                    region.hidden = false;
+                    if (!result.preview) input.value = dimensions;
+                }
+                message.textContent = result.errors ? result.errors.join(" ")
+                    : result.detail || "Your dimensions could not be saved. Please try again.";
                 return;
             }
             window.location.assign(result.redirect);
         } catch (error) {
             if (error.name !== "AbortError") {
-                status.textContent = "Your dimensions could not be saved. Please try again.";
+                message.textContent = "Your dimensions could not be saved. Please try again.";
+            }
+        } finally {
+            if (active === controller) {
+                active = null;
+                controls.disabled = false;
+                updateNext();
+            }
+            if (fromPicker) {
+                form.inert = false;
             }
         }
     }
-    form.addEventListener("submit", update);
+    form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        saveDimensions(input.value);
+    });
     input.addEventListener("input", () => {
+        customInputPending = true;
         if (active) active.abort();
         clearTimeout(timer);
-        timer = setTimeout(() => update(), 400);
+        timer = setTimeout(() => saveDimensions(input.value), 400);
     });
-    window.registerWikkitCommands({ commands: { "correct-dimensions": { does: show } } });
+    window.registerWikkitCommands({ commands: {
+        "correct-dimensions": { does: show },
+    } });
 })();

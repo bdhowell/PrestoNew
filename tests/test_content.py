@@ -1,11 +1,13 @@
 import asyncio
 import io
+import json
 import os
 import tempfile
 import unittest
 import uuid
 import zipfile
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import quote
@@ -15,16 +17,23 @@ from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from google.api_core.exceptions import Forbidden, NotFound, ServiceUnavailable
+from PIL import Image
 from starlette.requests import HTTPConnection
 
 import content
 import source_processing
 import posters
+from evaluation import EvaluationResponse
 from tests import test_posters
 from routers import content as routes
 from tests.test_posters import DRAFT, ROOT
 
 ITEM = content.Source(1, "<paper>.pdf", "application/pdf", 12, "2026-10-25")
+
+def sample_png():
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 32), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 class ContentRouteTests(unittest.TestCase):
@@ -37,6 +46,7 @@ class ContentRouteTests(unittest.TestCase):
         self.sources.list_sources.return_value = []
         self.sources.add.return_value = ITEM
         self.sources.completion.return_value = (0, 0)
+        self.sources.evaluation_sources.return_value = []
         for target, value in (("posters.store", self.posters), ("content.store", self.sources)):
             mocked = patch(target, return_value=value)
             mocked.start()
@@ -61,7 +71,7 @@ class ContentRouteTests(unittest.TestCase):
     def test_empty_page_shows_introduction_and_all_supported_extensions(self) -> None:
         response = self.client.get("/content/upload")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("start by uploading your source content", response.text)
+        self.assertIn("upload your source content", response.text)
         self.assertIn("Apple Numbers, Pages, and Keynote", response.text)
         self.assertIn("Markdown (MD)", response.text)
         self.assertIn('id="items-list"', response.text)
@@ -70,21 +80,51 @@ class ContentRouteTests(unittest.TestCase):
             self.assertIn(suffix, response.text)
         self.sources.list_sources.assert_awaited_once_with(7, 11)
 
+    def test_content_pages_save_the_requested_resumption_url(self) -> None:
+        for path in ("/content/upload", "/content/extract", "/content/elucidate", "/content/evaluate"):
+            for query in ("tag=a%2Fb&tag=two", "tag=a%2Fb&tag=two&xyzzy=arpa"):
+                with self.subTest(path=path, query=query):
+                    self.posters.set_resumption.reset_mock()
+                    response = self.client.get(f"{path}?{query}")
+                    self.assertEqual(response.status_code, 200)
+                    marker = "" if query.endswith("xyzzy=arpa") else "&xyzzy=arpa"
+                    self.posters.set_resumption.assert_awaited_once_with(
+                        7, 11, f"http://testserver{path}?{query}{marker}",
+                    )
+
+    def test_elucidation_page_shows_wikkit_writing_graphic(self) -> None:
+        response = self.client.get("/content/elucidate")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('/static/graphics/wikkitwriting.png', response.text)
+        self.assertIn('alt="Wikkit writing"', response.text)
+
     def test_existing_files_escape_names_and_do_not_repeat_first_upload_intro(self) -> None:
         self.sources.list_sources.return_value = [ITEM]
         response = self.client.get("/content/upload")
         self.assertIn("&lt;paper&gt;.pdf", response.text)
-        self.assertNotIn("start by uploading your source content", response.text)
+        self.assertNotIn("upload your source content", response.text)
         self.assertNotIn("Rich Text Format", response.text)
 
     def test_reduced_conversion_notice_is_visible_on_page_and_upload_response(self) -> None:
-        with patch.dict(os.environ, {"DOCLING_ENABLE_ENRICHMENT": "false"}):
+        for value in ("yes", "true"):
+            with self.subTest(value=value), patch.dict(os.environ, {
+                "DOCLING_ENABLE_ENRICHMENT": "false", "REDUCED_FEATURE_NOTIFICATION": value,
+            }):
+                page = self.client.get("/content/upload")
+                response = self.upload(filename=f"{value}.pdf")
+                self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, page.text)
+                self.assertEqual(response.status_code, 201)
+                self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, response.json()["say"])
+        with patch.dict(os.environ, {
+            "DOCLING_ENABLE_ENRICHMENT": "false", "REDUCED_FEATURE_NOTIFICATION": "no",
+        }):
             page = self.client.get("/content/upload")
-            response = self.upload()
-        self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, page.text)
-        self.assertEqual(response.status_code, 201)
-        self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, response.json()["say"])
-        with patch.dict(os.environ, {"DOCLING_ENABLE_ENRICHMENT": "true"}):
+            response = self.upload(filename="quiet.pdf")
+        self.assertNotIn(source_processing.REDUCED_FEATURE_NOTICE, page.text)
+        self.assertNotIn(source_processing.REDUCED_FEATURE_NOTICE, response.json()["say"])
+        with patch.dict(os.environ, {
+            "DOCLING_ENABLE_ENRICHMENT": "true", "REDUCED_FEATURE_NOTIFICATION": "yes",
+        }):
             self.assertNotIn(source_processing.REDUCED_FEATURE_NOTICE, self.client.get("/content/upload").text)
 
     def test_upload_returns_metadata_and_passes_owner_checked_poster(self) -> None:
@@ -186,6 +226,8 @@ class ContentRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("your content has finished uploading", response.text)
         self.assertIn("reading through it now", response.text)
+        self.assertIn('/static/graphics/wikkitbooks.png', response.text)
+        self.assertIn('alt="Wikkit reading from books"', response.text)
         self.assertIn("/static/javascript/pages/content-extract.js", response.text)
         self.assertIn('"sid": 1', response.text)
         self.assertNotIn('"sid": 2', response.text)
@@ -252,16 +294,583 @@ class ContentRouteTests(unittest.TestCase):
         from PIL import Image
         buffer = io.BytesIO()
         Image.new("RGB", (1000, 500)).save(buffer, format="JPEG")
-        self.sources.graphic.return_value = buffer.getvalue()
+        self.sources.thumbnail_source.return_value = (buffer.getvalue(), "image/jpeg")
         response = self.client.get("/content/1/thumbnail")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["cache-control"], "private, no-store")
         with Image.open(io.BytesIO(response.content)) as image:
             self.assertEqual(image.size, (160, 80))
             self.assertEqual(image.format, "PNG")
-        self.sources.graphic.assert_awaited_once_with(7, 11, 1)
-        self.sources.graphic.return_value = None
+        self.sources.thumbnail_source.assert_awaited_once_with(7, 11, 1)
+        self.sources.thumbnail_source.return_value = None
         self.assertEqual(self.client.get("/content/99/thumbnail").status_code, 404)
+
+    def test_svg_thumbnail_is_owner_checked_and_sandboxed(self) -> None:
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"/>'
+        self.sources.thumbnail_source.return_value = (svg, "image/svg+xml")
+        response = self.client.get("/content/1/thumbnail")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, svg)
+        self.assertEqual(response.headers["content-type"], "image/svg+xml")
+        self.assertIn("sandbox", response.headers["content-security-policy"])
+        self.sources.thumbnail_source.assert_awaited_once_with(7, 11, 1)
+        self.assertFalse(replace(ITEM, mimetype="image/svg+xml", width=40, height=20).ill_sized)
+
+    def test_tiff_thumbnail_is_reencoded_as_png(self) -> None:
+        from PIL import Image
+        image = io.BytesIO()
+        Image.new("RGB", (200, 100)).save(image, format="TIFF")
+        self.sources.thumbnail_source.return_value = (image.getvalue(), "image/tiff")
+        response = self.client.get("/content/1/thumbnail")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/png")
+        with Image.open(io.BytesIO(response.content)) as preview:
+            self.assertEqual(preview.size, (160, 80))
+
+    def test_graphic_evaluation_page_prepares_without_unfiltered_counts(self) -> None:
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "upload.png", "image/png", None, None, None),
+            content.GraphicEvaluationSource(2, "extract.png", "image/png", 1, None, None),
+        ]
+        response = self.client.get("/content/evaluate")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("predicting", response.text)
+        self.assertIn('/static/graphics/wikkitmeasuring.png', response.text)
+        self.assertIn('alt="Wikkit measuring a graphic"', response.text)
+        self.assertIn("/static/javascript/pages/content-evaluate.js", response.text)
+        self.assertIn('"pid": 11', response.text)
+        self.sources.evaluation_sources.assert_not_awaited()
+
+    def test_graphic_evaluation_streams_persists_and_groups_source_results(self) -> None:
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(
+                1, "uploaded.png", "image/png", None, None, None,
+                "tables", "<table><tr><td>Data</td></tr></table>",
+            ),
+            content.GraphicEvaluationSource(2, "extracted.jpg", "image/jpeg", 1, None, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(
+            1, "Original research context", "fingerprint", 27,
+        )
+        self.posters.content.return_value = (
+            [("materials and methods", "<p>Experimental methods</p>"),
+             ("results", "<p>Observed results</p>")], [],
+        )
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+        self.sources.save_graphic_evaluation.return_value = True
+        evaluation_result = {
+            "image_analysis": {
+                "classification": "image",
+                "math_expressions": [],
+                "description": "A research image",
+            },
+            "evaluations": {
+                "materials_and_methods": {"rating": "significantly"},
+                "results": {"rating": "weakly"},
+            },
+        }
+        client = Mock()
+        with patch.object(routes.openai, "OpenAI", return_value=client) as openai_client, \
+                patch.object(routes.poster_graphics, "image_legibility", return_value={
+                    "score": 1.0, "threshold": 0.95, "below_threshold": False,
+                }), \
+                patch.object(
+                    routes.graphic_evaluation, "evaluate_image",
+                    return_value=Mock(model_dump=Mock(return_value=evaluation_result)),
+                ) as evaluate:
+            response = self.client.post("/content/evaluate/11", json={})
+
+        self.assertEqual(response.status_code, 200)
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(
+            [event["type"] for event in events],
+            ["start", "progress", "result", "progress", "result", "complete"],
+        )
+        self.assertEqual(events[0], {
+            "type": "start", "total": 2, "uploaded": 1, "extracted": 1,
+            "estimate_word": "zero point seven",
+        })
+        self.assertEqual(
+            [events[index]["source"]["category"] for index in (2, 4)],
+            ["uploaded", "extracted"],
+        )
+        self.assertEqual(events[2]["source"]["type"], "tables")
+        self.assertEqual(events[2]["complexity"]["score"], 0)
+        self.assertFalse(events[2]["complexity"]["too_complex"])
+        self.assertEqual(
+            events[2]["source"]["table_html"], "<table><tr><td>Data</td></tr></table>",
+        )
+        self.assertEqual(evaluate.call_count, 2)
+        self.assertEqual(evaluate.call_args.args[1:], (
+            "Original research context", "Experimental methods", "Observed results",
+        ))
+        self.assertEqual(self.sources.save_graphic_evaluation.await_count, 2)
+        self.assertEqual(
+            self.sources.save_graphic_evaluation.await_args_list[0].args,
+            (
+                7, 11, 1, evaluation_result,
+                content.graphic_evaluation_hash("fingerprint", "Experimental methods", "Observed results", None),
+            ),
+        )
+        openai_client.assert_called_once_with()
+        client.close.assert_called_once_with()
+
+    def test_graphic_evaluation_is_owner_checked_and_reports_empty_sources(self) -> None:
+        self.sources.evaluation_sources.return_value = []
+        response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([event["type"] for event in events], ["start", "empty"])
+        self.assertEqual(events[0]["total"], 0)
+        self.assertEqual(self.client.post("/content/evaluate/12", json={}).status_code, 409)
+        self.assertEqual(self.client.post(
+            "/content/evaluate/11", json={}, headers={"Origin": "https://evil.example"},
+        ).status_code, 403)
+        self.assertEqual(self.client.post("/content/evaluate/11", content="").status_code, 415)
+        self.uid = None
+        self.assertEqual(self.client.post("/content/evaluate/11", json={}).status_code, 401)
+
+    def test_prefilter_counts_only_pending_images_that_pass_both_thresholds(self) -> None:
+        saved = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {},
+        }
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "saved.png", "image/png", None, saved, None),
+            content.GraphicEvaluationSource(2, "complex.png", "image/png", None, None, None),
+            content.GraphicEvaluationSource(3, "illegible.png", "image/png", 1, None, None),
+            content.GraphicEvaluationSource(4, "valid.png", "image/png", 1, None, None),
+            content.GraphicEvaluationSource(5, "upload.png", "image/png", None, None, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.side_effect = lambda uid, pid, sid: (bytes([sid]), "image/png")
+        self.sources.save_graphic_evaluation.return_value = True
+
+        def complexity(data):
+            return {"score": 0.6 if data == b"\x02" else 0.1, "threshold": 0.5,
+                    "too_complex": data == b"\x02"}
+
+        def legibility(data, mimetype):
+            return {"score": 0.8 if data == b"\x03" else 1.0, "threshold": 0.95,
+                    "below_threshold": data == b"\x03"}
+
+        with patch.object(routes.poster_graphics, "image_complexity", side_effect=complexity), \
+                patch.object(routes.poster_graphics, "image_legibility", side_effect=legibility), \
+                patch.object(routes.openai, "OpenAI"), \
+                patch.object(routes.graphic_evaluation, "evaluate_image",
+                             return_value=Mock(model_dump=Mock(return_value=saved))) as evaluate:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[0], {
+            "type": "start", "total": 2, "uploaded": 1, "extracted": 1,
+            "estimate_word": "zero point seven",
+        })
+        progress = [event for event in events if event["type"] == "progress"]
+        self.assertEqual([(event["current"], event["total"]) for event in progress], [(1, 2), (2, 2)])
+        self.assertEqual(evaluate.call_count, 2)
+        self.assertEqual([call.args[2] for call in self.sources.save_graphic_evaluation.await_args_list],
+                         [4, 5])
+        rejected = [event for event in events if event["type"] == "result"
+                    and event["source"]["sid"] in (2, 3)]
+        self.assertEqual(len(rejected), 2)
+        self.assertTrue(all(event["evaluation"] is None for event in rejected))
+
+    def test_prefilter_estimate_uses_rounded_pending_count(self) -> None:
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+        self.sources.save_graphic_evaluation.return_value = True
+        evaluation = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {},
+        }
+        with patch.object(routes.poster_graphics, "image_legibility", return_value={
+            "score": 1.0, "threshold": 0.95, "below_threshold": False,
+        }), patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.graphic_evaluation, "evaluate_image",
+            return_value=Mock(model_dump=Mock(return_value=evaluation)),
+        ):
+            for count, estimate in ((1, "zero point three"), (3, "one"), (4, "one point three")):
+                with self.subTest(count=count):
+                    self.sources.evaluation_sources.return_value = [
+                        content.GraphicEvaluationSource(index, "upload.png", "image/png", None, None, None)
+                        for index in range(count)
+                    ]
+                    response = self.client.post("/content/evaluate/11", json={})
+                    start = json.loads(response.text.splitlines()[0])
+                    self.assertEqual(start["total"], count)
+                    self.assertEqual(start["estimate_word"], estimate)
+
+    def test_graphic_evaluation_reports_current_saved_results(self) -> None:
+        evaluation_result = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {},
+        }
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(
+                1, "saved.png", "image/png", None, evaluation_result, None,
+            ),
+        ]
+        self.sources.source_text.return_value = content.SourceText(
+            1, "Original research context", "fingerprint", 27,
+        )
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+        self.posters.content.return_value = ([], [])
+        with patch.object(
+            routes.poster_graphics, "image_legibility",
+            return_value={"score": 1.0, "threshold": 0.95, "below_threshold": False},
+        ), patch.object(routes.openai, "OpenAI") as openai_client:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual([event["type"] for event in events], ["start", "already-evaluated"])
+        openai_client.assert_not_called()
+        self.sources.graphic_source.assert_awaited_once_with(7, 11, 1)
+        self.sources.save_graphic_evaluation.assert_not_awaited()
+
+    def test_cached_complex_graphic_is_reported_without_reassessment(self) -> None:
+        import cv2
+        import numpy as np
+
+        evaluation_result = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {},
+        }
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "saved.png", "image/png", None, evaluation_result, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        image = np.random.default_rng(12).integers(0, 256, (100, 100), dtype=np.uint8)
+        _, encoded = cv2.imencode(".png", image)
+        self.sources.graphic_source.return_value = (encoded.tobytes(), "image/png")
+        with patch.dict(os.environ, {"IMAGE_COMPLEXITY_THRESHOLD": "0.01"}), \
+                patch.object(routes.openai, "OpenAI") as client:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual([event["type"] for event in events], ["start", "result", "complete"])
+        self.assertTrue(events[1]["complexity"]["too_complex"])
+        self.assertIsNone(events[1]["evaluation"])
+        client.assert_not_called()
+        self.sources.save_graphic_evaluation.assert_not_awaited()
+
+    def test_cached_low_legibility_graphic_is_reported_without_reassessment(self) -> None:
+        evaluation_result = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {},
+        }
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(
+                1, "saved.png", "image/png", None, evaluation_result, None,
+            ),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+        with patch.object(routes.poster_graphics, "image_complexity", return_value={
+            "score": 0.1, "threshold": 0.5, "too_complex": False,
+        }), patch.object(routes.poster_graphics, "image_legibility", return_value={
+            "score": 0.8, "threshold": 0.95, "below_threshold": True,
+        }), patch.object(routes.openai, "OpenAI") as client:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual([event["type"] for event in events], ["start", "result", "complete"])
+        self.assertTrue(events[1]["legibility"]["below_threshold"])
+        self.assertIsNone(events[1]["evaluation"])
+        client.assert_not_called()
+        self.sources.save_graphic_evaluation.assert_not_awaited()
+
+    def test_graphic_evaluation_reports_invalid_raster(self) -> None:
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "bad.png", "image/png", None, None, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (b"invalid", "image/png")
+        with patch.object(routes.openai, "OpenAI"), self.assertLogs("routers.content", "ERROR"):
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[-1]["type"], "error")
+        self.sources.save_graphic_evaluation.assert_not_awaited()
+
+    def test_new_complex_graphic_is_not_evaluated_or_saved(self) -> None:
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "new.png", "image/png", None, None, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+        with patch.object(routes.poster_graphics, "image_complexity", return_value={
+            "score": 0.2, "threshold": 0.1, "too_complex": True,
+        }), patch.object(routes.poster_graphics, "image_legibility", return_value={
+            "score": 1.0, "threshold": 0.95, "below_threshold": False,
+        }), patch.object(routes.openai, "OpenAI") as client, patch.object(
+            routes.graphic_evaluation, "evaluate_image",
+        ) as evaluate:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual([event["type"] for event in events],
+                         ["start", "result", "complete"])
+        self.assertEqual(events[0]["total"], 0)
+        self.assertTrue(events[1]["complexity"]["too_complex"])
+        self.assertIsNone(events[1]["evaluation"])
+        client.assert_not_called()
+        evaluate.assert_not_called()
+        self.sources.save_graphic_evaluation.assert_not_awaited()
+
+    def test_new_low_legibility_graphic_is_not_evaluated_or_saved(self) -> None:
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "new.png", "image/png", None, None, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+        with patch.object(routes.poster_graphics, "image_complexity", return_value={
+            "score": 0.1, "threshold": 0.5, "too_complex": False,
+        }), patch.object(routes.poster_graphics, "image_legibility", return_value={
+            "score": 0.8, "threshold": 0.95, "below_threshold": True,
+        }), patch.object(routes.openai, "OpenAI") as client, patch.object(
+            routes.graphic_evaluation, "evaluate_image",
+        ) as evaluate:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[0]["total"], 0)
+        self.assertEqual(events[1]["type"], "result")
+        self.assertIsNone(events[1]["evaluation"])
+        self.assertTrue(events[1]["legibility"]["below_threshold"])
+        client.assert_not_called()
+        evaluate.assert_not_called()
+        self.sources.save_graphic_evaluation.assert_not_awaited()
+
+    def test_jpeg_chart_is_scored_again_after_png_normalization(self) -> None:
+        import cv2
+        import numpy as np
+
+        evaluation_result = {
+            "image_analysis": {"classification": "chart", "math_expressions": []},
+            "evaluations": {},
+        }
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(1, "chart.jpg", "image/jpeg", None, None, None),
+        ]
+        self.sources.source_text.return_value = content.SourceText(1, "Research", "fingerprint", 8)
+        self.posters.content.return_value = ([], [])
+        self.sources.save_graphic_evaluation.return_value = True
+        image = np.random.default_rng(12).integers(0, 256, (100, 100), dtype=np.uint8)
+        _, jpeg = cv2.imencode(".jpg", image)
+        self.sources.graphic_source.side_effect = [(jpeg.tobytes(), "image/jpeg"), (sample_png(), "image/png")]
+        with patch.object(routes.poster_graphics, "image_complexity", side_effect=[
+            {"score": 0.001, "threshold": 0.01, "too_complex": False},
+            {"score": 0, "threshold": 0.01, "too_complex": False},
+        ]), patch.object(routes.poster_graphics, "image_legibility", return_value={
+            "score": 1.0, "threshold": 0.95, "below_threshold": False,
+        }), \
+                patch.object(routes.openai, "OpenAI"), \
+                patch.object(routes.graphic_evaluation, "evaluate_image",
+                             return_value=Mock(model_dump=Mock(return_value=evaluation_result))):
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[2]["complexity"]["score"], 0)
+        self.assertFalse(events[2]["complexity"]["too_complex"])
+        self.assertEqual(self.sources.graphic_source.await_count, 2)
+
+    def test_graphic_evaluation_recalculates_saved_results_without_latex_field(self) -> None:
+        legacy_result = {
+            "image_analysis": {"classification": "image"},
+            "evaluations": {},
+        }
+        evaluation_result = {
+            "image_analysis": {"classification": "chart", "math_expressions": []},
+            "evaluations": {},
+        }
+        expected_hash = content.graphic_evaluation_hash(
+            "fingerprint", "No Materials and Methods text was provided.",
+            "No Results text was provided.", None,
+        )
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(
+                1, "saved.png", "image/png", None, legacy_result, None,
+            ),
+        ]
+        self.sources.source_text.return_value = content.SourceText(
+            1, "Original research context", "fingerprint", 27,
+        )
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+        self.sources.save_graphic_evaluation.return_value = True
+        with patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.poster_graphics, "image_legibility", return_value={
+                "score": 1.0, "threshold": 0.95, "below_threshold": False,
+            },
+        ), patch.object(
+            routes.graphic_evaluation, "evaluate_image",
+            return_value=Mock(model_dump=Mock(return_value=evaluation_result)),
+        ) as evaluate:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(
+            [event["type"] for event in events],
+            ["start", "progress", "result", "complete"],
+        )
+        self.assertEqual(events[2]["evaluation"]["image_analysis"]["classification"], "chart")
+        evaluate.assert_called_once()
+        self.sources.save_graphic_evaluation.assert_awaited_once_with(
+            7, 11, 1, evaluation_result, expected_hash,
+        )
+
+    def test_graphic_evaluation_reuses_current_results_and_reevaluates_stale_results(self) -> None:
+        evaluation_result = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {},
+        }
+        expected_hash = content.graphic_evaluation_hash(
+            "fingerprint", "No Materials and Methods text was provided.",
+            "No Results text was provided.", None,
+        )
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(
+                1, "saved.png", "image/png", None, evaluation_result, None,
+            ),
+            content.GraphicEvaluationSource(
+                2, "stale.png", "image/png", None, None, None,
+            ),
+        ]
+        self.sources.source_text.return_value = content.SourceText(
+            1, "Original research context", "fingerprint", 27,
+        )
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+        self.sources.save_graphic_evaluation.return_value = True
+        with patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.poster_graphics, "image_legibility", return_value={
+                "score": 1.0, "threshold": 0.95, "below_threshold": False,
+            },
+        ), patch.object(
+            routes.graphic_evaluation, "evaluate_image",
+            return_value=Mock(model_dump=Mock(return_value=evaluation_result)),
+        ) as evaluate:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual([event["type"] for event in events], [
+            "start", "result", "progress", "result", "complete",
+        ])
+        self.assertEqual(events[1]["source"]["sid"], 1)
+        self.assertEqual(events[3]["source"]["sid"], 2)
+        evaluate.assert_called_once()
+        self.assertEqual([call.args for call in self.sources.graphic_source.await_args_list],
+                         [(7, 11, 1), (7, 11, 2)])
+        self.sources.save_graphic_evaluation.assert_awaited_once_with(
+            7, 11, 2, evaluation_result, expected_hash,
+        )
+
+    def test_resumed_evaluation_finishes_only_graphics_not_saved_before_interruption(self) -> None:
+        evaluation_result = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {},
+        }
+        expected_hash = content.graphic_evaluation_hash(
+            "fingerprint", "No Materials and Methods text was provided.",
+            "No Results text was provided.", None,
+        )
+        self.sources.evaluation_sources.return_value = [
+            content.GraphicEvaluationSource(
+                sid, f"image-{sid}.png", "image/png", None, None, None,
+            )
+            for sid in (1, 2)
+        ]
+        self.sources.source_text.return_value = content.SourceText(
+            1, "Original research context", "fingerprint", 27,
+        )
+        self.posters.content.return_value = ([], [])
+        self.sources.graphic_source.return_value = (sample_png(), "image/png")
+
+        async def save_result(uid, pid, sid, result, fingerprint):
+            self.sources.evaluation_sources.return_value[sid - 1] = content.GraphicEvaluationSource(
+                sid, f"image-{sid}.png", "image/png", None, result, None,
+            )
+            return True
+
+        self.sources.save_graphic_evaluation.side_effect = save_result
+        parsed = Mock(model_dump=Mock(return_value=evaluation_result))
+        with patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.poster_graphics, "image_legibility", return_value={
+                "score": 1.0, "threshold": 0.95, "below_threshold": False,
+            },
+        ), patch.object(
+            routes.graphic_evaluation, "evaluate_image",
+            side_effect=[parsed, RuntimeError("Interrupted")],
+        ), self.assertLogs("routers.content", "ERROR"):
+            response = self.client.post("/content/evaluate/11", json={})
+        self.assertEqual(json.loads(response.text.splitlines()[-1])["type"], "error")
+        self.sources.save_graphic_evaluation.assert_awaited_once_with(
+            7, 11, 1, evaluation_result, expected_hash,
+        )
+
+        self.posters.set_resumption.reset_mock()
+        response = self.client.get("/content/evaluate?xyzzy=arpa")
+        self.assertEqual(response.status_code, 200)
+        self.posters.set_resumption.assert_awaited_once_with(
+            7, 11, "http://testserver/content/evaluate?xyzzy=arpa",
+        )
+        self.sources.graphic_source.reset_mock()
+        with patch.object(routes.openai, "OpenAI"), patch.object(
+            routes.poster_graphics, "image_legibility", return_value={
+                "score": 1.0, "threshold": 0.95, "below_threshold": False,
+            },
+        ), patch.object(
+            routes.graphic_evaluation, "evaluate_image", return_value=parsed,
+        ) as evaluate:
+            response = self.client.post("/content/evaluate/11", json={})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual([event["type"] for event in events], [
+            "start", "result", "progress", "result", "complete",
+        ])
+        self.assertEqual([call.args for call in self.sources.graphic_source.await_args_list],
+                         [(7, 11, 1), (7, 11, 2)])
+        evaluate.assert_called_once()
+
+    def test_source_image_route_is_owner_checked_and_private(self) -> None:
+        self.sources.graphic_source.return_value = (b"image-bytes", "image/png")
+        response = self.client.get("/content/1/image")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"image-bytes")
+        self.assertEqual(response.headers["content-type"], "image/png")
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        self.sources.graphic_source.assert_awaited_once_with(7, 11, 1)
+        self.sources.graphic_source.return_value = None
+        self.assertEqual(self.client.get("/content/99/image").status_code, 404)
+
+
+class EvaluationModelTests(unittest.TestCase):
+    def test_math_classification_includes_latex_expressions(self) -> None:
+        criteria = {
+            key: "Assessment." for key in (
+                "relevance", "technical_accuracy", "specificity", "completeness",
+                "evidentiary_support", "potential_for_misinterpretation",
+            )
+        }
+        section = {
+            "rating": "significantly", "explanation": "Supports the methods.",
+            "criteria": criteria, "supported_elements": [], "limitations": [],
+            "suggested_improvements": [],
+        }
+        response = EvaluationResponse.model_validate({
+            "image_analysis": {
+                "classification": "math expression",
+                "math_expressions": [r"E=mc^2", r"\frac{1}{2}"],
+                "type": "Equation", "description": "Two equations.",
+                "research_context": "Research.",
+            },
+            "evaluations": {
+                "materials_and_methods": section,
+                "results": section,
+            },
+        })
+        self.assertEqual(
+            response.image_analysis.math_expressions,
+            [r"E=mc^2", r"\frac{1}{2}"],
+        )
 
 
 class SourceFileTests(unittest.TestCase):
@@ -361,15 +970,233 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         store = content.SourceStore()
         connection = AsyncMock()
         connection.execute.return_value.fetchall.return_value = [
-            (1, "file.md", "text/markdown", 4, "now"),
+            (1, "file.md", "text/markdown", 4, "now", None, None, None, None,
+             "text", True, 0.75),
         ]
         with patch.object(store, "_connect", AsyncMock(return_value=connection)):
             items = await store.list_sources(7, 11)
-        self.assertEqual(items, [content.Source(1, "file.md", "text/markdown", 4, "now")])
+        self.assertEqual(items, [
+            content.Source(1, "file.md", "text/markdown", 4, "now",
+                           kind="text", legibility=0.75),
+        ])
         statement, params = connection.execute.call_args.args
         self.assertIn("p.uid = %s AND p.pid = %s", statement)
         self.assertIn("ORDER BY s.added, s.sid", statement)
         self.assertEqual(params, (7, 11))
+
+    async def test_graphic_previews_do_not_require_evaluation_columns(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        connection.execute.return_value.fetchall.return_value = [
+            (
+                21, "chart.png", "image/png", "image", "A chart", None,
+                None, None, None, None, None, None, None, None, None, None,
+                datetime(2026, 11, 10, tzinfo=timezone.utc), None, [], None,
+            ),
+            (
+                22, "paper figure.jpg", "image/jpeg", "image", None, 1,
+                None, None, None, None, None, None, None, None, None, None,
+                datetime(2026, 11, 10, tzinfo=timezone.utc), None, [], None,
+            ),
+        ]
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            items = await store.graphic_sources(7, 11)
+        self.assertEqual(items, [
+            content.GraphicSource(
+                21, "chart.png", "image/png", "image", "A chart", None, "png", {},
+            ),
+            content.GraphicSource(
+                22, "paper figure.jpg", "image/jpeg", "image", None, 1, "jpg", {},
+            ),
+        ])
+        statement, params = connection.execute.await_args.args
+        self.assertNotIn("evaluation", statement)
+        self.assertIn("LEFT JOIN assessment a", statement)
+        self.assertIn("p.uid = %s AND p.pid = %s", statement)
+        self.assertIn("s.width IS NOT NULL", statement)
+        self.assertIn("s.height IS NOT NULL", statement)
+        self.assertIn("s.storage_uri IS NOT NULL", statement)
+        self.assertIn(
+            "s.mimetype IN ('image/svg+xml', 'image/png', 'image/jpeg', 'image/gif')",
+            statement,
+        )
+        self.assertIn("s.kind <> 'thumbnail'", statement)
+        self.assertIn("coalesce(s.filename, parent.filename, 'Untitled source')", statement)
+        self.assertIn("ORDER BY (s.parent IS NOT NULL), s.sid, a.section", statement)
+        self.assertEqual(params, (f"{content.EVALUATED_MATH_FILENAME_PREFIX}%", 7, 11))
+
+    async def test_graphic_sources_include_only_current_assessments(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        cursor = AsyncMock()
+        updated = datetime(2026, 11, 10, tzinfo=timezone.utc)
+
+        def row(section: str, created: datetime) -> tuple:
+            return (
+                21, "chart.png", "image/png", "chart", "A chart", None,
+                section, "highly", "Supports results.", {"relevance": "Relevant"},
+                ["Data"], ["None"], ["Add a key"], created, updated, updated, updated, None, [],
+                None,
+            )
+
+        cursor.fetchall.return_value = [
+            row("materials and methods", updated),
+            row("results", updated.replace(day=9)),
+        ]
+        connection.execute.return_value = cursor
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            graphic = (await store.graphic_sources(7, 11))[0]
+
+        self.assertEqual(graphic.type, "png")
+        self.assertEqual(graphic.assessments, {
+            "materials and methods": {
+                "rating": "highly",
+                "explanation": "Supports results.",
+                "criteria": {"relevance": "Relevant"},
+                "supported_elements": ["Data"],
+                "limitations": ["None"],
+                "suggested_improvements": ["Add a key"],
+            },
+        })
+
+    async def test_graphic_sources_use_evaluated_or_extracted_latex(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        updated = datetime(2026, 11, 10, tzinfo=timezone.utc)
+
+        def row(sid: int, kind: str, text: str | None, expressions: list[str]) -> tuple:
+            return (
+                sid, "formula.png", "image/png", kind, None, None,
+                None, None, None, None, None, None, None, None, None, None,
+                updated, text, expressions, None,
+            )
+
+        connection.execute.return_value.fetchall.return_value = [
+            row(1, "math expression", "old", [r"E=mc^2", r"\frac{1}{2}"]),
+            row(2, "math expression", r"x^2", []),
+            row(3, "math expression", "   ", []),
+            row(4, "image", "not a formula", []),
+            row(5, "table", "<table><tr><td>Table</td></tr></table>", []),
+        ]
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            graphics = await store.graphic_sources(7, 11)
+
+        self.assertEqual([graphic.math_expressions for graphic in graphics], [
+            [r"E=mc^2", r"\frac{1}{2}"], [r"x^2"], [], [], [],
+        ])
+        self.assertEqual(
+            graphics[4].table_html,
+            "<table><tbody><tr><td>Table</td></tr></tbody></table>",
+        )
+        statement, _ = connection.execute.await_args.args
+        self.assertIn("formula.pid = s.pid AND formula.parent = s.sid", statement)
+        self.assertIn("ORDER BY formula.sid", statement)
+
+    def test_graphic_types_follow_source_classification_and_image_format(self) -> None:
+        for values, expected in (
+            (("image/svg+xml", "image", "figure.svg"), "svg"),
+            (("image/png", "table", "table.png"), "tables"),
+            (("image/png", "math expression", "formula.png"), "math"),
+            (("image/jpeg", "image", "photo.jpeg"), "jpeg"),
+            (("image/jpeg", "image", "photo.jpg"), "jpg"),
+            (("image/gif", "image", "animation.gif"), "gif"),
+            (("text/plain", "image", "figure.txt"), None),
+        ):
+            with self.subTest(values=values):
+                self.assertEqual(content.graphic_type(*values), expected)
+
+    async def test_evaluation_sources_rebuilds_results_from_current_assessments(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        cursor = AsyncMock()
+        updated = datetime(2026, 11, 10, tzinfo=timezone.utc)
+        criteria = {"relevance": "Relevant"}
+
+        def assessment_row(section: str, rating: str) -> tuple:
+            return (
+                21, "figure.png", "image/png", None, "table", "A table",
+                "digest", [], section, rating, "Assessment explanation.",
+                criteria, ["Supported"], ["Limitation"], ["Improvement"],
+                updated, updated, updated, updated,
+                "<table><tr><td>Data</td></tr></table><script>alert(1)</script>",
+            )
+
+        rows = [
+            assessment_row("materials and methods", "significantly"),
+            assessment_row("results", "highly"),
+        ]
+        stale_rows = [
+            (*row[:17], updated.replace(day=11), row[18], row[19])
+            for row in rows
+        ]
+        cursor.fetchall.side_effect = [rows, stale_rows]
+        connection.execute.return_value = cursor
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)):
+            graphic = (await store.evaluation_sources(7, 11))[0]
+            stale_graphic = (await store.evaluation_sources(7, 11))[0]
+
+        self.assertEqual(graphic.type, "tables")
+        self.assertEqual(
+            graphic.table_html,
+            "<table><tbody><tr><td>Data</td></tr></tbody></table>alert(1)",
+        )
+        self.assertEqual(graphic.evaluation, {
+            "image_analysis": {
+                "classification": "table",
+                "description": "A table",
+                "math_expressions": [],
+            },
+            "evaluations": {
+                "materials_and_methods": {
+                    "rating": "significantly",
+                    "explanation": "Assessment explanation.",
+                    "criteria": criteria,
+                    "supported_elements": ["Supported"],
+                    "limitations": ["Limitation"],
+                    "suggested_improvements": ["Improvement"],
+                },
+                "results": {
+                    "rating": "highly",
+                    "explanation": "Assessment explanation.",
+                    "criteria": criteria,
+                    "supported_elements": ["Supported"],
+                    "limitations": ["Limitation"],
+                    "suggested_improvements": ["Improvement"],
+                },
+            },
+        })
+        self.assertIsNone(stale_graphic.evaluation)
+        statement, params = connection.execute.await_args.args
+        self.assertNotIn("s.evaluation", statement)
+        self.assertNotIn("evaluation_hash", statement)
+        self.assertIn("LEFT JOIN assessment a", statement)
+        self.assertEqual(params, ("evaluation-math-expression-%", 7, 11))
+
+    async def test_thumbnail_replacement_does_not_require_evaluation_columns(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        updated = datetime(2026, 11, 10, tzinfo=timezone.utc)
+        owner, state, existing, saved = (AsyncMock() for _ in range(4))
+        owner.fetchone.return_value = (11,)
+        state.fetchone.return_value = (updated, None, None)
+        existing.fetchone.return_value = (22, "/sources/old-thumbnail")
+        connection.execute.side_effect = [owner, state, existing, saved]
+        files = Mock()
+        files.put.return_value = "/sources/new-thumbnail"
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                patch.object(content, "SourceFiles", return_value=files), \
+                patch.object(content.processing, "image_dimensions", return_value=(640, 480)), \
+                patch.object(content.processing, "image_complexity_score", return_value=0.25), \
+                patch.object(content.processing, "image_legibility_score", return_value=0.8):
+            self.assertTrue(await store.save_thumbnail(
+                7, 11, b"\x89PNG\r\n\x1a\nimage", (updated, None),
+            ))
+        statement, params = connection.execute.await_args_list[-1].args
+        self.assertNotIn("evaluation", statement)
+        self.assertIn("legibility = %s", statement)
+        self.assertEqual(params[-2], 0.8)
+        self.assertEqual(params[-1], 22)
+        files.delete.assert_called_once_with("/sources/old-thumbnail")
 
     async def test_delete_removes_source_files_before_deleting_poster_record(self) -> None:
         store = content.SourceStore()
@@ -477,7 +1304,8 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params[:6], (11, "text", None, "file.md", "text/markdown", 4))
         self.assertIsInstance(params[6], uuid.UUID)
         self.assertEqual(params[7:11], (content.source_hash(b"text"), "/sources/1/test", None, None))
-        self.assertIs(params[-1], False)
+        self.assertIs(params[13], False)
+        self.assertIsNone(params[14])
         content.processing.extract.assert_not_called()
         content.processing.summarize.assert_not_awaited()
 
@@ -509,6 +1337,75 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params, (11, content.source_hash(b"image")))
         files.put.assert_not_called()
 
+    async def test_math_expressions_are_saved_as_distinct_latex_child_sources(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        digest = content.source_hash(b"source image")
+        locked, sections, prior, deleted = (
+            AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock(),
+        )
+        locked.fetchone.return_value = (
+            1, digest, None, "equation.png", "image/png", "/sources/source", None,
+        )
+        sections.fetchall.return_value = []
+        prior.fetchall.return_value = []
+        inserted = []
+        for index, expression in enumerate((r"E=mc^2", r"\frac{1}{2}"), start=1):
+            cursor = AsyncMock()
+            cursor.fetchone.return_value = (
+                index + 10, f"evaluation-math-expression-{index}.tex", "text/plain",
+                len(expression), "now", 1, "LaTeX expression", None, None,
+                "math expression", True,
+            )
+            inserted.append(cursor)
+        connection.execute.side_effect = [
+            locked, sections, prior, deleted, *inserted,
+            AsyncMock(), AsyncMock(), AsyncMock(),
+        ]
+        files = Mock()
+        files.put.side_effect = ["/sources/equation-1", "/sources/equation-2"]
+        snapshot = content.SourceText(1, "", "fingerprint", 0)
+        expected_hash = content.graphic_evaluation_hash(
+            snapshot.fingerprint, "No Materials and Methods text was provided.",
+            "No Results text was provided.", digest,
+        )
+        criteria = {
+            key: "Assessment." for key in (
+                "relevance", "technical_accuracy", "specificity", "completeness",
+                "evidentiary_support", "potential_for_misinterpretation",
+            )
+        }
+        section = {
+            "rating": "significantly", "explanation": "Supports the methods.",
+            "criteria": criteria, "supported_elements": [], "limitations": [],
+            "suggested_improvements": [],
+        }
+        result = {
+            "image_analysis": {
+                "classification": "math expression",
+                "math_expressions": [r"E=mc^2", r"\frac{1}{2}"],
+            },
+            "evaluations": {
+                "materials_and_methods": section, "results": section,
+            },
+        }
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                patch.object(store, "source_text", AsyncMock(return_value=snapshot)), \
+                patch.object(content, "SourceFiles", return_value=files):
+            self.assertTrue(await store.save_graphic_evaluation(
+                7, 11, 1, result, expected_hash,
+            ))
+        self.assertEqual(
+            [call.args[1] for call in files.put.call_args_list],
+            [b"E=mc^2", b"\\frac{1}{2}"],
+        )
+        source_inserts = [
+            call.args[1] for call in connection.execute.await_args_list
+            if "INSERT INTO source" in call.args[0]
+        ]
+        self.assertEqual([params[2] for params in source_inserts], [1, 1])
+        self.assertEqual([params[9] for params in source_inserts], [r"E=mc^2", r"\frac{1}{2}"])
+
     async def test_logo_replacement_uses_pixel_area_and_keeps_smaller_as_image(self) -> None:
         for old_area, expected_kind in ((100, "logo"), (1000000, "image"), (90000, "image")):
             with self.subTest(old_area=old_area):
@@ -528,9 +1425,14 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                 files.put.return_value = "/sources/logo"
                 asset = source_processing.Asset("logo.png", b"image", "image/png", "image",
                                                 description="A logo", width=300, height=300)
-                result = await store._insert_source(connection, files, [], 11, asset, None)
+                with patch.object(content.processing, "image_complexity_score", return_value=0.25), \
+                        patch.object(content.processing, "image_legibility_score", return_value=0.8):
+                    result = await store._insert_source(connection, files, [], 11, asset, None)
                 self.assertEqual(result.kind, expected_kind)
                 self.assertEqual(connection.execute.await_args_list[-1].args[1][1], expected_kind)
+                statement, params = connection.execute.await_args_list[-1].args
+                self.assertIn("complexity, legibility)", statement)
+                self.assertEqual(params[-2:], (0.25, 0.8))
                 if expected_kind == "logo":
                     self.assertIn("UPDATE source SET kind = 'image'", connection.execute.await_args_list[2].args[0])
 
@@ -580,10 +1482,10 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     files.read.assert_called_once_with("/sources/document")
                     content.processing.extract.assert_called_once_with("file.md", b"text")
-                    content.processing.summarize.assert_awaited_once_with("text")
+                    content.processing.summarize.assert_not_awaited()
                     statement, params = connection.execute.await_args_list[-1].args
                     self.assertIn("extracted = TRUE", statement)
-                    self.assertEqual(params, ("text", "Summary", None, None, None, "text", 1))
+                    self.assertEqual(params, ("text", None, None, None, "text", None, None, 1))
 
     async def test_failed_conversion_keeps_original_for_retry(self) -> None:
         store = content.SourceStore()
@@ -643,6 +1545,15 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProcessingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_chart_images_can_be_normalized_to_png(self) -> None:
+        from PIL import Image
+
+        source = io.BytesIO()
+        Image.new("RGB", (37, 23), "blue").save(source, format="JPEG")
+        png = source_processing.image_as_png(source.getvalue())
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(source_processing.image_dimensions(png), (37, 23))
+
     async def test_spreadsheet_cells_and_sheet_names_are_html_escaped(self) -> None:
         from openpyxl import Workbook
         workbook = Workbook()
@@ -671,18 +1582,83 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
                 }, {
                     "kind": "formula", "caption_refs": [], "annotations": [],
                     "text": r"E=mc^2", "assets": [],
+                }, {
+                    "kind": "formula", "caption_refs": [], "annotations": [],
+                    "text": r"x=\frac{1}{2}", "assets": [],
                 }],
             }
             with patch.dict(os.environ, {"DOCLING_SERVICE_URL": "https://converter.invalid"}), \
                     patch.object(source_processing.docxtractor, "extract_document", return_value=manifest) as convert:
                 result = source_processing.extract("research.pdf", b"%PDF-1.7")
-            self.assertEqual(result.text, "Figure 1\n\nE=mc^2")
+            self.assertEqual(result.text, "Figure 1\n\n\\[E=mc^2\\]\n\n\\[x=\\frac{1}{2}\\]")
             self.assertEqual(result.assets[0].width, 299)
             self.assertEqual(result.assets[0].description, "Figure 1\nA graph")
             self.assertEqual(result.assets[1].text, "E=mc^2")
+            self.assertEqual(result.assets[1].kind, "math expression")
+            self.assertTrue(result.assets[1].filename.endswith(".tex"))
+            self.assertEqual(result.assets[2].text, r"x=\frac{1}{2}")
+            self.assertEqual(result.assets[2].kind, "math expression")
             self.assertTrue(convert.call_args.kwargs["describe_pictures"])
             self.assertTrue(convert.call_args.kwargs["extract_chart_data"])
             self.assertTrue(convert.call_args.kwargs["enrich_formulas"])
+
+    def test_docling_svg_is_stored_as_vector_source(self) -> None:
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory:
+            svg = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 36"/>'
+            (Path(directory) / "figure.svg").write_bytes(svg)
+            image = io.BytesIO()
+            Image.new("RGB", (144, 72)).save(image, format="PNG")
+            (Path(directory) / "figure.png").write_bytes(image.getvalue())
+            manifest = {
+                "output_directory": directory, "warnings": [], "source_texts": [],
+                "elements": [{"kind": "picture", "caption_refs": [], "annotations": [],
+                              "text": None, "assets": ["figure.svg"],
+                              "raster_assets": ["figure.png"]}],
+            }
+            with patch.dict(os.environ, {"DOCLING_SERVICE_URL": "https://converter.invalid"}), \
+                    patch.object(source_processing.docxtractor, "extract_document", return_value=manifest):
+                result = source_processing.extract("research.pdf", b"%PDF-1.7")
+            asset = result.assets[0]
+            self.assertEqual((asset.mimetype, asset.kind, asset.width, asset.height),
+                             ("image/svg+xml", "svg", 96, 48))
+            self.assertTrue(asset.filename.endswith(".svg"))
+            self.assertEqual(asset.data, svg)
+            self.assertEqual(asset.description_image, image.getvalue())
+
+    async def test_svg_description_uses_raster_crop_and_stores_svg(self) -> None:
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 36"/>'
+        asset = source_processing.Asset("figure.svg", svg, "image/svg+xml", "svg",
+                                        width=96, height=48, description_image=b"raster")
+        connection = AsyncMock()
+        connection.execute.return_value.fetchone.side_effect = [(11,), ("paper.pdf", "uri", "mixed", False)]
+        store = content.SourceStore()
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                patch.object(content, "SourceFiles") as files, \
+                patch.object(content.processing, "extract", return_value=source_processing.Processed(assets=[asset])), \
+                patch.object(content.processing, "describe_image", AsyncMock(return_value="A figure")) as describe, \
+                patch.object(store, "_asset_kind", AsyncMock(return_value="mixed")), \
+                patch.object(store, "_insert_source", AsyncMock()) as insert:
+            files.return_value.read.return_value = b"pdf"
+            await store.extract(7, 11, 1)
+        describe.assert_awaited_once_with(b"raster")
+        self.assertEqual(asset.description, "A figure")
+        self.assertEqual(insert.call_args.args[4].data, svg)
+
+    async def test_svg_without_description_or_raster_fails_explicitly(self) -> None:
+        asset = source_processing.Asset("figure.svg", b"<svg/>", "image/svg+xml", "svg",
+                                        width=96, height=48)
+        connection = AsyncMock()
+        connection.execute.return_value.fetchone.side_effect = [(11,), ("paper.pdf", "uri", "mixed", False)]
+        store = content.SourceStore()
+        with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
+                patch.object(content, "SourceFiles") as files, \
+                patch.object(content.processing, "extract", return_value=source_processing.Processed(assets=[asset])), \
+                patch.object(content.processing, "describe_image", AsyncMock()) as describe:
+            files.return_value.read.return_value = b"pdf"
+            with self.assertRaisesRegex(source_processing.ProcessingError, "raster crop is unavailable"):
+                await store.extract(7, 11, 1)
+        describe.assert_not_awaited()
 
     async def test_apple_documents_always_use_docling_native_conversion(self) -> None:
         manifest = {"output_directory": "/tmp", "warnings": [], "source_texts": [], "elements": []}
@@ -700,12 +1676,19 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         }
         with patch.dict(os.environ, {
             "DOCLING_SERVICE_URL": "https://converter.invalid", "DOCLING_ENABLE_ENRICHMENT": "false",
+            "REDUCED_FEATURE_NOTIFICATION": "yes",
         }), patch.object(source_processing.docxtractor, "extract_document", return_value=manifest) as convert:
             result = source_processing.extract("research.pdf", b"%PDF-1.7")
         for option in ("describe_pictures", "extract_chart_data", "enrich_formulas"):
             self.assertIs(convert.call_args.kwargs[option], False)
         self.assertEqual(result.text, "Research evidence")
         self.assertIn(source_processing.REDUCED_FEATURE_NOTICE, result.warnings)
+        with patch.dict(os.environ, {
+            "DOCLING_SERVICE_URL": "https://converter.invalid", "DOCLING_ENABLE_ENRICHMENT": "false",
+            "REDUCED_FEATURE_NOTIFICATION": "false",
+        }), patch.object(source_processing.docxtractor, "extract_document", return_value=manifest):
+            result = source_processing.extract("research.pdf", b"%PDF-1.7")
+        self.assertNotIn(source_processing.REDUCED_FEATURE_NOTICE, result.warnings)
 
     def test_enrichment_defaults_to_enabled_and_rejects_invalid_settings(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -752,7 +1735,10 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(source_processing.ProcessingError):
                 source_processing.extract("file.md", b"# Research")
             with self.assertRaises(source_processing.ProcessingError):
-                await source_processing.summarize("research")
+                connection = AsyncMock()
+                connection.execute.return_value.fetchone.side_effect = [("research",), None]
+                with patch.object(posters.store(), "_connect", AsyncMock(return_value=connection)):
+                    await source_processing.summarize(11, "results", 1)
 
     async def test_upload_chat_finished_replies_invoke_the_same_validated_finish_command(self) -> None:
         from routers.wikkit import finished_uploading, upload_workflow
@@ -789,9 +1775,12 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         client.responses.create.return_value.output_text = "Summary of research"
         context = AsyncMock()
         context.__aenter__.return_value = client
+        connection = AsyncMock()
+        connection.execute.return_value.fetchone.side_effect = [("Research facts",), None, (1,)]
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), \
-                patch.object(source_processing.openai, "AsyncOpenAI", return_value=context):
-            self.assertEqual(await source_processing.summarize("Research facts"), "Summary of research")
+                patch.object(source_processing.openai, "AsyncOpenAI", return_value=context), \
+                patch.object(posters.store(), "_connect", AsyncMock(return_value=connection)):
+            self.assertEqual(await source_processing.summarize(11, "results", 3), "Summary of research")
         self.assertNotIn("tools", client.responses.create.call_args.kwargs)
 
     async def test_real_docling_manifest_with_injected_client_never_calls_network(self) -> None:
@@ -864,6 +1853,509 @@ class ContentDatabaseTests(unittest.TestCase):
     def setUp(self) -> None:
         test_posters.PosterDatabaseTests.setUp(self)
 
+    def test_delete_cascades_auto_fit_history_for_both_poster_stores(self) -> None:
+        # Upgraded databases can have the sizings cascade before the fitting_runs cascade.
+        self.connection.execute("""
+            ALTER TABLE fitting_runs DROP CONSTRAINT fitting_runs_pid_fkey,
+                ADD CONSTRAINT fitting_runs_pid_fkey
+                    FOREIGN KEY (pid) REFERENCES poster(pid) ON DELETE CASCADE
+        """)
+        for store_type in (posters.PosterStore, content.SourceStore):
+            with self.subTest(store=store_type.__name__):
+                pid = test_posters.PosterDatabaseTests.create(self, "Delete fitted poster")
+                run_id = uuid.uuid4()
+                self.connection.execute(
+                    "INSERT INTO fitting_runs (run_id, pid, uid) VALUES (%s, %s, 7)",
+                    (run_id, pid),
+                )
+                sizing_id = self.connection.execute(
+                    "INSERT INTO sizings "
+                    "(pid, section, length, text, source_text, source_hash, run_id) "
+                    "VALUES (%s, 'results', 1, 'Revision', 'Original text', 'hash', %s) "
+                    "RETURNING sizing_id", (pid, run_id),
+                ).fetchone()[0]
+                self.connection.execute(
+                    "INSERT INTO fitting_applications "
+                    "(run_id, sizing_id, section, prior_text, applied_text) "
+                    "VALUES (%s, %s, 'results', 'Original text', 'Revision')",
+                    (run_id, sizing_id),
+                )
+                store = store_type("POSTERS_TEST_DATABASE_URL", self.schema)
+                self.assertFalse(asyncio.run(store.delete(8, pid)))
+                self.assertEqual(self.connection.execute(
+                    "SELECT count(*) FROM fitting_applications WHERE sizing_id = %s",
+                    (sizing_id,),
+                ).fetchone(), (1,))
+                self.assertTrue(asyncio.run(store.delete(7, pid)))
+                for table in ("fitting_runs", "sizings"):
+                    self.assertEqual(self.connection.execute(
+                        f"SELECT count(*) FROM {table} WHERE pid = %s", (pid,),
+                    ).fetchone(), (0,))
+                self.assertEqual(self.connection.execute(
+                    "SELECT count(*) FROM fitting_applications WHERE sizing_id = %s",
+                    (sizing_id,),
+                ).fetchone(), (0,))
+
+    def test_auto_fit_migration_repairs_existing_application_foreign_key(self) -> None:
+        self.connection.execute("""
+            ALTER TABLE fitting_applications
+                DROP CONSTRAINT fitting_applications_sizing_id_fkey,
+                ADD CONSTRAINT fitting_applications_sizing_id_fkey
+                    FOREIGN KEY (sizing_id) REFERENCES sizings(sizing_id)
+        """)
+        pid = test_posters.PosterDatabaseTests.create(self, "Keep fitted poster")
+        run_id = uuid.uuid4()
+        self.connection.execute(
+            "INSERT INTO fitting_runs (run_id, pid, uid) VALUES (%s, %s, 7)",
+            (run_id, pid),
+        )
+        sizing_id = self.connection.execute(
+            "INSERT INTO sizings "
+            "(pid, section, length, text, source_text, source_hash, run_id) "
+            "VALUES (%s, 'results', 1, 'Revision', 'Original text', 'hash', %s) "
+            "RETURNING sizing_id", (pid, run_id),
+        ).fetchone()[0]
+        self.connection.execute(
+            "INSERT INTO fitting_applications "
+            "(run_id, sizing_id, section, prior_text, applied_text) "
+            "VALUES (%s, %s, 'results', 'Original text', 'Revision')",
+            (run_id, sizing_id),
+        )
+        migration = (ROOT / "schema/auto-fit.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        self.assertEqual(self.connection.execute(
+            "SELECT count(*) FROM fitting_applications WHERE sizing_id = %s", (sizing_id,),
+        ).fetchone(), (1,))
+        self.connection.execute("DELETE FROM sizings WHERE sizing_id = %s", (sizing_id,))
+        self.assertEqual(self.connection.execute(
+            "SELECT count(*) FROM fitting_applications WHERE sizing_id = %s", (sizing_id,),
+        ).fetchone(), (0,))
+        self.assertIsNotNone(self.connection.execute(
+            "SELECT pid FROM poster WHERE pid = %s", (pid,),
+        ).fetchone())
+        self.assertIsNotNone(self.connection.execute(
+            "SELECT run_id FROM fitting_runs WHERE run_id = %s", (run_id,),
+        ).fetchone())
+
+    def test_source_analysis_cleanup_migration_is_repeatable(self) -> None:
+        self.connection.execute(
+            "ALTER TABLE source ADD COLUMN summary TEXT, ADD COLUMN evaluation JSONB, "
+            "ADD COLUMN evaluation_hash TEXT"
+        )
+        migration = (ROOT / "schema/source-analysis-cleanup.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        columns = {
+            row[0] for row in self.connection.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'source'",
+            ).fetchall()
+        }
+        self.assertNotIn("summary", columns)
+        self.assertNotIn("evaluation", columns)
+        self.assertNotIn("evaluation_hash", columns)
+
+    def test_image_assessment_migration_is_repeatable(self) -> None:
+        self.connection.execute("ALTER TABLE assessment ALTER COLUMN cid SET NOT NULL")
+        self.connection.execute(
+            "ALTER TABLE assessment DROP COLUMN criteria, DROP COLUMN supported_elements, "
+            "DROP COLUMN limitations, DROP COLUMN suggested_improvements"
+        )
+        migration = (ROOT / "schema/image-assessment.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        columns = dict(self.connection.execute(
+            "SELECT column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'assessment' "
+        ).fetchall())
+        self.assertEqual(columns["cid"], "YES")
+        self.assertEqual(columns["sid"], "YES")
+        for column in (
+            "criteria", "supported_elements", "limitations", "suggested_improvements",
+        ):
+            self.assertIn(column, columns)
+        self.assertIsNotNone(self.connection.execute(
+            "SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() "
+            "AND indexname = 'idx_assessment_sid_section'",
+        ).fetchone())
+
+    def test_source_thumbnail_migration_is_repeatable(self) -> None:
+        self.connection.execute("ALTER TABLE source DROP COLUMN updated")
+        self.connection.execute("ALTER TABLE source DROP CONSTRAINT source_kind_check")
+        self.connection.execute(
+            "ALTER TABLE source ADD CONSTRAINT source_kind_check CHECK "
+            "(kind IN ('text', 'svg', 'mixed', 'image', 'math', 'chart', 'table', "
+            "'logo', 'moreinfo', 'qrcode'))"
+        )
+        self.connection.execute("DROP INDEX idx_source_pid_kind_unique")
+        self.connection.execute(
+            "CREATE UNIQUE INDEX idx_source_pid_kind_unique ON source (pid, kind) "
+            "WHERE kind IN ('logo', 'moreinfo', 'qrcode')"
+        )
+        migration = (ROOT / "schema/source-thumbnail.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        columns = {
+            row[0] for row in self.connection.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'source'",
+            ).fetchall()
+        }
+        self.assertIn("updated", columns)
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        self.connection.execute(
+            "INSERT INTO source (pid, kind, size, mimetype) "
+            "VALUES (%s, 'thumbnail', 0, 'image/png')", (pid,),
+        )
+
+    def test_source_image_classification_migration_is_repeatable(self) -> None:
+        self.connection.execute("ALTER TABLE source DROP CONSTRAINT source_kind_check")
+        self.connection.execute(
+            "ALTER TABLE source ADD CONSTRAINT source_kind_check CHECK "
+            "(kind IN ('text', 'svg', 'mixed', 'image', 'math', 'chart', 'table', "
+            "'logo', 'moreinfo', 'qrcode', 'thumbnail'))"
+        )
+        migration = (ROOT / "schema/source-image-classification.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        for kind in ("diagram", "math expression"):
+            self.connection.execute(
+                "INSERT INTO source (pid, kind, size, mimetype) "
+                "VALUES (%s, %s, 1, 'image/png')", (pid, kind),
+            )
+
+    def test_source_complexity_migration_is_repeatable(self) -> None:
+        self.connection.execute("ALTER TABLE source DROP COLUMN complexity")
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        sid = self.connection.execute(
+            "INSERT INTO source (pid, kind, size, mimetype) "
+            "VALUES (%s, 'image', 1, 'image/png') RETURNING sid",
+            (pid,),
+        ).fetchone()[0]
+        migration = (ROOT / "schema/source-complexity.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        column = self.connection.execute(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'source' "
+            "AND column_name = 'complexity'",
+        ).fetchone()
+        self.assertEqual(column, ("real",))
+        self.assertEqual(self.connection.execute(
+            "SELECT complexity FROM source WHERE sid = %s", (sid,),
+        ).fetchone(), (None,))
+
+    def test_source_complexity_migration_is_repeatable(self) -> None:
+        self.connection.execute("ALTER TABLE source DROP COLUMN complexity")
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        sid = self.connection.execute(
+            "INSERT INTO source (pid, kind, size, mimetype) "
+            "VALUES (%s, 'image', 1, 'image/png') RETURNING sid",
+            (pid,),
+        ).fetchone()[0]
+        migration = (ROOT / "schema/source-complexity.sql").read_text()
+        self.connection.execute(migration)
+        self.connection.execute(migration)
+        column = self.connection.execute(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'source' "
+            "AND column_name = 'complexity'",
+        ).fetchone()
+        self.assertEqual(column, ("real",))
+        self.assertEqual(self.connection.execute(
+            "SELECT complexity FROM source WHERE sid = %s", (sid,),
+        ).fetchone(), (None,))
+
+    def test_poster_thumbnail_refreshes_for_poster_and_source_updates(self) -> None:
+        from PIL import Image
+
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        first = io.BytesIO()
+        Image.new("RGB", (32, 24), "red").save(first, format="PNG")
+        second = io.BytesIO()
+        Image.new("RGB", (32, 24), "blue").save(second, format="PNG")
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"SOURCES_DIR": directory, "GCS_BUCKET": ""},
+        ):
+            state = asyncio.run(self.store.thumbnail_state(7, pid))
+            self.assertIsNotNone(state)
+            self.assertTrue(state.stale)
+            self.assertTrue(asyncio.run(self.store.save_thumbnail(
+                7, pid, first.getvalue(), state.revision,
+            )))
+            fresh = asyncio.run(self.store.thumbnail_state(7, pid))
+            self.assertFalse(fresh.stale)
+            self.assertEqual(asyncio.run(self.store.list_sources(7, pid)), [])
+            self.assertEqual(asyncio.run(self.store.completion(7, pid)), (0, 0))
+            self.assertEqual(asyncio.run(self.store.source_text(7, pid)).count, 0)
+            self.assertEqual(asyncio.run(self.store.evaluation_sources(7, pid)), [])
+            sid = self.connection.execute(
+                "SELECT sid FROM source WHERE pid = %s AND kind = 'thumbnail'", (pid,),
+            ).fetchone()[0]
+            self.assertEqual(asyncio.run(self.store.poster_thumbnail(7, pid)), first.getvalue())
+
+            self.connection.execute(
+                "INSERT INTO source (pid, kind, size, mimetype, updated) "
+                "VALUES (%s, 'text', 1, 'text/plain', now() + interval '1 second')", (pid,),
+            )
+            stale = asyncio.run(self.store.thumbnail_state(7, pid))
+            self.assertTrue(stale.stale)
+            self.assertTrue(asyncio.run(self.store.save_thumbnail(
+                7, pid, second.getvalue(), stale.revision,
+            )))
+            self.assertEqual(
+                self.connection.execute(
+                    "SELECT sid FROM source WHERE pid = %s AND kind = 'thumbnail'", (pid,),
+                ).fetchone()[0],
+                sid,
+            )
+            self.assertEqual(asyncio.run(self.store.poster_thumbnail(7, pid)), second.getvalue())
+            self.assertIsNone(asyncio.run(self.store.thumbnail_state(8, pid)))
+
+        self.purchase(pid)
+        self.assertIsNone(asyncio.run(self.store.thumbnail_state(7, pid)))
+
+    def test_chart_evaluation_normalizes_jpeg_to_png(self) -> None:
+        from PIL import Image
+
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "chart.jpg"
+            image = io.BytesIO()
+            Image.new("RGB", (37, 23), "blue").save(image, format="JPEG")
+            data = image.getvalue()
+            path.write_bytes(data)
+            sid = self.connection.execute(
+                "INSERT INTO source (pid, kind, filename, size, mimetype, width, height, "
+                "storage_uri, hash) VALUES (%s, 'image', 'chart.jpg', %s, 'image/jpeg', "
+                "37, 23, %s, %s) RETURNING sid",
+                (pid, len(data), str(path), content.source_hash(data)),
+            ).fetchone()[0]
+            snapshot = asyncio.run(self.store.source_text(7, pid))
+            expected_hash = content.graphic_evaluation_hash(
+                snapshot.fingerprint, "No Materials and Methods text was provided.",
+                "No Results text was provided.", content.source_hash(data),
+            )
+            criteria = {
+                key: "Assessment." for key in (
+                    "relevance", "technical_accuracy", "specificity", "completeness",
+                    "evidentiary_support", "potential_for_misinterpretation",
+                )
+            }
+            section = {
+                "rating": "significantly", "explanation": "Chart support.",
+                "criteria": criteria, "supported_elements": [], "limitations": [],
+                "suggested_improvements": [],
+            }
+            result = {
+                "image_analysis": {
+                    "classification": "chart", "math_expressions": [],
+                },
+                "evaluations": {
+                    "materials_and_methods": section, "results": section,
+                },
+            }
+            with patch.dict(os.environ, {
+                "SOURCES_DIR": str(Path(directory) / "stored"), "GCS_BUCKET": "",
+            }):
+                self.assertTrue(asyncio.run(self.store.save_graphic_evaluation(
+                    7, pid, sid, result, expected_hash,
+                )))
+                row = self.connection.execute(
+                    "SELECT kind, filename, mimetype, storage_uri, hash "
+                    "FROM source WHERE sid = %s", (sid,),
+                ).fetchone()
+                png = Path(row[3]).read_bytes()
+            self.assertEqual(row[:3], ("chart", "chart.png", "image/png"))
+            self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertFalse(path.exists())
+            self.assertEqual(row[4], content.source_hash(png))
+            cached = asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation
+            self.assertEqual(cached["image_analysis"]["classification"], "chart")
+
+    def test_graphic_evaluations_persist_and_are_owner_scoped(self) -> None:
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        criteria = {
+            "relevance": "Relevant.",
+            "technical_accuracy": "Accurate.",
+            "specificity": "Specific.",
+            "completeness": "Complete.",
+            "evidentiary_support": "Supported.",
+            "potential_for_misinterpretation": "Clear.",
+        }
+
+        def section_evaluation(rating: str, explanation: str) -> dict[str, object]:
+            return {
+                "rating": rating,
+                "explanation": explanation,
+                "criteria": criteria.copy(),
+                "supported_elements": ["A labeled element."],
+                "limitations": ["One limitation."],
+                "suggested_improvements": ["Add a legend."],
+            }
+
+        evaluation_result = {
+            "image_analysis": {"classification": "image", "math_expressions": []},
+            "evaluations": {
+                "materials_and_methods": section_evaluation(
+                    "significantly", "The image shows the procedure.",
+                ),
+                "results": section_evaluation("highly", "The image shows the findings."),
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "graphic.png"
+            path.write_bytes(b"image")
+            sid = self.connection.execute(
+                "INSERT INTO source (pid, kind, filename, size, mimetype, width, height, storage_uri) "
+                "VALUES (%s, 'image', 'graphic.png', 5, 'image/png', 400, 300, %s) RETURNING sid",
+                (pid, str(path)),
+            ).fetchone()[0]
+            self.connection.execute(
+                "INSERT INTO section (pid, which, content) VALUES "
+                "(%s, 'materials and methods', 'Methods'), (%s, 'results', 'Results')",
+                (pid, pid),
+            )
+            graphics = asyncio.run(self.store.evaluation_sources(7, pid))
+            self.assertEqual(graphics, [
+                content.GraphicEvaluationSource(sid, "graphic.png", "image/png", None, None, None),
+            ])
+            self.assertEqual(
+                asyncio.run(self.store.graphic_source(7, pid, sid)),
+                (b"image", "image/png"),
+            )
+            snapshot = asyncio.run(self.store.source_text(7, pid))
+            expected_hash = content.graphic_evaluation_hash(
+                snapshot.fingerprint, "Methods", "Results", None,
+            )
+            self.assertTrue(asyncio.run(self.store.save_graphic_evaluation(
+                7, pid, sid, evaluation_result,
+                expected_hash,
+            )))
+            self.assertEqual(
+                self.connection.execute(
+                    "SELECT kind FROM source WHERE sid = %s", (sid,),
+                ).fetchone()[0],
+                "image",
+            )
+            cached = asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation
+            self.assertEqual(cached["image_analysis"], {
+                "classification": "image", "description": "", "math_expressions": [],
+            })
+            self.assertEqual(cached["evaluations"]["materials_and_methods"], section_evaluation(
+                "significantly", "The image shows the procedure.",
+            ))
+            self.assertEqual(cached["evaluations"]["results"], section_evaluation(
+                "highly", "The image shows the findings.",
+            ))
+            self.assertEqual(
+                self.connection.execute(
+                    "SELECT cid, sid, section::text, rating, explanation, criteria, "
+                    "supported_elements, limitations, suggested_improvements FROM assessment "
+                    "WHERE pid = %s ORDER BY aid", (pid,),
+                ).fetchall(),
+                [
+                    (
+                        None, sid, "materials and methods", "significantly",
+                        "The image shows the procedure.", criteria,
+                        ["A labeled element."], ["One limitation."], ["Add a legend."],
+                    ),
+                    (
+                        None, sid, "results", "highly", "The image shows the findings.",
+                        criteria,
+                        ["A labeled element."], ["One limitation."], ["Add a legend."],
+                    ),
+                ],
+            )
+            updated_methods = section_evaluation("highly", "Updated procedure assessment.")
+            updated_criteria = {
+                "relevance": "Updated relevance.",
+                "technical_accuracy": "Updated accuracy.",
+                "specificity": "Updated specificity.",
+                "completeness": "Updated completeness.",
+                "evidentiary_support": "Updated support.",
+                "potential_for_misinterpretation": "Updated clarity.",
+            }
+            updated_methods["criteria"] = updated_criteria
+            updated_methods["supported_elements"] = ["Updated element."]
+            updated_methods["limitations"] = ["Updated limitation."]
+            updated_methods["suggested_improvements"] = ["Add an updated legend."]
+            updated_results = section_evaluation("somewhat", "Updated findings assessment.")
+            updated_results["criteria"] = updated_criteria
+            updated_result = {
+                "image_analysis": {"classification": "diagram", "math_expressions": []},
+                "evaluations": {
+                    "materials_and_methods": updated_methods,
+                    "results": updated_results,
+                },
+            }
+            self.assertTrue(asyncio.run(self.store.save_graphic_evaluation(
+                7, pid, sid, updated_result, expected_hash,
+            )))
+            self.assertEqual(
+                self.connection.execute(
+                    "SELECT kind FROM source WHERE sid = %s", (sid,),
+                ).fetchone()[0],
+                "diagram",
+            )
+            self.assertEqual(
+                self.connection.execute(
+                    "SELECT section::text, rating, explanation, criteria, "
+                    "supported_elements, limitations, suggested_improvements FROM assessment "
+                    "WHERE pid = %s ORDER BY section", (pid,),
+                ).fetchall(),
+                [
+                    (
+                        "materials and methods", "highly", "Updated procedure assessment.",
+                        updated_criteria,
+                        ["Updated element."],
+                        ["Updated limitation."], ["Add an updated legend."],
+                    ),
+                    (
+                        "results", "somewhat", "Updated findings assessment.",
+                        updated_criteria,
+                        ["A labeled element."], ["One limitation."], ["Add a legend."],
+                    ),
+                ],
+            )
+            math_result = {
+                "image_analysis": {
+                    "classification": "math expression",
+                    "math_expressions": [r"E=mc^2", r"\frac{1}{2}"],
+                },
+                "evaluations": {
+                    "materials_and_methods": updated_methods,
+                    "results": updated_results,
+                },
+            }
+            with patch.dict(os.environ, {
+                "SOURCES_DIR": str(Path(directory) / "math-sources"), "GCS_BUCKET": "",
+            }):
+                self.assertTrue(asyncio.run(self.store.save_graphic_evaluation(
+                    7, pid, sid, math_result, expected_hash,
+                )))
+                expressions = self.connection.execute(
+                    "SELECT parent, kind, text, filename, storage_uri FROM source "
+                    "WHERE parent = %s ORDER BY sid", (sid,),
+                ).fetchall()
+                self.assertEqual(
+                    [(parent, kind, text, filename) for parent, kind, text, filename, _ in expressions],
+                    [
+                        (sid, "math expression", r"E=mc^2", "evaluation-math-expression-1.tex"),
+                        (sid, "math expression", r"\frac{1}{2}", "evaluation-math-expression-2.tex"),
+                    ],
+                )
+                self.assertTrue(all(Path(uri).is_file() for *_, uri in expressions))
+                graphics = asyncio.run(self.store.graphic_sources(7, pid))
+                self.assertEqual(graphics[0].math_expressions, [r"E=mc^2", r"\frac{1}{2}"])
+            self.assertEqual(asyncio.run(self.store.evaluation_sources(8, pid)), [])
+            self.assertTrue(asyncio.run(self.store.save_section(7, pid, "results", "Updated results")))
+            self.assertIsNone(asyncio.run(self.store.evaluation_sources(7, pid))[0].evaluation)
+
+
     def test_multiple_top_level_sources_persist_in_order_and_are_owner_scoped(self) -> None:
         pid, _ = asyncio.run(self.store.new_or_existing(7))
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SOURCES_DIR": directory, "GCS_BUCKET": ""}), \
@@ -931,6 +2423,18 @@ class ContentDatabaseTests(unittest.TestCase):
             describe.assert_not_awaited()
             self.assertFalse(item.extracted)
             self.assertEqual(item.kind, "image")
+            score = self.connection.execute(
+                "SELECT complexity FROM source WHERE sid = %s", (item.sid,),
+            ).fetchone()[0]
+            self.assertAlmostEqual(
+                score, source_processing.image_complexity_score(image.getvalue()),
+            )
+            score = self.connection.execute(
+                "SELECT complexity FROM source WHERE sid = %s", (item.sid,),
+            ).fetchone()[0]
+            self.assertAlmostEqual(
+                score, source_processing.image_complexity_score(image.getvalue()),
+            )
             asyncio.run(self.store.extract(7, pid, item.sid))
             describe.assert_awaited_once_with(image.getvalue())
             sources = asyncio.run(self.store.list_sources(7, pid))

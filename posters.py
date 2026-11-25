@@ -8,12 +8,15 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import openai
 import psycopg
 from psycopg import sql
+from psycopg.types.json import Jsonb
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.requests import HTTPConnection
 
 import identity
@@ -21,11 +24,28 @@ import identity
 logger = logging.getLogger(__name__)
 Sort = Literal["name", "conference_date", "relevance"]
 Direction = Literal["asc", "desc"]
-TEMPLATES = ("arena", "central", "vertical")
+TEMPLATES = {
+    "arena" : ["landscape", "square"],
+    "central" : ["landscape", "portrait", "square"],
+    "vertical" : ["portrait"]
+}
+THEME_COLORS = (
+    "blue", "red", "yellow", "green", "brown", "orange", "purple",
+    "dark-grey", "light-grey", "black-and-white",
+)
+THEME_PICKER_COLORS = THEME_COLORS
+THEME_CORNERS = ("square", "slightly-rounded", "rounded", "very-rounded")
+LEGACY_THEME_COLORS = {
+    "basic": "blue", "dark": "dark-grey", "light": "light-grey",
+    "blues": "blue", "reds": "red", "greens": "green", "ocean": "blue",
+    "forest": "green", "plum": "purple", "terracotta": "brown",
+    "slate": "dark-grey", "gold": "yellow",
+}
+LEGACY_ROUNDED_THEMES = frozenset({"blues", "greens", "forest", "gold"})
 
 
 def installed_themes() -> list[str]:
-    return stylesheet_classes("themes")
+    return list(THEME_COLORS)
 
 
 def installed_fonts() -> list[str]:
@@ -47,14 +67,109 @@ POSTER_MIN_HEIGHT_CM = 36 * 2.54  # cm
 POSTER_MAX_WIDTH_CM = 96 * 2.54  # cm
 POSTER_MAX_HEIGHT_CM = 96 * 2.54  # cm
 POSTER_UNIT_TO_CM = {"cm": 1, "mm": 0.1, "in": 2.54}
+POSTER_PRESETS = {
+    "in": [
+        ("", 44, 44), ("", 48, 48), ("", 30, 40), ("", 36, 56),
+        ("", 36, 72), ("", 36, 96), ("", 42, 60), ("", 42, 72),
+        ("", 42, 90), ("", 48, 72), ("", 48, 96),
+    ],
+    "cm": [
+        ("", 91, 122), ("", 70, 100), ("", 100, 140), ("", 100, 100),
+        ("", 100, 200), ("ISO A0", 84.1, 118.9), ("ISO A1", 59.4, 84.1),
+    ],
+    "mm": [("ISO A0", 841, 1189), ("ISO A1", 594, 841)],
+}
+
+
+class FontSizing(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+    sections: float = Field(default=1, ge=0.5, le=1.5)
+    title: float = Field(default=1, ge=0.5, le=1.5)
+    authors: float = Field(default=1, ge=0.5, le=1.5)
+
+
+class ThemeSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    corners: Literal["square", "slightly-rounded", "rounded", "very-rounded"] = "square"
+    colored_poster_header: bool = False
+    colored_section_headers: bool = False
+
+
+def theme_classes(theme: str | None, settings: dict[str, object] | None = None) -> str:
+    """Return safe CSS classes for both current and legacy saved theme values."""
+    color = theme if theme in THEME_COLORS else LEGACY_THEME_COLORS.get(theme or "", "blue")
+    if settings is None:
+        settings = {}
+        if theme in LEGACY_THEME_COLORS:
+            settings = {
+                "corners": "very-rounded" if theme in LEGACY_ROUNDED_THEMES else "square",
+                "colored_poster_header": True,
+                "colored_section_headers": True,
+            }
+    options = ThemeSettings.model_validate(settings)
+    classes = [color, f"corners-{options.corners}"]
+    if options.colored_poster_header:
+        classes.append("colored-poster-header")
+    if options.colored_section_headers:
+        classes.append("colored-section-headers")
+    return " ".join(classes)
+
+
+class LayoutGeometry(BaseModel):
+    """Initial, template-specific proportions before manual gutter adjustments."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+    scale: float = Field(gt=0, le=1)
+    header: float = Field(ge=0, le=1)
+    layout: float = Field(gt=0, le=1)
+    columns: list[float] = Field(min_length=3, max_length=3)
+    rows: list[float] = Field(min_length=1, max_length=2)
+    vertical: dict[str, list[float]]
+    horizontal: dict[str, list[float]]
+
+    @field_validator("columns", "rows", "vertical", "horizontal")
+    @classmethod
+    def valid_shares(cls, value: list[float] | dict[str, list[float]]) -> list[float] | dict[str, list[float]]:
+        groups = list(value.values()) if isinstance(value, dict) else [value]
+        if len(groups) > 20 or any(
+            not 1 <= len(shares) <= 5
+            or any(not math.isfinite(share) or not 0 < share <= 1 for share in shares)
+            or not math.isclose(sum(shares), 1, abs_tol=1e-6)
+            for shares in groups
+        ):
+            raise ValueError("Initial layout areas must share their available space.")
+        return value
+
+
+class LayoutSizing(BaseModel):
+    """Normalized, template-specific gutter positions, independent of poster zoom."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+    left: float = Field(default=0, ge=0, le=0.15)
+    right: float = Field(default=0, ge=0, le=0.15)
+    bottom: float = Field(default=0, ge=0, le=0.15)
+    introduction: float | None = Field(default=None, ge=0.25, le=0.75)
+    sections: dict[str, list[Annotated[float, Field(ge=0.2, le=1)]]] = Field(default_factory=dict)
+
+    @field_validator("sections")
+    @classmethod
+    def section_shares(cls, groups: dict[str, list[float]]) -> dict[str, list[float]]:
+        if len(groups) > 10 or any(
+            len(shares) < 2 or len(shares) > 5
+            or not math.isclose(sum(shares), 1, abs_tol=1e-8)
+            for shares in groups.values()
+        ):
+            raise ValueError("Section widths must share the available row width.")
+        return groups
+
 
 @dataclass(frozen=True)
 class Poster:
     pid: int
     name: str
     description: str | None
-    width: int | None
-    height: int | None
+    width: float | None
+    height: float | None
     template: str | None
     theme: str | None
     purchased: bool
@@ -65,6 +180,14 @@ class Poster:
     logotype: str | None = None
     moreinfopng: bytes | None = None
     fonts: str | None = None
+    layout_settings: dict[str, dict[str, object]] | None = None
+    font_sizing: dict[str, float] | None = None
+    layout_geometry: dict[str, dict[str, object]] | None = None
+    theme_settings: dict[str, object] | None = None
+
+    @property
+    def font_sizes(self) -> FontSizing:
+        return FontSizing.model_validate(self.font_sizing or {})
 
     @property
     def centimeters(self) -> tuple[float, float]:
@@ -82,6 +205,12 @@ class Poster:
     def inches(self) -> tuple[float, float]:
         width, height = self.centimeters
         return width / 2.54, height / 2.54
+
+    @property
+    def font_scale(self) -> float:
+        """Use physical area so typography cannot feed back into its own sizing."""
+        width, height = self.centimeters
+        return width * height / (POSTER_MIN_WIDTH_CM * POSTER_MIN_HEIGHT_CM)
 
     @property
     def display_dimensions(self) -> str:
@@ -144,7 +273,15 @@ class PosterStore:
                EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) AS purchased,
                (SELECT min(c.starts) FROM show s JOIN conference c USING (cid)
                 WHERE s.pid = p.pid) AS conference_date,
-               p.resumption, p.units, p.logo, p.logotype, p.moreinfopng, p.fonts
+               p.resumption, p.units, p.logo, p.logotype, p.moreinfopng, p.fonts,
+               (SELECT u.settings->'layout-resizing' FROM userposter u
+                WHERE u.uid = p.uid AND u.pid = p.pid),
+               (SELECT u.settings->'font-sizing' FROM userposter u
+                WHERE u.uid = p.uid AND u.pid = p.pid),
+               (SELECT u.settings->'layout-geometry' FROM userposter u
+                WHERE u.uid = p.uid AND u.pid = p.pid),
+               (SELECT u.settings->'theme-settings' FROM userposter u
+                WHERE u.uid = p.uid AND u.pid = p.pid)
         FROM poster p
         LEFT JOIN section t ON t.pid = p.pid AND t.which = 'title'
         WHERE p.uid = %s
@@ -245,6 +382,48 @@ class PosterStore:
         )
         row = await cursor.fetchone()
         return row[0] if row else None
+
+    async def purchase(self, uid: int, pid: int, amount: Decimal, transid: str) -> bool:
+        """Record one purchase, serializing concurrent attempts for the poster."""
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "SELECT pid FROM poster WHERE uid = %s AND pid = %s FOR UPDATE",
+                (uid, pid),
+            )
+            if await cursor.fetchone() is None:
+                return False
+            cursor = await connection.execute(
+                "SELECT 1 FROM purchase WHERE uid = %s AND pid = %s",
+                (uid, pid),
+            )
+            if await cursor.fetchone() is None:
+                await connection.execute(
+                    "INSERT INTO purchase (pid, uid, amount, transid, created) "
+                    "VALUES (%s, %s, %s, %s, now())",
+                    (pid, uid, amount, transid),
+                )
+        self.invalidate(uid, pid)
+        return True
+
+    async def record_download(self, uid: int, pid: int, digest: str) -> bool:
+        """Record a download only while its poster is owned and purchased."""
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "UPDATE poster p SET downloads = downloads + 1 "
+                "WHERE p.uid = %s AND p.pid = %s AND EXISTS "
+                "(SELECT 1 FROM purchase b WHERE b.pid = p.pid) RETURNING p.pid",
+                (uid, pid),
+            )
+            if await cursor.fetchone() is None:
+                return False
+            await connection.execute(
+                "INSERT INTO download (pid, uid, hash, created) "
+                "VALUES (%s, %s, %s, now())",
+                (pid, uid, digest),
+            )
+        return True
 
     async def new_or_existing(self, uid: int) -> tuple[int, bool]:
         """Lock the owner so concurrent New Poster clicks cannot create two drafts."""
@@ -355,6 +534,34 @@ class PosterStore:
         self.invalidate(uid, pid)
         return True
 
+    async def save_section_if_unchanged(
+        self, uid: int, pid: int, which: str, value: str, expected: str | None,
+    ) -> bool:
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "INSERT INTO section (pid, which, content, updated, embedding) "
+                "SELECT p.pid, %s::section_which, %s, now(), NULL FROM poster p "
+                "WHERE p.uid = %s AND p.pid = %s "
+                "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
+                "AND (EXISTS (SELECT 1 FROM section s WHERE s.pid = p.pid "
+                "AND s.which = %s::section_which AND s.content = %s) "
+                "OR (%s::text IS NULL AND NOT EXISTS (SELECT 1 FROM section s "
+                "WHERE s.pid = p.pid AND s.which = %s::section_which))) "
+                "ON CONFLICT (pid, which) DO UPDATE SET content = excluded.content, "
+                "updated = excluded.updated, embedding = NULL "
+                "WHERE section.content = %s RETURNING xid",
+                (which, value, uid, pid, which, expected, expected, which, expected),
+            )
+            if await cursor.fetchone() is None:
+                return False
+            await connection.execute(
+                "UPDATE poster SET updated = now(), embedding = NULL WHERE uid = %s AND pid = %s",
+                (uid, pid),
+            )
+        self.invalidate(uid, pid)
+        return True
+
     async def conference_details(self, uid: int, pid: int) -> tuple[str, dict]:
         connection = await self._connect()
         async with connection:
@@ -365,9 +572,12 @@ class PosterStore:
             row = await cursor.fetchone()
         return (row[0], row[1] or {}) if row else ("", {})
 
-    async def set_theme(self, uid: int, pid: int, theme: str) -> bool:
+    async def set_theme(
+        self, uid: int, pid: int, theme: str, settings: ThemeSettings,
+    ) -> bool:
         if theme not in installed_themes():
             raise ValueError("Unknown poster theme")
+        settings = ThemeSettings.model_validate(settings.model_dump())
         self.invalidate(uid, pid)
         connection = await self._connect()
         async with connection:
@@ -378,6 +588,18 @@ class PosterStore:
                 (theme, uid, pid),
             )
             saved = await cursor.fetchone() is not None
+            if saved:
+                await connection.execute(
+                    "INSERT INTO userposter (uid, pid, editor, settings) "
+                    "VALUES (%s, %s, 1, %s) "
+                    "ON CONFLICT (uid, pid) DO UPDATE SET settings = jsonb_set("
+                    "userposter.settings, '{theme-settings}', "
+                    "excluded.settings->'theme-settings')",
+                    (
+                        uid, pid,
+                        Jsonb({"theme-settings": settings.model_dump()}),
+                    ),
+                )
         self.invalidate(uid, pid)
         return saved
 
@@ -397,23 +619,95 @@ class PosterStore:
         self.invalidate(uid, pid)
         return saved
 
+    async def set_font_sizing(
+        self, uid: int, pid: int, target: Literal["sections", "title", "authors"], value: float,
+    ) -> bool:
+        sizing = FontSizing.model_validate({target: value})
+        self.invalidate(uid, pid)
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "INSERT INTO userposter (uid, pid, editor, settings) "
+                "SELECT p.uid, p.pid, 1, %s FROM poster p "
+                "WHERE p.uid = %s AND p.pid = %s "
+                "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
+                "ON CONFLICT (uid, pid) DO UPDATE SET settings = jsonb_set("
+                "userposter.settings, '{font-sizing}', "
+                "coalesce(userposter.settings->'font-sizing', '{}'::jsonb) "
+                "|| (excluded.settings->'font-sizing')) RETURNING pid",
+                (Jsonb({"font-sizing": sizing.model_dump(exclude_unset=True)}), uid, pid),
+            )
+            saved = await cursor.fetchone() is not None
+            if saved:
+                await connection.execute(
+                    "UPDATE poster SET updated = now() WHERE uid = %s AND pid = %s", (uid, pid),
+                )
+        self.invalidate(uid, pid)
+        return saved
+
+    async def set_layout_geometry(
+        self, uid: int, pid: int, template: str, geometry: LayoutGeometry,
+    ) -> LayoutGeometry | None:
+        if template not in TEMPLATES:
+            raise ValueError("Unknown poster template")
+        self.invalidate(uid, pid)
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "INSERT INTO userposter (uid, pid, editor, settings) "
+                "SELECT p.uid, p.pid, 1, %s FROM poster p "
+                "WHERE p.uid = %s AND p.pid = %s AND coalesce(p.template, 'arena') = %s "
+                "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
+                "ON CONFLICT (uid, pid) DO UPDATE SET settings = jsonb_set("
+                "userposter.settings, '{layout-geometry}', "
+                "(excluded.settings->'layout-geometry') "
+                "|| coalesce(userposter.settings->'layout-geometry', '{}'::jsonb)) "
+                "RETURNING settings->'layout-geometry'->%s",
+                (Jsonb({"layout-geometry": {template: geometry.model_dump()}}), uid, pid, template, template),
+            )
+            row = await cursor.fetchone()
+        self.invalidate(uid, pid)
+        return LayoutGeometry.model_validate(row[0]) if row else None
+
+    async def set_layout_sizing(
+        self, uid: int, pid: int, template: str, sizing: LayoutSizing,
+    ) -> bool:
+        if template not in TEMPLATES:
+            raise ValueError("Unknown poster template")
+        self.invalidate(uid, pid)
+        connection = await self._connect()
+        async with connection:
+            cursor = await connection.execute(
+                "INSERT INTO userposter (uid, pid, editor, settings) "
+                "SELECT p.uid, p.pid, 1, %s FROM poster p "
+                "WHERE p.uid = %s AND p.pid = %s AND coalesce(p.template, 'arena') = %s "
+                "AND NOT EXISTS (SELECT 1 FROM purchase b WHERE b.pid = p.pid) "
+                "ON CONFLICT (uid, pid) DO UPDATE SET settings = jsonb_set("
+                "userposter.settings, '{layout-resizing}', "
+                "coalesce(userposter.settings->'layout-resizing', '{}'::jsonb) "
+                "|| (excluded.settings->'layout-resizing')) RETURNING pid",
+                (Jsonb({"layout-resizing": {template: sizing.model_dump()}}), uid, pid, template),
+            )
+            saved = await cursor.fetchone() is not None
+            if saved:
+                await connection.execute(
+                    "UPDATE poster SET updated = now() WHERE uid = %s AND pid = %s", (uid, pid),
+                )
+        self.invalidate(uid, pid)
+        return saved
+
     async def set_dimensions(
         self, uid: int, pid: int, width: float, height: float, units: str,
+        template: str | None = None,
     ) -> bool:
         scale = POSTER_UNIT_TO_CM.get(units)
         if scale is None or not all(
             math.isfinite(value) and 0 < value <= 609.6 for value in (width, height)
         ):
             raise ValueError("Invalid poster dimensions or units")
+        if template is not None and template not in TEMPLATES:
+            raise ValueError("Unknown poster template")
         unit_width, unit_height = width / scale, height / scale
-        rounded_width, rounded_height = round(unit_width), round(unit_height)
-        if not all(
-            math.isclose(value, rounded, abs_tol=0.001)
-            for value, rounded in (
-                (unit_width, rounded_width), (unit_height, rounded_height),
-            )
-        ):
-            raise ValueError("Poster dimensions must be whole numbers in the selected units")
         self.invalidate(uid, pid)
         connection = await self._connect()
         async with connection:
@@ -423,8 +717,8 @@ class PosterStore:
                 "WHERE p.uid = %s AND p.pid = %s AND NOT EXISTS "
                 "(SELECT 1 FROM purchase b WHERE b.pid = p.pid) RETURNING p.pid",
                 (
-                    rounded_width, rounded_height, units,
-                    "arena" if width >= height else "vertical", uid, pid,
+                    unit_width, unit_height, units,
+                    template or ("arena" if width >= height else "vertical"), uid, pid,
                 ),
             )
             saved = await cursor.fetchone() is not None

@@ -9,6 +9,16 @@ import common
 import posters
 
 
+class FriendlyListTests(unittest.TestCase):
+    def test_formats_lists(self) -> None:
+        for items, expected in (
+            ([], ""), (["one"], "one"), (["one", "two"], "one and two"),
+            (["one", "two", "three"], "one, two and three"),
+        ):
+            with self.subTest(items=items):
+                self.assertEqual(common.friendly_list(items), expected)
+
+
 class ResumeTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.request = Request({
@@ -36,6 +46,8 @@ class ResumeTests(unittest.IsolatedAsyncioTestCase):
             ("/layout/edit#title", "/layout/edit?xyzzy=arpa#title"),
             ("/layout/edit?", "/layout/edit?xyzzy=arpa"),
             ("/layout/edit?pid=11&", "/layout/edit?pid=11&xyzzy=arpa"),
+            ("/layout/edit?tag=one&xyzzy=arpa&tag=two", "/layout/edit?tag=one&xyzzy=arpa&tag=two"),
+            ("/layout/edit?xyzzy=other", "/layout/edit?xyzzy=other&xyzzy=arpa"),
             (
                 URL("https://example.com/edit?tag=a%2Fb&tag=two&blank=#title"),
                 "https://example.com/edit?tag=a%2Fb&tag=two&blank=&xyzzy=arpa#title",

@@ -1,0 +1,91 @@
+.centered-text {
+    text-align: center;
+}
+
+#retry-evaluation[hidden],
+#continue-review[hidden] {
+    display: none;
+}
+
+#graphic-evaluations {
+    display: grid;
+    gap: 1.5rem;
+}
+
+.evaluation-category {
+    display: grid;
+    gap: 1rem;
+}
+
+.evaluation-category > h2 {
+    border-bottom: 2px solid currentColor;
+}
+
+.graphic-evaluation {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.5rem 1rem;
+    padding: 1rem;
+    border: 1px solid #8e85c2;
+    border-radius: 0.5rem;
+    background: #fff;
+    color: #222;
+}
+
+.graphic-evaluation img {
+    width: 100%;
+    max-height: 18rem;
+    margin: 0;
+    object-fit: contain;
+}
+
+.evaluation-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+}
+
+.evaluation-metrics p {
+    margin: 0;
+}
+
+.graphic-table {
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.graphic-table table {
+    min-width: 100%;
+    border-collapse: collapse;
+    font: inherit;
+}
+
+.graphic-table th,
+.graphic-table td {
+    padding: 0.35em 0.5em;
+    border: 1px solid currentColor;
+    text-align: left;
+    vertical-align: top;
+}
+
+.graphic-math {
+    font-size: 2.0rem;
+    overflow-x: auto;
+}
+
+.graphic-evaluation ul {
+    margin-bottom: 0.75rem;
+    padding-left: 1.5rem;
+}
+
+.evaluation-verdict {
+    font-weight: 700;
+}
+
+.evaluation-verdict.suitable {
+    color: #176b36;
+}
+
+.evaluation-verdict.not-suitable {
+    color: #9c2929;
+}

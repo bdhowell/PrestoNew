@@ -3,6 +3,54 @@
 {% block content %}
 <h1>Poster dimensions</h1>
 <p>Tell Wikkit the height and width of your poster.</p>
+{% if from_editor %}
+<button type="button" id="return-to-poster">Return to Poster</button>
+{% endif %}
+{% if poster.width is not none and poster.height is not none %}
+<p><a href="/layout/template?from=dimensions">Choose a template</a></p>
+{% endif %}
+<section id="dimension-picker" aria-label="Choose poster dimensions"
+         data-sizes="{{ dimension_pairs|default([])|tojson|forceescape }}"
+         {% if poster.width is not none and poster.height is not none %}
+         data-current="{{ {'width': poster.width, 'height': poster.height, 'units': poster.units}|tojson|forceescape }}"
+         {% endif %} data-from-editor="{{ 'true' if from_editor else 'false' }}">
+    {% if from_editor and poster.width is not none and poster.height is not none %}
+    <p id="current-dimensions">Current dimensions (width x height): {{ poster.display_dimensions }}</p>
+    {% endif %}
+    <p>Choose a size, or type your own dimensions into Wikkit.</p>
+    <fieldset id="dimension-picker-controls">
+        <legend>Choose a poster size</legend>
+        <div class="dimension-filters">
+            <div role="group" aria-label="Units" id="dimension-units">
+                <button type="button" data-unit="in" aria-pressed="true">in</button>
+                <button type="button" data-unit="cm" aria-pressed="false">cm</button>
+                <button type="button" data-unit="mm" aria-pressed="false">mm</button>
+            </div>
+            <div role="group" aria-label="Orientation" id="dimension-orientations">
+                <button type="button" data-orientation="landscape" aria-pressed="true">
+                    <span class="orientation-icon landscape" aria-hidden="true"></span> landscape
+                </button>
+                <button type="button" data-orientation="portrait" aria-pressed="false">
+                    <span class="orientation-icon portrait" aria-hidden="true"></span> portrait
+                </button>
+                {% if from_editor %}
+                <button type="button" data-orientation="square" aria-pressed="false">
+                    <span class="orientation-icon square" aria-hidden="true"></span> square
+                </button>
+                {% endif %}
+            </div>
+        </div>
+        <div id="dimension-sizes" aria-label="Available poster sizes"></div>
+        <p id="dimension-empty" hidden>No sizes available for these units and orientation.</p>
+    </fieldset>
+    <p id="dimension-picker-status" role="status" aria-live="polite"></p>
+</section>
+<div class="dimension-selection-actions">
+    <button type="button" id="dimension-selection-continue"
+            {% if not from_editor and (poster.width is none or poster.height is none) %}disabled{% endif %}>
+        {{ 'Return to poster layout' if from_editor else 'Continue to template selection' }}
+    </button>
+</div>
 <section id="dimension-correction" hidden aria-label="Correct poster dimensions">
     <div id="poster-preview"><span id="poster-size"></span></div>
     <form id="dimension-form">

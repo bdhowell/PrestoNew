@@ -1,0 +1,223 @@
+#template-selection,
+#template-selection * {
+    box-sizing: border-box;
+}
+
+#template-selection {
+    max-width: 70rem;
+    margin: 2rem auto;
+}
+
+#template-selection-options {
+    border: 0;
+    padding: 0;
+}
+
+.template-selection-grid {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 1.5rem;
+    margin-block: 1rem;
+}
+
+.wikkit-page .template-card {
+    display: grid;
+    justify-items: center;
+    gap: 0.75rem;
+    width: min(100%, 34rem);
+    padding: 1rem;
+    border: 0;
+    border-radius: 0.5rem;
+    background: white;
+    color: #17283a;
+    font: inherit;
+    text-align: center;
+    cursor: pointer;
+}
+
+.wikkit-page .template-card:focus-visible {
+    outline: none;
+}
+
+.wikkit-page .template-card:focus-visible .template-preview {
+    outline: 3px solid #211a4d;
+    outline-offset: 3px;
+}
+
+.wikkit-page .template-card[aria-pressed="true"] .sample-poster,
+.wikkit-page .template-card.current-template[data-available="false"] .sample-poster {
+    border-width: 4px;
+}
+
+.wikkit-page .template-card:disabled {
+    cursor: not-allowed;
+    opacity: 0.75;
+}
+
+.template-card-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+}
+
+.template-preview {
+    display: block;
+    width: min(100%, 32rem, calc(30rem * var(--poster-aspect)));
+    aspect-ratio: var(--poster-aspect);
+}
+
+.sample-poster {
+    display: grid;
+    grid-template-rows: 1fr 3fr;
+    width: 100%;
+    height: 100%;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    border: 2px solid #24364b;
+    background: white;
+    color: #17283a;
+}
+
+.sample-header,
+.sample-layout,
+.sample-column,
+.sample-footer,
+.sample-section-group {
+    display: grid;
+    min-width: 0;
+    min-height: 0;
+    gap: 0.35rem;
+}
+
+.sample-header {
+    grid-template-rows: 1fr 1fr;
+    align-content: center;
+    justify-items: center;
+    border-bottom: 1px solid #9eb8d1;
+    padding: 0.25rem;
+}
+
+.sample-title {
+    font-weight: 700;
+}
+
+.sample-authors {
+    font-size: 0.75em;
+}
+
+.sample-layout {
+    grid-template-columns: 1fr 2fr 1fr;
+    grid-template-rows: 3fr 1fr;
+}
+
+.sample-column {
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.sample-column-stacked {
+    grid-row: 1 / -1;
+    grid-column: 3;
+    grid-template-rows: 1fr 3fr;
+}
+
+.sample-section-group {
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+    gap: 0;
+}
+
+.sample-section-group .sample-section + .sample-section {
+    border-top: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
+.sample-arena .sample-column:nth-child(2) {
+    grid-column: 2;
+    grid-row: 1;
+    grid-template-rows: 1fr;
+}
+
+.sample-arena .sample-column:nth-child(3) {
+    grid-column: 3;
+    grid-row: 1;
+    grid-template-rows: 1fr;
+}
+
+.sample-central {
+    grid-template-rows: 1fr;
+}
+
+.sample-central .sample-column:nth-child(2) {
+    grid-template-rows: 1fr;
+}
+
+.sample-footer {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sample-section {
+    display: grid;
+    place-items: center;
+    min-width: 0;
+    min-height: 0;
+    padding: 0.25rem;
+    border: 1px solid #71869b;
+    border-radius: 0.2rem;
+    background: #dce7f1;
+    font-size: clamp(0.6rem, 1.3vw, 0.85rem);
+    line-height: 1.15;
+    text-align: center;
+    overflow-wrap: anywhere;
+    overflow: hidden;
+}
+
+.sample-section-acknowledgements {
+    overflow-wrap: normal;
+    word-break: normal;
+    hyphens: manual;
+    overflow: visible;
+}
+
+.template-current-label {
+    font-weight: 700;
+}
+
+.template-selection-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1rem;
+}
+
+.template-selection-actions > [hidden] {
+    display: none;
+}
+
+#template-selection-continue {
+    position: relative;
+    top: -8px;
+    min-width: 0;
+    max-width: 100%;
+    margin-left: auto;
+    overflow-wrap: anywhere;
+}
+
+#template-selection-status {
+    min-height: 1.5em;
+}
+
+@media (max-width: 40rem) {
+    .template-selection-grid {
+        justify-content: center;
+    }
+
+    .wikkit-page .template-card {
+        width: min(100%, 24rem);
+    }
+
+    .sample-section {
+        font-size: 0.65rem;
+    }
+}

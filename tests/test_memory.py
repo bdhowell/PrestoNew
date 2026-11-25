@@ -289,6 +289,7 @@ class MemoryContextTests(unittest.TestCase):
         client = TestClient(trusted_session)
         with patch.object(Chatbot, "handle_message", workflow):
             with client.websocket_connect("/wikkit/ws") as socket:
+                self.assertEqual(socket.receive_json()["command"]["does"], "configure")
                 socket.send_text("start")
                 self.assertEqual(socket.receive_json()["say"], "Name?")
                 socket.send_text("Ada")

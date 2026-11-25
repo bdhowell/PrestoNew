@@ -14,6 +14,7 @@
     let zoomAnchor = null;
 
     function fitContent() {
+        if (content.dataset.fixedGeometry === "true") return;
         const style = getComputedStyle(canvas);
         const width = canvas.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
         const height = canvas.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
@@ -26,9 +27,12 @@
             // scrollHeight can omit the trailing margin of an overflowing flex item.
             const layoutBottom = layout.offsetTop + layout.offsetHeight
                 + parseFloat(getComputedStyle(layout).marginBottom);
+            // Integer DOM measurements can disagree by one pixel at fractional sizes.
+            const scrollWidth = content.scrollWidth;
+            const scrollHeight = Math.max(content.scrollHeight, Math.ceil(layoutBottom));
             return Math.min(
-                1, content.clientWidth / content.scrollWidth,
-                content.clientHeight / Math.max(content.scrollHeight, Math.ceil(layoutBottom)),
+                1, (content.clientWidth + 1) / scrollWidth,
+                (content.clientHeight + 1) / scrollHeight,
             );
         }
         let fit = 1;
@@ -37,7 +41,7 @@
             const ratio = overflowRatio(fit);
             if (ratio === 1) {
                 // Recover the largest fitting scale after bracketing the overflow.
-                for (let step = 0; fit < upper && step < 12; step++) {
+                for (let step = 0; upper - fit > fit * 0.00001 && step < 24; step++) {
                     const middle = (fit + upper) / 2;
                     if (overflowRatio(middle) === 1) fit = middle;
                     else upper = middle;
@@ -68,6 +72,8 @@
         slider.disabled = minimum === 1;
         output.textContent = `${(scale * 100).toFixed(1)}%`;
         canvas.style.transform = `scale(${scale})`;
+        const contentScale = new DOMMatrixReadOnly(getComputedStyle(content).transform).a;
+        content.style.setProperty("--poster-outline-width", `${3 / (scale * contentScale)}px`);
         stage.style.width = `${width * scale}px`;
         stage.style.height = `${height * scale}px`;
     }
@@ -117,6 +123,7 @@
     const mutations = new MutationObserver(schedule);
     mutations.observe(content, {childList: true, characterData: true, subtree: true});
     canvas.addEventListener("load", schedule, true);
+    canvas.addEventListener("poster-font-size", schedule);
     document.fonts.ready.then(schedule);
     update();
 })();
