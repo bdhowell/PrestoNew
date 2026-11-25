@@ -126,10 +126,11 @@ class WikkitPageTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/poster/create?step=1&a=b")
 
-    def test_chatbot_loads_aladin_font(self) -> None:
+    def test_wikkit_pages_load_aladin_and_dm_sans(self) -> None:
         response = self.client.get("/wikkit")
         self.assertIn(
-            'href="https://fonts.googleapis.com/css2?family=Aladin&display=swap"',
+            'href="https://fonts.googleapis.com/css2?family=Aladin&family=DM+Sans:'
+            'ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap"',
             response.text,
         )
         self.assertNotIn("family=Henny+Penny", response.text)
@@ -329,7 +330,16 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.evaluate("numberToWords(3)"), "three")
         self.assertEqual(self.errors, [])
 
-    async def test_dimension_choice_saves_and_navigates_without_prompt(self) -> None:
+    async def test_standard_page_content_uses_dm_sans(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        for selector in ("body", "main"):
+            self.assertEqual(
+                await self.page.locator(selector).evaluate("element => getComputedStyle(element).fontFamily"),
+                '"DM Sans", system-ui, sans-serif',
+            )
+        self.assertEqual(self.errors, [])
+
+    async def test_dimension_choice_saves_only_when_continued(self) -> None:
         posted = []
 
         async def dimensions(route) -> None:
@@ -342,9 +352,106 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.route("**/layout/dimensions", dimensions)
         await self.page.route("**/layout/template*", lambda route: route.fulfill(body="Templates"))
         await self.page.goto("http://wikkit.test/layout/dimensions")
-        await self.page.get_by_role("button", name="36 by 24 in, width by height").click()
+        choice = self.page.get_by_role("button", name="36 by 24 in, width by height")
+        await choice.click()
+        await expect(choice).to_have_attribute("aria-pressed", "true")
+        await expect(self.page.get_by_role("button", name="48 by 36 in, width by height")).to_have_attribute(
+            "aria-pressed", "false",
+        )
+        self.assertEqual(posted, [])
+        await self.page.locator("#dimension-selection-continue").click()
         await self.page.wait_for_url("**/layout/template?from=dimensions", timeout=2000)
         self.assertEqual(posted, [{"dimensions": "24 in x 36 in"}])
+        self.assertEqual(self.errors, [])
+
+    async def test_dimension_continue_requires_a_selection_without_saved_dimensions(self) -> None:
+        self.current_poster = posters.Poster(11, "Poster", None, None, None, None, None, False, None, units="in")
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        next_button = self.page.locator("#dimension-selection-continue")
+        await expect(next_button).to_be_disabled()
+        choice = self.page.get_by_role("button", name="36 by 24 in, width by height")
+        await choice.click()
+        await expect(next_button).to_be_enabled()
+        await self.page.get_by_role("button", name="portrait", exact=True).click()
+        await self.page.get_by_role("button", name="landscape", exact=True).click()
+        await expect(choice).to_have_attribute("aria-pressed", "true")
+        self.assertEqual(self.errors, [])
+
+    async def test_dimension_choice_cancels_pending_custom_save(self) -> None:
+        posted = []
+
+        async def dimensions(route) -> None:
+            if route.request.method != "POST":
+                await route.fallback()
+                return
+            posted.append(route.request.post_data_json)
+            await route.fulfill(json={"ok": True, "redirect": "/layout/template?from=dimensions"})
+
+        await self.page.route("**/layout/dimensions", dimensions)
+        await self.page.route("**/layout/template*", lambda route: route.fulfill(body="Templates"))
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.evaluate("""() => {
+            const input = document.querySelector("#poster-dimensions");
+            input.value = "20 in x 40 in";
+            input.dispatchEvent(new Event("input", {bubbles: true}));
+            document.querySelector('[aria-label="36 by 24 in, width by height"]').click();
+        }""")
+        await self.page.wait_for_timeout(500)
+        self.assertEqual(posted, [])
+        await self.page.locator("#dimension-selection-continue").click()
+        await self.page.wait_for_url("**/layout/template?from=dimensions")
+        self.assertEqual(posted, [{"dimensions": "24 in x 36 in"}])
+        self.assertEqual(self.errors, [])
+
+    async def test_saved_square_dimensions_keep_available_filters(self) -> None:
+        self.current_poster = posters.Poster(11, "Poster", None, 100, 100, None, None, False, None, units="cm")
+        await self.page.route("**/layout/template*", lambda route: route.fulfill(body="Templates"))
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await expect(self.page.locator('[data-orientation="landscape"]')).to_have_attribute("aria-pressed", "true")
+        await self.page.get_by_role("button", name="portrait", exact=True).click()
+        await expect(self.page.locator("#dimension-sizes button").first).to_be_visible()
+        await expect(self.page.locator("#dimension-selection-continue")).to_be_enabled()
+        await self.page.locator("#dimension-selection-continue").click()
+        await self.page.wait_for_url("**/layout/template?from=dimensions")
+        self.assertEqual(self.errors, [])
+
+    async def test_dimension_continue_aligns_with_visible_content(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.locator("body").evaluate(
+            "element => element.style.setProperty('--chat-window-transition', '0ms')",
+        )
+        await self.page.locator("#dimension-picker-status").evaluate(
+            "element => element.textContent = 'Dimensions could not be saved. Please try again.'",
+        )
+        button = self.page.locator("#dimension-selection-continue")
+        for width in (1280, 390):
+            await self.page.set_viewport_size({"width": width, "height": 900})
+            for panel_open in (False, True):
+                with self.subTest(width=width, panel_open=panel_open):
+                    await self.page.locator("#chatbot").evaluate(
+                        "(element, open) => element.classList.toggle('chat-hidden', !open)", panel_open,
+                    )
+                    await button.scroll_into_view_if_needed()
+                    bounds = await button.evaluate("""button => {
+                        const main = document.querySelector("main").getBoundingClientRect();
+                        const actions = document.querySelector(".dimension-selection-actions").getBoundingClientRect();
+                        const next = button.getBoundingClientRect();
+                        const status = document.querySelector("#dimension-picker-status").getBoundingClientRect();
+                        return {
+                            leftInset: actions.left - main.left,
+                            rightInset: main.right - next.right,
+                            topOffset: next.top - actions.top,
+                            clickable: document.elementFromPoint(
+                                (next.left + next.right) / 2, (next.top + next.bottom) / 2,
+                            ) === button,
+                            overlapsStatus: next.left < status.right && next.right > status.left
+                                && next.top < status.bottom && next.bottom > status.top,
+                        };
+                    }""")
+                    self.assertAlmostEqual(bounds["leftInset"], bounds["rightInset"], places=1)
+                    self.assertAlmostEqual(bounds["topOffset"], -50, places=1)
+                    self.assertTrue(bounds["clickable"])
+                    self.assertFalse(bounds["overlapsStatus"])
         self.assertEqual(self.errors, [])
 
     async def test_editor_dimensions_highlight_current_and_return(self) -> None:
@@ -358,7 +465,8 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await expect(current).to_have_attribute("aria-current", "true")
         await self.page.get_by_role("button", name="cm", exact=True).click()
         await expect(self.page.locator('[data-unit="in"]')).to_have_class("current-dimension")
-        await self.page.locator("#return-to-poster").click()
+        await expect(self.page.locator("#dimension-selection-continue")).to_have_text("Return to poster layout")
+        await self.page.locator("#dimension-selection-continue").click()
         await self.page.wait_for_url("**/layout/edit")
         self.assertEqual(self.errors, [])
 
@@ -382,6 +490,9 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
             "aria-current", "true",
         )
         await self.page.get_by_role("button", name="100 by 100 cm, width by height").click()
+        self.assertEqual(posted, [])
+        await expect(self.page.locator("#dimension-selection-continue")).to_have_text("Continue to template selection")
+        await self.page.locator("#dimension-selection-continue").click()
         await self.page.wait_for_url("**/layout/template?from=dimensions")
         self.assertEqual(posted, [{"dimensions": "100 cm x 100 cm", "from_editor": True}])
         self.current_poster = posters.Poster(11, "Poster", None, 101.5, 97, None, None, False, None, units="cm")
@@ -449,13 +560,48 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.goto("http://wikkit.test/layout/dimensions")
         choice = self.page.get_by_role("button", name="36 by 24 in, width by height")
         await choice.click()
+        await self.page.locator("#dimension-selection-continue").click()
         await expect(self.page.locator("#dimension-picker-status")).to_have_text("Poster width is too big.")
         await expect(self.page.locator("#dimension-correction")).to_be_visible()
         await expect(self.page.locator("#poster-dimensions")).to_have_value("24 in x 36 in")
         await expect(choice).to_be_enabled()
-        await choice.click()
+        await self.page.locator("#dimension-selection-continue").click()
         await self.page.wait_for_url("**/layout/template?from=dimensions")
         self.assertEqual(posted, [{"dimensions": "24 in x 36 in"}] * 2)
+        self.assertEqual(self.errors, [])
+
+    async def test_continue_submits_correction_edited_before_debounce(self) -> None:
+        posted = []
+
+        async def dimensions(route) -> None:
+            if route.request.method != "POST":
+                await route.fallback()
+                return
+            posted.append(route.request.post_data_json)
+            if len(posted) == 1:
+                await route.fulfill(status=422, json={
+                    "errors": ["Poster width is too big."],
+                    "preview": {"width": 36, "height": 24, "units": "in"},
+                })
+            else:
+                await route.fulfill(json={"ok": True, "redirect": "/layout/template?from=dimensions"})
+
+        await self.page.route("**/layout/dimensions", dimensions)
+        await self.page.route("**/layout/template*", lambda route: route.fulfill(body="Templates"))
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.get_by_role("button", name="36 by 24 in, width by height").click()
+        await self.page.locator("#dimension-selection-continue").click()
+        await expect(self.page.locator("#dimension-picker-status")).to_have_text("Poster width is too big.")
+        await self.page.locator("#poster-dimensions").evaluate("""input => {
+            input.value = "20 in x 30 in";
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            document.querySelector("#dimension-selection-continue").click();
+        }""")
+        await self.page.wait_for_url("**/layout/template?from=dimensions")
+        self.assertEqual(posted, [
+            {"dimensions": "24 in x 36 in"},
+            {"dimensions": "20 in x 30 in"},
+        ])
         self.assertEqual(self.errors, [])
 
     async def test_every_dimension_size_can_be_selected(self) -> None:
@@ -481,13 +627,14 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
                     width, height_and_unit = (await choice.inner_text()).split(" × ")
                     height, label_unit = height_and_unit.split()
                     await choice.click(timeout=2000)
-                    await expect(choice).to_be_enabled()
+                    await expect(choice).to_have_attribute("aria-pressed", "true")
+                    await self.page.locator("#dimension-selection-continue").click()
                     self.assertEqual(posted[-1], f"{height} {label_unit} x {width} {label_unit}")
                     await expect(self.page.locator("#dimension-picker-status")).to_have_text("Size is not allowed.")
                     await expect(self.page.locator("#dimension-correction")).to_be_visible()
         self.assertEqual(self.errors, [])
 
-    async def test_dimension_sizes_are_accessible_above_chat_on_small_screen(self) -> None:
+    async def test_dimension_sizes_are_accessible_after_closing_chat_on_small_screen(self) -> None:
         async def reject_size(route) -> None:
             if route.request.method != "POST":
                 await route.fallback()
@@ -497,6 +644,8 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.route("**/layout/dimensions", reject_size)
         await self.page.set_viewport_size({"width": 390, "height": 844})
         await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.locator("#chatlog").get_by_text("Enter your poster height x width.").wait_for()
+        await self.page.get_by_role("button", name="Close Wikkit").click()
         sizes = self.page.locator("#dimension-sizes button")
         for index in range(await sizes.count()):
             choice = sizes.nth(index)
@@ -552,59 +701,185 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
                                             - rectangle["gap"]) / 2, delta=1)
         self.assertEqual(self.errors, [])
 
-    async def test_chatbot_resizes_from_every_edge_and_corner(self) -> None:
+    async def test_chatbot_fixed_panel_restores_legacy_content_and_animates(self) -> None:
+        self.prompt_on_connect = False
+        await self.page.add_init_script("""(() => {
+            sessionStorage.setItem('wikkit.chatbot', JSON.stringify({
+                content: '<header class="chatbot-handle">Wikkit</header>'
+                    + '<div id="chatlog"><div class="chat">Saved conversation</div></div>'
+                    + '<div id="chatinput"></div><span class="chatbot-resize"></span>',
+                geometry: {left: 100, top: 100, width: 400, height: 300},
+            }));
+        })()""")
         await self.page.goto("http://wikkit.test/layout/dimensions")
         chatbot = self.page.locator("#chatbot")
         await expect(chatbot).to_be_visible()
-        await expect(chatbot.locator(".chatbot-resize")).to_have_count(8)
-        for direction in ("n", "e", "s", "w", "ne", "se", "sw", "nw"):
-            with self.subTest(direction=direction):
-                await chatbot.evaluate("""element => Object.assign(element.style, {
-                    left: '300px', top: '200px', width: '400px', height: '320px',
-                    right: 'auto', bottom: 'auto',
-                })""")
-                handle = chatbot.locator(f'[data-resize="{direction}"]')
-                box = await handle.bounding_box()
-                self.assertIsNotNone(box)
-                x = box["x"] + box["width"] / 2
-                y = box["y"] + box["height"] / 2
-                dx = -40 if "w" in direction else 40 if "e" in direction else 0
-                dy = -30 if "n" in direction else 30 if "s" in direction else 0
-                await self.page.mouse.move(x, y)
-                await self.page.mouse.down()
-                await self.page.mouse.move(x + dx, y + dy, steps=4)
-                await self.page.mouse.up()
-                expected = {
-                    "x": 300 + min(dx, 0), "y": 200 + min(dy, 0),
-                    "width": 400 + abs(dx), "height": 320 + abs(dy),
-                }
-                actual = await chatbot.bounding_box()
-                for key, value in expected.items():
-                    self.assertAlmostEqual(actual[key], value, delta=1)
-                await self.page.mouse.move(x + dx + 20, y + dy + 20)
-                self.assertEqual(await chatbot.bounding_box(), actual)
-                saved = await self.page.evaluate(
-                    "JSON.parse(sessionStorage.getItem('wikkit.chatbot')).geometry",
-                )
-                for key, value in (("left", actual["x"]), ("top", actual["y"]),
-                                   ("width", actual["width"]), ("height", actual["height"])):
-                    self.assertAlmostEqual(saved[key], value, delta=1)
-
-        await self.page.reload()
-        await expect(chatbot).to_be_visible()
-        await expect(chatbot.locator(".chatbot-resize")).to_have_count(8)
-        restored = await chatbot.bounding_box()
-        self.assertEqual(restored, actual)
+        await expect(chatbot.locator("#chatlog")).to_contain_text("Saved conversation")
+        await expect(chatbot.locator(".chatbot-resize")).to_have_count(0)
+        viewport = self.page.viewport_size
+        menu_bottom = await self.page.locator(".basic-menu").evaluate(
+            "element => element.getBoundingClientRect().bottom",
+        )
+        box = await chatbot.bounding_box()
+        self.assertAlmostEqual(box["x"], viewport["width"] - 256, delta=0.1)
+        self.assertAlmostEqual(box["y"], menu_bottom, delta=0.1)
+        self.assertAlmostEqual(box["width"], 256, delta=0.1)
+        self.assertAlmostEqual(box["height"], viewport["height"] - menu_bottom, delta=0.1)
         header = await chatbot.locator(".chatbot-handle").bounding_box()
         await self.page.mouse.move(header["x"] + 40, header["y"] + 20)
         await self.page.mouse.down()
-        await self.page.mouse.move(header["x"] + 70, header["y"] + 40)
+        await self.page.mouse.move(header["x"] - 60, header["y"] + 60)
         await self.page.mouse.up()
-        moved = await chatbot.bounding_box()
-        self.assertAlmostEqual(moved["x"], restored["x"] + 30, delta=1)
-        self.assertAlmostEqual(moved["y"], restored["y"] + 20, delta=1)
-        self.assertEqual(moved["width"], restored["width"])
-        self.assertEqual(moved["height"], restored["height"])
+        self.assertEqual((await chatbot.bounding_box())["x"], viewport["width"] - 256)
+
+        transitions = await self.page.evaluate("""async () => {
+            const bot = document.querySelector('#chatbot');
+            const samples = [];
+            for (const command of ['hide-chat', 'show-chat']) {
+                await window.wikkit.execute({does: command});
+                const frames = [];
+                const start = performance.now();
+                do {
+                    await new Promise(requestAnimationFrame);
+                    const rect = bot.getBoundingClientRect();
+                    frames.push({width: rect.width, right: rect.right});
+                } while (performance.now() - start < 550);
+                samples.push(frames);
+            }
+            return samples;
+        }""")
+        for frames in transitions:
+            self.assertTrue(all(abs(frame["right"] - viewport["width"]) < 1 for frame in frames))
+        self.assertGreater(transitions[0][0]["width"], transitions[0][-1]["width"] + 100)
+        self.assertAlmostEqual(transitions[0][-1]["width"], 0, delta=1)
+        self.assertGreater(transitions[1][-1]["width"], transitions[1][0]["width"] + 100)
+        self.assertAlmostEqual(transitions[1][-1]["width"], 256, delta=1)
+
+        await self.page.set_viewport_size({"width": 200, "height": 400})
+        await self.page.wait_for_function("""() =>
+            Math.abs(document.querySelector('#chatbot').getBoundingClientRect().top
+                - Math.min(innerHeight, document.querySelector('.basic-menu').getBoundingClientRect().bottom)) < 0.1
+        """)
+        menu_bottom = await self.page.locator(".basic-menu").evaluate(
+            "element => Math.min(innerHeight, element.getBoundingClientRect().bottom)",
+        )
+        box = await chatbot.bounding_box()
+        self.assertAlmostEqual(box["x"], 0, delta=0.1)
+        self.assertAlmostEqual(box["y"], menu_bottom, delta=0.1)
+        self.assertAlmostEqual(box["width"], 200, delta=0.1)
+        self.assertAlmostEqual(box["height"], 400 - menu_bottom, delta=0.1)
+        midpoint = await self.page.evaluate("""async () => {
+            await window.wikkit.execute({does: 'hide-chat'});
+            await new Promise(resolve => setTimeout(resolve, 220));
+            const rect = document.querySelector('#chatbot').getBoundingClientRect();
+            return {width: rect.width, right: rect.right};
+        }""")
+        self.assertGreater(midpoint["width"], 0)
+        self.assertLess(midpoint["width"], 200)
+        self.assertAlmostEqual(midpoint["right"], 200, delta=1)
+        self.assertNotIn("geometry", await self.page.evaluate(
+            "JSON.parse(sessionStorage.getItem('wikkit.chatbot'))",
+        ))
+        self.assertEqual(self.errors, [])
+
+    async def test_chatbot_tracks_menu_height_changes(self) -> None:
+        self.prompt_on_connect = False
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.locator(".basic-menu").evaluate(
+            "element => element.style.paddingBottom = '70px'",
+        )
+        await self.page.wait_for_function("""() =>
+            Math.abs(document.querySelector('#chatbot').getBoundingClientRect().top
+                - document.querySelector('.basic-menu').getBoundingClientRect().bottom) < 0.1
+        """)
+        menu_bottom = await self.page.locator(".basic-menu").evaluate(
+            "element => element.getBoundingClientRect().bottom",
+        )
+        box = await self.page.locator("#chatbot").bounding_box()
+        self.assertAlmostEqual(box["y"], menu_bottom, delta=0.1)
+        self.assertAlmostEqual(box["height"] + box["y"], self.page.viewport_size["height"], delta=0.1)
+        self.assertEqual(self.errors, [])
+
+    async def test_main_content_tracks_chatbot_during_transitions(self) -> None:
+        self.prompt_on_connect = False
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        for width in (900, 200):
+            with self.subTest(width=width):
+                await self.page.set_viewport_size({"width": width, "height": 600})
+                for _ in range(5):
+                    edges = await self.page.evaluate("""() => ({
+                        panelLeft: document.querySelector('#chatbot').getBoundingClientRect().left,
+                        contentRight: document.querySelector('main').getBoundingClientRect().right,
+                    })""")
+                    self.assertAlmostEqual(edges["panelLeft"], edges["contentRight"], delta=1)
+                    await self.page.wait_for_timeout(30)
+                await self.page.wait_for_timeout(500)
+                frames = await self.page.evaluate("""async () => {
+                    const bot = document.querySelector('#chatbot');
+                    const main = document.querySelector('main');
+                    const samples = [];
+                    for (const command of ['hide-chat', 'show-chat']) {
+                        await window.wikkit.execute({does: command});
+                        const frames = [];
+                        const start = performance.now();
+                        do {
+                            await new Promise(requestAnimationFrame);
+                            frames.push({
+                                panelLeft: bot.getBoundingClientRect().left,
+                                contentRight: main.getBoundingClientRect().right,
+                            });
+                        } while (performance.now() - start < 550);
+                        samples.push(frames);
+                    }
+                    return samples;
+                }""")
+                for transition in frames:
+                    self.assertGreater(len(transition), 2)
+                    for frame in transition:
+                        self.assertAlmostEqual(frame["panelLeft"], frame["contentRight"], delta=1)
+                self.assertAlmostEqual(frames[0][-1]["contentRight"], width, delta=1)
+                self.assertAlmostEqual(frames[1][-1]["contentRight"], max(width - 256, 0), delta=1)
+        await self.page.set_viewport_size({"width": 900, "height": 600})
+        await self.page.wait_for_timeout(500)
+        frames = await self.page.evaluate("""async () => {
+            document.body.style.setProperty('--chat-window-transition', '150ms');
+            await wikkit.execute({does: 'hide-chat'});
+            await new Promise(resolve => setTimeout(resolve, 50));
+            await wikkit.execute({does: 'show-chat'});
+            const frames = [];
+            const start = performance.now();
+            do {
+                await new Promise(requestAnimationFrame);
+                frames.push({
+                    panelLeft: document.querySelector('#chatbot').getBoundingClientRect().left,
+                    contentRight: document.querySelector('main').getBoundingClientRect().right,
+                });
+            } while (performance.now() - start < 200);
+            return frames;
+        }""")
+        for frame in frames:
+            self.assertAlmostEqual(frame["panelLeft"], frame["contentRight"], delta=1)
+        self.assertAlmostEqual(frames[-1]["contentRight"], 644, delta=1)
+        self.assertEqual(self.errors, [])
+
+    async def test_chatbot_close_and_reopen_controls_restore_focus_and_state(self) -> None:
+        self.prompt_on_connect = False
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        chatbot = self.page.locator("#chatbot")
+        close = self.page.get_by_role("button", name="Close Wikkit")
+        launcher = self.page.get_by_role("button", name="Open Wikkit")
+        await close.click()
+        await expect(launcher).to_be_focused()
+        self.assertTrue(await chatbot.evaluate("element => element.inert"))
+        await self.page.wait_for_function(
+            "JSON.parse(sessionStorage.getItem('wikkit.chatbot'))['chat-hidden'] === true"
+        )
+        await self.page.reload()
+        await expect(launcher).to_be_visible()
+        self.assertTrue(await chatbot.evaluate("element => element.inert"))
+        await launcher.click()
+        await expect(close).to_be_focused()
+        self.assertFalse(await chatbot.evaluate("element => element.inert"))
         self.assertEqual(self.errors, [])
 
     async def test_chatlog_resizes_without_overlapping_input_during_transitions(self) -> None:
@@ -648,85 +923,6 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
                     direction = 1 if command == "close-input" else -1
                     self.assertGreater(direction * (frames[-1]["logHeight"] - frames[0]["logHeight"]), 1)
                     self.assertGreater(direction * (frames[0]["inputHeight"] - frames[-1]["inputHeight"]), 1)
-        self.assertEqual(self.errors, [])
-
-    async def test_chatbot_resize_limits_keep_opposite_edges_fixed(self) -> None:
-        await self.page.goto("http://wikkit.test/layout/dimensions")
-        chatbot = self.page.locator("#chatbot")
-        await expect(chatbot).to_be_visible()
-        await expect(chatbot.locator(".chatbot-resize")).to_have_count(8)
-        for direction in ("nw", "se"):
-            for grow in (False, True):
-                with self.subTest(direction=direction, grow=grow):
-                    await chatbot.evaluate("""element => Object.assign(element.style, {
-                        left: '300px', top: '200px', width: '400px', height: '320px',
-                        right: 'auto', bottom: 'auto',
-                    })""")
-                    handle = await chatbot.locator(f'[data-resize="{direction}"]').bounding_box()
-                    x = handle["x"] + handle["width"] / 2
-                    y = handle["y"] + handle["height"] / 2
-                    delta = 2000 if (direction == "se") == grow else -2000
-                    await self.page.mouse.move(x, y)
-                    await self.page.mouse.down()
-                    await self.page.mouse.move(x + delta, y + delta)
-                    await self.page.mouse.up()
-                    box = await chatbot.bounding_box()
-                    viewport = self.page.viewport_size
-                    self.assertGreaterEqual(box["x"], 0)
-                    self.assertGreaterEqual(box["y"], 0)
-                    self.assertLessEqual(box["x"] + box["width"], viewport["width"])
-                    self.assertLessEqual(box["y"] + box["height"], viewport["height"])
-                    if not grow:
-                        self.assertEqual(box["width"], 224)
-                        self.assertEqual(box["height"], 192)
-                    elif direction == "nw":
-                        self.assertEqual(box["x"], 0)
-                        self.assertEqual(box["y"], 0)
-                    else:
-                        self.assertEqual(box["x"] + box["width"], viewport["width"])
-                        self.assertEqual(box["y"] + box["height"], viewport["height"])
-                    if direction == "nw":
-                        self.assertEqual(box["x"] + box["width"], 700)
-                        self.assertEqual(box["y"] + box["height"], 520)
-                    else:
-                        self.assertEqual(box["x"], 300)
-                        self.assertEqual(box["y"], 200)
-        self.assertEqual(self.errors, [])
-
-    async def test_chatbot_resize_default_position_and_small_viewport(self) -> None:
-        await self.page.goto("http://wikkit.test/layout/dimensions")
-        chatbot = self.page.locator("#chatbot")
-        await expect(chatbot).to_be_visible()
-        original = await chatbot.bounding_box()
-        handle = await chatbot.locator('[data-resize="nw"]').bounding_box()
-        x = handle["x"] + handle["width"] / 2
-        y = handle["y"] + handle["height"] / 2
-        await self.page.mouse.move(x, y)
-        await self.page.mouse.down()
-        await self.page.mouse.move(x - 30, y - 20)
-        await self.page.mouse.up()
-        resized = await chatbot.bounding_box()
-        self.assertAlmostEqual(resized["width"], original["width"] + 30, delta=1)
-        self.assertAlmostEqual(resized["height"], original["height"] + 20, delta=1)
-        self.assertAlmostEqual(
-            resized["x"] + resized["width"], original["x"] + original["width"], delta=1,
-        )
-        self.assertAlmostEqual(
-            resized["y"] + resized["height"], original["y"] + original["height"], delta=1,
-        )
-
-        await self.page.set_viewport_size({"width": 200, "height": 160})
-        await self.page.reload()
-        await expect(chatbot).to_be_visible()
-        await expect(chatbot.locator(".chatbot-resize")).to_have_count(8)
-        handle = await chatbot.locator('[data-resize="se"]').bounding_box()
-        await self.page.mouse.move(handle["x"] + 5, handle["y"] + 5)
-        await self.page.mouse.down()
-        await self.page.mouse.move(20, 20)
-        await self.page.mouse.up()
-        self.assertEqual(
-            await chatbot.bounding_box(), {"x": 0, "y": 0, "width": 200, "height": 160},
-        )
         self.assertEqual(self.errors, [])
 
     async def test_signout_waits_for_login_button_without_a_socket(self) -> None:

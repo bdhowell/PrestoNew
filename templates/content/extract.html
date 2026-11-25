@@ -10,6 +10,6 @@
 <p id="extraction-status" role="status" aria-live="polite">Wikkit is preparing to read your files.</p>
 <p>Keep this page open while he extracts text, forumlae, tables, charts, and images for your poster.</p>
 <button id="retry-extraction" type="button" hidden>Try again</button>
-<p><a href="/content/upload">Back to source uploads</a></p>
+<p><a href="/content/upload{% if request.query_params.get('from') == 'template' %}?from=template{% endif %}">Back to source uploads</a></p>
 <script id="extraction-files" type="application/json">{{ pending | tojson }}</script>
 {% endblock %}

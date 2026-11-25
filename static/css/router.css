@@ -1,35 +1,64 @@
+@property --wikkit-panel-space {
+    syntax: "<length>";
+    inherits: true;
+    initial-value: 0px;
+}
+
+body {
+    --wikkit-panel-space: 0px;
+    transition: --wikkit-panel-space var(--chat-window-transition, 440ms) ease;
+}
+
+body:has(> #chatbot:not(.chat-hidden)) {
+    --wikkit-panel-space: min(16rem, 100vw);
+}
+
+body:has(> #chatbot) > main {
+    box-sizing: border-box;
+    width: calc(100% - var(--wikkit-panel-space));
+    padding-inline: min(1.5rem, max(0px, (100vw - var(--wikkit-panel-space)) / 2));
+}
+
+body:has(> #chatbot) > #poster-container,
+body:has(> #chatbot) > #controls {
+    width: calc(100% - var(--wikkit-panel-space));
+}
+
+body:has(> #chatbot) > #controls {
+    min-width: 0;
+    padding-inline: min(0.5rem, max(0px, (100vw - var(--wikkit-panel-space)) / 2));
+}
+
 #chatbot {
     box-sizing: border-box;
     position: fixed;
-    right: 1rem;
-    bottom: 1rem;
+    top: min(var(--chat-menu-bottom, 0px), 100vh);
+    right: 0;
+    bottom: 0;
     z-index: 9999;
     display: flex;
     flex-direction: column;
-    width: 24rem;
-    height: 28rem;
-    line-height: 1.6rem;
-    min-width: min(14rem, 100vw);
-    min-height: min(12rem, 100vh);
+    width: var(--wikkit-panel-space);
     max-width: 100vw;
-    max-height: 100vh;
+    line-height: 1.3rem;
     overflow: hidden;
-    border: 2px solid #c9a227;
-    border-radius: 8px;
+    outline: 2px solid #c9a227;
+    outline-offset: -2px;
+    border-radius: 8px 0 0 8px;
     background: rgb(24 20 48 / 94%);
     box-shadow: 0 6px 24px rgb(0 0 0 / 45%);
     color: #ddd;
     transition:
-        opacity var(--chat-window-transition, 440ms) ease,
+        outline-width var(--chat-window-transition, 440ms) ease,
         visibility 0s linear;
 }
 
 #chatbot.chat-hidden {
-    opacity: 0;
+    outline-width: 0;
     visibility: hidden;
     pointer-events: none;
     transition:
-        opacity var(--chat-window-transition, 440ms) ease,
+        outline-width var(--chat-window-transition, 440ms) ease,
         visibility 0s linear var(--chat-window-transition, 440ms);
 }
 
@@ -47,8 +76,6 @@
     font-size: 2rem;
     font-weight: 400;
     line-height: 1.6;
-    cursor: grab;
-    touch-action: none;
     user-select: none;
 }
 
@@ -60,65 +87,32 @@
     background: url("/static/graphics/wikkicon.png") center / contain no-repeat;
 }
 
-#chatbot.dragging .chatbot-handle {
-    cursor: grabbing;
+#chatbot .chatbot-close {
+    margin-left: auto;
+    padding: 0 0.4rem;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
 }
 
-#chatbot .chatbot-resize {
-    position: absolute;
-    z-index: 1;
-    touch-action: none;
-    user-select: none;
-}
-
-#chatbot .chatbot-resize[data-resize="n"],
-#chatbot .chatbot-resize[data-resize="s"] {
-    right: 10px;
-    left: 10px;
-    height: 6px;
-    cursor: ns-resize;
-}
-
-#chatbot .chatbot-resize[data-resize="e"],
-#chatbot .chatbot-resize[data-resize="w"] {
-    top: 10px;
-    bottom: 10px;
-    width: 6px;
-    cursor: ew-resize;
-}
-
-#chatbot .chatbot-resize[data-resize="ne"],
-#chatbot .chatbot-resize[data-resize="se"],
-#chatbot .chatbot-resize[data-resize="sw"],
-#chatbot .chatbot-resize[data-resize="nw"] {
-    width: 10px;
-    height: 10px;
-}
-
-#chatbot .chatbot-resize[data-resize="ne"],
-#chatbot .chatbot-resize[data-resize="sw"] {
-    cursor: nesw-resize;
-}
-
-#chatbot .chatbot-resize[data-resize="nw"],
-#chatbot .chatbot-resize[data-resize="se"] {
-    cursor: nwse-resize;
-}
-
-#chatbot .chatbot-resize[data-resize*="n"] {
-    top: 0;
-}
-
-#chatbot .chatbot-resize[data-resize*="s"] {
-    bottom: 0;
-}
-
-#chatbot .chatbot-resize[data-resize*="e"] {
+.chatbot-launcher {
+    position: fixed;
+    bottom: 1rem;
     right: 0;
+    z-index: 9999;
+    padding: 0.5rem 0.75rem;
+    border: 2px solid #c9a227;
+    border-radius: 8px 0 0 8px;
+    background: #2f2766;
+    color: #f4d35e;
+    font: 1.25rem "Aladin", system-ui;
+    cursor: pointer;
 }
 
-#chatbot .chatbot-resize[data-resize*="w"] {
-    left: 0;
+.chatbot-launcher[hidden] {
+    display: none;
 }
 
 #chatlog {

@@ -2,7 +2,7 @@
  * Wikkit chatbot client.
  *
  * Loaded on every page. Owns the in-page overlay and websocket, restoring
- * the overlay's content and geometry from this tab's sessionStorage.
+ * the overlay's content and state from this tab's sessionStorage.
  */
 (() => {
     "use strict";
@@ -61,7 +61,7 @@
         chatbot.id = "chatbot";
         chatbot.setAttribute("aria-label", "Wikkit chatbot");
         chatbot.dataset.socket = document.body.dataset.socket || "/wikkit/ws";
-        chatbot.style.setProperty("--chat-window-transition", `${document.body.dataset.chatWindowTransition || 440}ms`);
+        document.body.style.setProperty("--chat-window-transition", `${document.body.dataset.chatWindowTransition || 440}ms`);
         chatbot.style.setProperty("--chat-input-transition", `${document.body.dataset.chatInputTransition || 500}ms`);
         chatbot.innerHTML = '<header class="chatbot-handle">Wikkit</header>'
             + '<div id="chatlog" role="log" aria-live="polite"></div>'
@@ -70,9 +70,7 @@
         try {
             const saved = JSON.parse(sessionStorage.getItem(storageKey) || "null");
             if (saved) {
-                if (typeof saved.content !== "string" || !saved.geometry
-                    || !["left", "top", "width", "height"].every((key) => Number.isFinite(saved.geometry[key]))
-                    || saved.geometry.width <= 0 || saved.geometry.height <= 0) {
+                if (typeof saved.content !== "string") {
                     throw new Error("Invalid saved chatbot state.");
                 }
                 const content = document.createElement("template");
@@ -83,11 +81,6 @@
                     throw new Error("Saved chatbot content is missing required elements.");
                 }
                 chatbot.replaceChildren(content.content.cloneNode(true));
-                for (const key of ["left", "top", "width", "height"]) {
-                    chatbot.style[key] = `${saved.geometry[key]}px`;
-                }
-                chatbot.style.right = "auto";
-                chatbot.style.bottom = "auto";
                 for (const name of ["chat-hidden", "input-closed"]) {
                     chatbot.classList.toggle(name, saved[name] === true);
                 }
@@ -102,89 +95,24 @@
         if (document.body.dataset.clearChat === "true") {
             chatbot.querySelector("#chatlog").replaceChildren();
         }
-        addResizeHandles(chatbot);
+        chatbot.querySelectorAll(".chatbot-resize, .chatbot-close").forEach((element) => element.remove());
+        const close = document.createElement("button");
+        close.className = "chatbot-close";
+        close.type = "button";
+        close.setAttribute("aria-label", "Close Wikkit");
+        close.textContent = "\u00d7";
+        chatbot.querySelector(".chatbot-handle").appendChild(close);
         document.body.appendChild(chatbot);
-        function keepInView() {
-            const rect = chatbot.getBoundingClientRect();
-            if (chatbot.style.left || rect.left < 0 || rect.top < 0) {
-                chatbot.style.left = `${Math.max(0, Math.min(rect.left, innerWidth - rect.width))}px`;
-                chatbot.style.top = `${Math.max(0, Math.min(rect.top, innerHeight - rect.height))}px`;
-                chatbot.style.right = "auto";
-                chatbot.style.bottom = "auto";
-            }
+        const menu = document.querySelector("body > .basic-menu");
+        if (menu) {
+            const alignWithMenu = () => {
+                chatbot.style.setProperty("--chat-menu-bottom", `${Math.max(0, menu.getBoundingClientRect().bottom)}px`);
+            };
+            alignWithMenu();
+            new ResizeObserver(alignWithMenu).observe(menu, {box: "border-box"});
+            window.addEventListener("resize", alignWithMenu);
         }
-        keepInView();
-        window.addEventListener("resize", keepInView);
         return chatbot;
-    }
-
-    function addResizeHandles(chatbot) {
-        // Saved content may already contain handles, but their listeners are not serialized.
-        chatbot.querySelectorAll(".chatbot-resize").forEach((handle) => handle.remove());
-        let resizePointer = null;
-        for (const direction of ["n", "e", "s", "w", "ne", "se", "sw", "nw"]) {
-            const handle = document.createElement("span");
-            handle.className = "chatbot-resize";
-            handle.dataset.resize = direction;
-            handle.setAttribute("aria-hidden", "true");
-            handle.addEventListener("pointerdown", (event) => {
-                if (event.button !== 0 || resizePointer !== null) return;
-                resizePointer = event.pointerId;
-                const rect = chatbot.getBoundingClientRect();
-                const startX = event.clientX;
-                const startY = event.clientY;
-                Object.assign(chatbot.style, {
-                    left: `${rect.left}px`, top: `${rect.top}px`,
-                    width: `${rect.width}px`, height: `${rect.height}px`,
-                    right: "auto", bottom: "auto",
-                });
-                const move = (moveEvent) => {
-                    if (moveEvent.pointerId !== resizePointer) return;
-                    const dx = moveEvent.clientX - startX;
-                    const dy = moveEvent.clientY - startY;
-                    if (direction.includes("e") || direction.includes("w")) {
-                        const west = direction.includes("w");
-                        const width = Math.max(0, Math.min(
-                            rect.width + (west ? -dx : dx),
-                            west ? rect.right : innerWidth - rect.left,
-                        ));
-                        chatbot.style.width = `${width}px`;
-                        if (west) {
-                            chatbot.style.left = `${rect.right - chatbot.getBoundingClientRect().width}px`;
-                        }
-                    }
-                    if (direction.includes("n") || direction.includes("s")) {
-                        const north = direction.includes("n");
-                        const height = Math.max(0, Math.min(
-                            rect.height + (north ? -dy : dy),
-                            north ? rect.bottom : innerHeight - rect.top,
-                        ));
-                        chatbot.style.height = `${height}px`;
-                        if (north) {
-                            chatbot.style.top = `${rect.bottom - chatbot.getBoundingClientRect().height}px`;
-                        }
-                    }
-                };
-                const finish = (finishEvent) => {
-                    if (finishEvent.pointerId !== resizePointer) return;
-                    resizePointer = null;
-                    handle.removeEventListener("pointermove", move);
-                    handle.removeEventListener("pointerup", finish);
-                    handle.removeEventListener("pointercancel", finish);
-                    handle.removeEventListener("lostpointercapture", finish);
-                    if (handle.hasPointerCapture(event.pointerId)) {
-                        handle.releasePointerCapture(event.pointerId);
-                    }
-                };
-                handle.setPointerCapture(event.pointerId);
-                handle.addEventListener("pointermove", move);
-                handle.addEventListener("pointerup", finish);
-                handle.addEventListener("pointercancel", finish);
-                handle.addEventListener("lostpointercapture", finish);
-                event.preventDefault();
-            });
-            chatbot.appendChild(handle);
-        }
     }
 
     function persistChatbot(chatbot) {
@@ -207,11 +135,9 @@
                     copy.toggleAttribute("checked", control.checked);
                 }
             });
-            const rect = chatbot.getBoundingClientRect();
             try {
                 sessionStorage.setItem(storageKey, JSON.stringify({
                     content: clone.innerHTML,
-                    geometry: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
                     "chat-hidden": chatbot.classList.contains("chat-hidden"),
                     "input-closed": chatbot.classList.contains("input-closed"),
                 }));
@@ -221,11 +147,8 @@
         }
         const mutations = new MutationObserver(save);
         mutations.observe(chatbot, { subtree: true, childList: true, characterData: true, attributes: true });
-        const resize = new ResizeObserver(save);
-        resize.observe(chatbot);
         chatbot.addEventListener("input", save);
         chatbot.addEventListener("change", save);
-        window.addEventListener("resize", save);
         save();
         return save;
     }
@@ -234,7 +157,14 @@
         const chatlog = chatbot.querySelector("#chatlog");
         const chatinput = chatbot.querySelector("#chatinput");
         chatinput.contentEditable = "plaintext-only";
-        const handle = chatbot.querySelector(".chatbot-handle");
+        const launcher = document.createElement("button");
+        launcher.type = "button";
+        launcher.className = "chatbot-launcher";
+        launcher.textContent = "Wikkit";
+        launcher.setAttribute("aria-label", "Open Wikkit");
+        launcher.setAttribute("aria-controls", "chatbot");
+        launcher.hidden = !chatbot.classList.contains("chat-hidden");
+        document.body.appendChild(launcher);
         const pending = [];
         const attachmentWaiters = [];
         let client = null;
@@ -385,15 +315,21 @@
         }
 
         function hideChat() {
+            const hadFocus = chatbot.contains(document.activeElement);
             chatbot.classList.add("chat-hidden");
             chatbot.inert = true;
             chatbot.setAttribute("aria-hidden", "true");
+            launcher.hidden = false;
+            if (hadFocus) launcher.focus();
         }
 
         function showChat() {
+            const hadFocus = document.activeElement === launcher;
             chatbot.inert = false;
             chatbot.removeAttribute("aria-hidden");
             chatbot.classList.remove("chat-hidden");
+            launcher.hidden = true;
+            if (hadFocus) chatbot.querySelector(".chatbot-close").focus();
         }
 
         document.getElementById("wikkit")?.addEventListener("click", () => {
@@ -403,6 +339,8 @@
                 hideChat();
             }
         });
+        chatbot.querySelector(".chatbot-close").addEventListener("click", hideChat);
+        launcher.addEventListener("click", showChat);
 
         function closeInput() {
             if (document.activeElement === chatinput) {
@@ -805,30 +743,6 @@
                     chatinput.replaceChildren();
                 }
             }
-        });
-
-        handle.addEventListener("pointerdown", (event) => {
-            if (event.button !== 0) {
-                return;
-            }
-            const rect = chatbot.getBoundingClientRect();
-            const offsetX = event.clientX - rect.left;
-            const offsetY = event.clientY - rect.top;
-            const clamp = (value, max) => Math.min(Math.max(value, 0), Math.max(max, 0));
-            const move = (moveEvent) => {
-                chatbot.style.left = `${clamp(moveEvent.clientX - offsetX, innerWidth - chatbot.offsetWidth)}px`;
-                chatbot.style.top = `${clamp(moveEvent.clientY - offsetY, innerHeight - chatbot.offsetHeight)}px`;
-                chatbot.style.right = "auto";
-                chatbot.style.bottom = "auto";
-            };
-            handle.setPointerCapture(event.pointerId);
-            chatbot.classList.add("dragging");
-            handle.addEventListener("pointermove", move);
-            handle.addEventListener("lostpointercapture", () => {
-                handle.removeEventListener("pointermove", move);
-                chatbot.classList.remove("dragging");
-            }, { once: true });
-            event.preventDefault();
         });
 
         for (const message of [...chatlog.children]) {

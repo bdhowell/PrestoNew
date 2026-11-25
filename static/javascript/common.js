@@ -105,3 +105,11 @@ function capitalizeWords(str) {
     if (!str) return ""; // Prevents errors on empty strings
     return str.split(" ").map(word => capitalizeFirstLetter(word)).join(" ");
 }
+
+function preserveTemplateOrigin(path) {
+    if (new URLSearchParams(location.search).get("from") !== "template") return path;
+    const url = new URL(path, location.href);
+    if (url.origin !== location.origin) throw new Error("The workflow can only navigate to this site.");
+    url.searchParams.set("from", "template");
+    return url.pathname + url.search + url.hash;
+}

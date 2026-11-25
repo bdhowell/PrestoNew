@@ -84,7 +84,7 @@
             <button type="button" id="paste" aria-label="Paste" title="Paste"><i class="fa-solid fa-paste" aria-hidden="true"></i></button>
         </div>
     </div>
-    <button type="button" id="review-continue">Return to poster layout</button>
+    <button type="button" id="review-continue">{{ 'Continue' if from_template else 'Return' }} to poster layout</button>
     <p><output id="content-save-status" role="status" aria-live="polite"></output></p>
 </div>
 <dialog id="revision-dialog" aria-labelledby="revision-title" aria-describedby="revision-description">

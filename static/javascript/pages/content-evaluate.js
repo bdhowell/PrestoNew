@@ -210,7 +210,7 @@
             await window.wikkit.say(message + '<button data-sends="ok">Continue to Poster</button>');
             if (leaving) return;
             await window.wikkit.requestResponse();
-            if (!leaving) await window.wikkit.execute({does: "redirect", payload: "/content/review"});
+            if (!leaving) await window.wikkit.execute({does: "redirect", payload: preserveTemplateOrigin("/content/review")});
         } catch (error) {
             if (!leaving) {
                 console.error("Wikkit could not continue to poster review", error);
@@ -300,7 +300,7 @@
     }
 
     retry.addEventListener("click", () => evaluate());
-    next.addEventListener("click", () => window.location.assign("/content/review"));
+    next.addEventListener("click", () => window.location.assign(preserveTemplateOrigin("/content/review")));
     window.addEventListener("pagehide", () => {
         leaving = true;
         controller?.abort();

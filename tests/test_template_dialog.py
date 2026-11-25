@@ -58,12 +58,17 @@ class TemplateDialogTests(unittest.TestCase):
         self.page.route("**/content/upload", lambda route: route.fulfill(body="Upload"))
         self.page.set_content("""
             <section id="template-selection" data-pid="11" data-from-dimensions="true">
-                <button data-template="central" data-available="true">Central</button>
+                <button data-template="central" data-available="true" aria-pressed="false">Central</button>
                 <p id="template-selection-status"></p>
+                <button id="template-selection-continue" disabled>Continue</button>
             </section>
         """)
         self.page.add_script_tag(path=str(ROOT / "static/javascript/pages/layout-template-select.js"))
+        self.assertTrue(self.page.locator("#template-selection-continue").is_disabled())
         self.page.get_by_role("button", name="Central").click()
+        self.assertEqual(posted, [])
+        self.assertEqual(self.page.get_by_role("button", name="Central").get_attribute("aria-pressed"), "true")
+        self.page.locator("#template-selection-continue").click()
         self.page.wait_for_url("**/content/upload")
         self.assertEqual(posted, [{"pid": 11, "template": "central", "from_dimensions": True}])
 
@@ -101,6 +106,147 @@ class TemplateDialogTests(unittest.TestCase):
             self.assertGreaterEqual(bounds[child]["top"], bounds["button"]["top"])
             self.assertLessEqual(bounds[child]["right"], bounds["button"]["right"])
             self.assertLessEqual(bounds[child]["bottom"], bounds["button"]["bottom"])
+
+    def test_template_actions_align_with_visible_content(self) -> None:
+        self.page.set_content("""<body class="wikkit-page" style="--chat-window-transition: 0ms">
+            <main>
+                <section id="template-selection">
+                    <p id="template-selection-status"></p>
+                    <div class="template-selection-actions">
+                        <a class="button" href="/layout/edit" hidden>Cancel</a>
+                        <button id="template-selection-continue">Continue to content upload</button>
+                    </div>
+                </section>
+            </main>
+            <div id="chatbot" class="chat-hidden"></div>
+        </body>""")
+        for path in ("main.css", "router.css", "pages/layout-template-select.css"):
+            self.page.add_style_tag(path=str(ROOT / "static/css" / path))
+
+        cancel = self.page.locator(".template-selection-actions a")
+        for width in (1280, 800, 390):
+            self.page.set_viewport_size({"width": width, "height": 900})
+            for panel_open in (False, True):
+                with self.subTest(width=width, panel_open=panel_open):
+                    self.page.locator("#chatbot").evaluate(
+                        "(element, open) => element.classList.toggle('chat-hidden', !open)", panel_open,
+                    )
+                    self.assertTrue(cancel.is_hidden())
+                    self.assertFalse(cancel.evaluate("element => { element.focus(); return document.activeElement === element; }"))
+                    bounds = self.page.evaluate("""() => {
+                        const main = document.querySelector("main").getBoundingClientRect();
+                        const actions = document.querySelector(".template-selection-actions").getBoundingClientRect();
+                        const button = document.querySelector("#template-selection-continue");
+                        const next = button.getBoundingClientRect();
+                        const clickable = document.elementFromPoint(
+                            (next.left + next.right) / 2, (next.top + next.bottom) / 2,
+                        ) === button;
+                        const cancel = document.querySelector(".template-selection-actions a");
+                        cancel.hidden = false;
+                        const cancelLeft = cancel.getBoundingClientRect().left;
+                        cancel.hidden = true;
+                        return {
+                            leftInset: cancelLeft - main.left,
+                            rightInset: main.right - next.right,
+                            topOffset: next.top - actions.top,
+                            clickable,
+                        };
+                    }""")
+                    self.assertAlmostEqual(bounds["leftInset"], bounds["rightInset"], places=1)
+                    self.assertAlmostEqual(bounds["topOffset"], -8, places=1)
+                    self.assertTrue(bounds["clickable"])
+
+    def test_template_selection_can_change_and_retry_after_failed_save(self) -> None:
+        posted = []
+
+        def save(route) -> None:
+            posted.append(route.request.post_data_json)
+            if len(posted) == 1:
+                route.fulfill(status=503, json={"detail": "Template save failed."})
+            else:
+                route.fulfill(json={"ok": True, "redirect": "/layout/edit"})
+
+        self.page.route("**/layout/template", save)
+        self.page.route("**/layout/edit", lambda route: route.fulfill(body="Poster"))
+        self.page.set_content("""
+            <section id="template-selection" data-pid="11" data-from-dimensions="false">
+                <button data-template="central" data-available="true" aria-pressed="true">Central</button>
+                <button data-template="vertical" data-available="true" aria-pressed="false">Vertical</button>
+                <button data-template="arena" data-available="false" aria-pressed="false" disabled>Arena</button>
+                <p id="template-selection-status"></p>
+                <button id="template-selection-continue">Return</button>
+            </section>
+        """)
+        self.page.add_script_tag(path=str(ROOT / "static/javascript/pages/layout-template-select.js"))
+        next_button = self.page.locator("#template-selection-continue")
+        next_button.click()
+        self.page.get_by_text("Template save failed.").wait_for()
+        self.assertTrue(next_button.is_enabled())
+        self.assertTrue(self.page.get_by_role("button", name="Arena").is_disabled())
+        self.page.get_by_role("button", name="Vertical").click()
+        self.assertEqual(self.page.get_by_role("button", name="Central").get_attribute("aria-pressed"), "false")
+        self.assertEqual(self.page.get_by_role("button", name="Vertical").get_attribute("aria-pressed"), "true")
+        self.assertEqual(len(posted), 1)
+        next_button.click()
+        self.page.wait_for_url("**/layout/edit")
+        self.assertEqual(posted, [
+            {"pid": 11, "template": "central", "from_dimensions": False},
+            {"pid": 11, "template": "vertical", "from_dimensions": False},
+        ])
+
+    def test_template_selection_outlines_only_designs(self) -> None:
+        self.page.set_content("""<body class="wikkit-page">
+            <section id="template-selection" data-pid="11" data-from-dimensions="false">
+                <button class="template-card current-template" data-template="central" data-available="true" aria-pressed="true">
+                    <span class="template-card-title">Current</span>
+                    <span class="template-preview" style="--poster-aspect: 1">
+                        <span class="sample-poster">Current design</span>
+                    </span>
+                    <span class="template-current-label">Current template</span>
+                </button>
+                <button class="template-card" data-template="vertical" data-available="true" aria-pressed="false">
+                    <span class="template-card-title">Other</span>
+                    <span class="template-preview" style="--poster-aspect: 1">
+                        <span class="sample-poster">Other design</span>
+                    </span>
+                </button>
+                <button class="template-card current-template" data-template="arena" data-available="false" aria-pressed="false" disabled>
+                    <span class="template-card-title">Unavailable</span>
+                    <span class="template-preview" style="--poster-aspect: 1">
+                        <span class="sample-poster">Unavailable design</span>
+                    </span>
+                    <span class="template-current-label">Current template; not available</span>
+                </button>
+                <p id="template-selection-status"></p>
+                <button id="template-selection-continue">Return</button>
+            </section>
+        </body>""")
+        self.page.add_style_tag(path=str(ROOT / "static/css/main.css"))
+        self.page.add_style_tag(path=str(ROOT / "static/css/pages/layout-template-select.css"))
+        cards = self.page.locator(".template-card")
+        for index, expected in enumerate(("4px", "2px", "4px")):
+            card = cards.nth(index)
+            self.assertEqual(card.evaluate("element => getComputedStyle(element).borderWidth"), "0px")
+            self.assertEqual(
+                card.locator(".sample-poster").evaluate("element => getComputedStyle(element).borderWidth"),
+                expected,
+            )
+        self.page.keyboard.press("Tab")
+        self.assertEqual(cards.first.evaluate("element => getComputedStyle(element).outlineStyle"), "none")
+        self.assertEqual(
+            cards.first.locator(".template-preview").evaluate("element => getComputedStyle(element).outlineStyle"),
+            "solid",
+        )
+        self.page.add_script_tag(path=str(ROOT / "static/javascript/pages/layout-template-select.js"))
+        cards.nth(1).click()
+        self.assertEqual(
+            cards.first.locator(".sample-poster").evaluate("element => getComputedStyle(element).borderWidth"),
+            "2px",
+        )
+        self.assertEqual(
+            cards.nth(1).locator(".sample-poster").evaluate("element => getComputedStyle(element).borderWidth"),
+            "4px",
+        )
 
     def test_title_drag_moves_dialog_and_preserves_anchored_controls(self) -> None:
         layout_style = self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))

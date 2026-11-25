@@ -551,6 +551,7 @@ async def review_page(request: Request) -> Response:
         ),
         pid=pid,
         next_page="/layout/edit",
+        from_template=request.query_params.get("from") == "template",
         graphics=graphics,
         graphics_data=[asdict(graphic) for graphic in graphics],
         sections=[

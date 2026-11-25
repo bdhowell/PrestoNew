@@ -572,9 +572,17 @@ class LayoutRouteTests(unittest.TestCase):
         })
         self.assertIn("36 x 48 in", document.get_element_by_id("current-dimensions").text_content())
         self.assertEqual(document.get_element_by_id("return-to-poster").text_content(), "Return to Poster")
+        self.assertEqual(
+            document.get_element_by_id("dimension-selection-continue").text_content().strip(),
+            "Return to poster layout",
+        )
         self.assertIs(wikkit.WORKFLOWS["layout-dimensions-edit"], routes.dimensions_edit_workflow)
         ordinary = html.fromstring(self.client.get("/layout/dimensions").text)
         self.assertFalse(ordinary.xpath('//*[@id="return-to-poster" or @id="current-dimensions"]'))
+        self.assertEqual(
+            ordinary.get_element_by_id("dimension-selection-continue").text_content().strip(),
+            "Continue to template selection",
+        )
 
     def test_template_page_shows_only_matching_orientations_and_marks_current(self) -> None:
         self.store.get.return_value = replace(DRAFT, template="central")
@@ -629,10 +637,29 @@ class LayoutRouteTests(unittest.TestCase):
             "/layout/template", headers={"referer": "https://attacker.test/layout/dimensions"},
         ).text)
         self.assertEqual(document.get_element_by_id("template-selection").get("data-from-dimensions"), "false")
+        self.assertTrue(document.xpath('//*[@id="template-selection"]//a[@hidden]'))
         self.assertEqual(
             document.get_element_by_id("template-selection").xpath('.//a[@href]/@href'),
             ["/layout/edit"],
         )
+
+    def test_template_continue_button_reflects_origin_and_valid_selection(self) -> None:
+        for path, template, label, disabled in (
+            ("/layout/template?from=dimensions", None, "Continue to content upload", True),
+            ("/layout/template?from=dimensions", "central", "Continue to content upload", False),
+            ("/layout/template", "central", "Return to poster layout", False),
+            ("/layout/template", "arena", "Return to poster layout", True),
+        ):
+            with self.subTest(path=path, template=template):
+                self.store.get.return_value = replace(DRAFT, template=template)
+                document = html.fromstring(self.client.get(path).text)
+                button = document.get_element_by_id("template-selection-continue")
+                self.assertEqual(button.text_content().strip(), label)
+                self.assertEqual(button.get("disabled") is not None, disabled)
+                pressed = document.xpath(
+                    '//*[@id="template-selection"]//button[@aria-pressed="true"]/@data-template',
+                )
+                self.assertEqual(pressed, [] if disabled else [template])
 
     def test_template_selection_from_dimensions_continues_to_upload(self) -> None:
         for path, headers in (
@@ -652,7 +679,7 @@ class LayoutRouteTests(unittest.TestCase):
             json={"pid": 11, "template": "central", "from_dimensions": True},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["redirect"], "/content/upload")
+        self.assertEqual(response.json()["redirect"], "/content/upload?from=template")
         self.assertEqual(
             self.client.post(
                 "/layout/template",
