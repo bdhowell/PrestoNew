@@ -1,14 +1,12 @@
 #dimension-picker {
     max-width: 60rem;
     margin: 2rem auto;
-    padding-bottom: 29rem;
 }
 
 @media (min-width: 50rem) {
     #dimension-picker {
         width: calc(100% - 25rem);
         margin-left: 0;
-        padding-bottom: 0;
     }
 }
 
@@ -24,7 +22,7 @@
 }
 
 .dimension-filters button.current-dimension,
-.wikkit-page .dimension-size.current-dimension,
+.wikkit-page .dimension-size[aria-pressed="true"],
 #current-dimensions {
     outline: 2px solid currentColor;
     outline-offset: 2px;
@@ -81,6 +79,21 @@
     border: 2px solid currentColor;
     background: white;
     box-sizing: border-box;
+}
+
+.dimension-selection-actions {
+    display: flex;
+    max-width: 70rem;
+    margin: 4rem auto 0;
+}
+
+#dimension-selection-continue {
+    position: relative;
+    top: -50px;
+    min-width: 0;
+    max-width: 100%;
+    margin-left: auto;
+    overflow-wrap: anywhere;
 }
 
 #dimension-correction {

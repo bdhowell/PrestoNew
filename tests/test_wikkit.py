@@ -339,7 +339,7 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(self.errors, [])
 
-    async def test_dimension_choice_saves_and_navigates_without_prompt(self) -> None:
+    async def test_dimension_choice_saves_only_when_continued(self) -> None:
         posted = []
 
         async def dimensions(route) -> None:
@@ -352,9 +352,106 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.route("**/layout/dimensions", dimensions)
         await self.page.route("**/layout/template*", lambda route: route.fulfill(body="Templates"))
         await self.page.goto("http://wikkit.test/layout/dimensions")
-        await self.page.get_by_role("button", name="36 by 24 in, width by height").click()
+        choice = self.page.get_by_role("button", name="36 by 24 in, width by height")
+        await choice.click()
+        await expect(choice).to_have_attribute("aria-pressed", "true")
+        await expect(self.page.get_by_role("button", name="48 by 36 in, width by height")).to_have_attribute(
+            "aria-pressed", "false",
+        )
+        self.assertEqual(posted, [])
+        await self.page.locator("#dimension-selection-continue").click()
         await self.page.wait_for_url("**/layout/template?from=dimensions", timeout=2000)
         self.assertEqual(posted, [{"dimensions": "24 in x 36 in"}])
+        self.assertEqual(self.errors, [])
+
+    async def test_dimension_continue_requires_a_selection_without_saved_dimensions(self) -> None:
+        self.current_poster = posters.Poster(11, "Poster", None, None, None, None, None, False, None, units="in")
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        next_button = self.page.locator("#dimension-selection-continue")
+        await expect(next_button).to_be_disabled()
+        choice = self.page.get_by_role("button", name="36 by 24 in, width by height")
+        await choice.click()
+        await expect(next_button).to_be_enabled()
+        await self.page.get_by_role("button", name="portrait", exact=True).click()
+        await self.page.get_by_role("button", name="landscape", exact=True).click()
+        await expect(choice).to_have_attribute("aria-pressed", "true")
+        self.assertEqual(self.errors, [])
+
+    async def test_dimension_choice_cancels_pending_custom_save(self) -> None:
+        posted = []
+
+        async def dimensions(route) -> None:
+            if route.request.method != "POST":
+                await route.fallback()
+                return
+            posted.append(route.request.post_data_json)
+            await route.fulfill(json={"ok": True, "redirect": "/layout/template?from=dimensions"})
+
+        await self.page.route("**/layout/dimensions", dimensions)
+        await self.page.route("**/layout/template*", lambda route: route.fulfill(body="Templates"))
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.evaluate("""() => {
+            const input = document.querySelector("#poster-dimensions");
+            input.value = "20 in x 40 in";
+            input.dispatchEvent(new Event("input", {bubbles: true}));
+            document.querySelector('[aria-label="36 by 24 in, width by height"]').click();
+        }""")
+        await self.page.wait_for_timeout(500)
+        self.assertEqual(posted, [])
+        await self.page.locator("#dimension-selection-continue").click()
+        await self.page.wait_for_url("**/layout/template?from=dimensions")
+        self.assertEqual(posted, [{"dimensions": "24 in x 36 in"}])
+        self.assertEqual(self.errors, [])
+
+    async def test_saved_square_dimensions_keep_available_filters(self) -> None:
+        self.current_poster = posters.Poster(11, "Poster", None, 100, 100, None, None, False, None, units="cm")
+        await self.page.route("**/layout/template*", lambda route: route.fulfill(body="Templates"))
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await expect(self.page.locator('[data-orientation="landscape"]')).to_have_attribute("aria-pressed", "true")
+        await self.page.get_by_role("button", name="portrait", exact=True).click()
+        await expect(self.page.locator("#dimension-sizes button").first).to_be_visible()
+        await expect(self.page.locator("#dimension-selection-continue")).to_be_enabled()
+        await self.page.locator("#dimension-selection-continue").click()
+        await self.page.wait_for_url("**/layout/template?from=dimensions")
+        self.assertEqual(self.errors, [])
+
+    async def test_dimension_continue_aligns_with_visible_content(self) -> None:
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.locator("body").evaluate(
+            "element => element.style.setProperty('--chat-window-transition', '0ms')",
+        )
+        await self.page.locator("#dimension-picker-status").evaluate(
+            "element => element.textContent = 'Dimensions could not be saved. Please try again.'",
+        )
+        button = self.page.locator("#dimension-selection-continue")
+        for width in (1280, 390):
+            await self.page.set_viewport_size({"width": width, "height": 900})
+            for panel_open in (False, True):
+                with self.subTest(width=width, panel_open=panel_open):
+                    await self.page.locator("#chatbot").evaluate(
+                        "(element, open) => element.classList.toggle('chat-hidden', !open)", panel_open,
+                    )
+                    await button.scroll_into_view_if_needed()
+                    bounds = await button.evaluate("""button => {
+                        const main = document.querySelector("main").getBoundingClientRect();
+                        const actions = document.querySelector(".dimension-selection-actions").getBoundingClientRect();
+                        const next = button.getBoundingClientRect();
+                        const status = document.querySelector("#dimension-picker-status").getBoundingClientRect();
+                        return {
+                            leftInset: actions.left - main.left,
+                            rightInset: main.right - next.right,
+                            topOffset: next.top - actions.top,
+                            clickable: document.elementFromPoint(
+                                (next.left + next.right) / 2, (next.top + next.bottom) / 2,
+                            ) === button,
+                            overlapsStatus: next.left < status.right && next.right > status.left
+                                && next.top < status.bottom && next.bottom > status.top,
+                        };
+                    }""")
+                    self.assertAlmostEqual(bounds["leftInset"], bounds["rightInset"], places=1)
+                    self.assertAlmostEqual(bounds["topOffset"], -50, places=1)
+                    self.assertTrue(bounds["clickable"])
+                    self.assertFalse(bounds["overlapsStatus"])
         self.assertEqual(self.errors, [])
 
     async def test_editor_dimensions_highlight_current_and_return(self) -> None:
@@ -368,7 +465,8 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await expect(current).to_have_attribute("aria-current", "true")
         await self.page.get_by_role("button", name="cm", exact=True).click()
         await expect(self.page.locator('[data-unit="in"]')).to_have_class("current-dimension")
-        await self.page.locator("#return-to-poster").click()
+        await expect(self.page.locator("#dimension-selection-continue")).to_have_text("Return to poster layout")
+        await self.page.locator("#dimension-selection-continue").click()
         await self.page.wait_for_url("**/layout/edit")
         self.assertEqual(self.errors, [])
 
@@ -392,6 +490,9 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
             "aria-current", "true",
         )
         await self.page.get_by_role("button", name="100 by 100 cm, width by height").click()
+        self.assertEqual(posted, [])
+        await expect(self.page.locator("#dimension-selection-continue")).to_have_text("Continue to template selection")
+        await self.page.locator("#dimension-selection-continue").click()
         await self.page.wait_for_url("**/layout/template?from=dimensions")
         self.assertEqual(posted, [{"dimensions": "100 cm x 100 cm", "from_editor": True}])
         self.current_poster = posters.Poster(11, "Poster", None, 101.5, 97, None, None, False, None, units="cm")
@@ -459,11 +560,12 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.goto("http://wikkit.test/layout/dimensions")
         choice = self.page.get_by_role("button", name="36 by 24 in, width by height")
         await choice.click()
+        await self.page.locator("#dimension-selection-continue").click()
         await expect(self.page.locator("#dimension-picker-status")).to_have_text("Poster width is too big.")
         await expect(self.page.locator("#dimension-correction")).to_be_visible()
         await expect(self.page.locator("#poster-dimensions")).to_have_value("24 in x 36 in")
         await expect(choice).to_be_enabled()
-        await choice.click()
+        await self.page.locator("#dimension-selection-continue").click()
         await self.page.wait_for_url("**/layout/template?from=dimensions")
         self.assertEqual(posted, [{"dimensions": "24 in x 36 in"}] * 2)
         self.assertEqual(self.errors, [])
@@ -491,7 +593,8 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
                     width, height_and_unit = (await choice.inner_text()).split(" × ")
                     height, label_unit = height_and_unit.split()
                     await choice.click(timeout=2000)
-                    await expect(choice).to_be_enabled()
+                    await expect(choice).to_have_attribute("aria-pressed", "true")
+                    await self.page.locator("#dimension-selection-continue").click()
                     self.assertEqual(posted[-1], f"{height} {label_unit} x {width} {label_unit}")
                     await expect(self.page.locator("#dimension-picker-status")).to_have_text("Size is not allowed.")
                     await expect(self.page.locator("#dimension-correction")).to_be_visible()

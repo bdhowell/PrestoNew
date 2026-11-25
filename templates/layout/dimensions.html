@@ -11,7 +11,7 @@
 {% endif %}
 <section id="dimension-picker" aria-label="Choose poster dimensions"
          data-sizes="{{ dimension_pairs|default([])|tojson|forceescape }}"
-         {% if from_editor and poster.width is not none and poster.height is not none %}
+         {% if poster.width is not none and poster.height is not none %}
          data-current="{{ {'width': poster.width, 'height': poster.height, 'units': poster.units}|tojson|forceescape }}"
          {% endif %} data-from-editor="{{ 'true' if from_editor else 'false' }}">
     {% if from_editor and poster.width is not none and poster.height is not none %}
@@ -45,6 +45,12 @@
     </fieldset>
     <p id="dimension-picker-status" role="status" aria-live="polite"></p>
 </section>
+<div class="dimension-selection-actions">
+    <button type="button" id="dimension-selection-continue"
+            {% if not from_editor and (poster.width is none or poster.height is none) %}disabled{% endif %}>
+        {{ 'Return to poster layout' if from_editor else 'Continue to template selection' }}
+    </button>
+</div>
 <section id="dimension-correction" hidden aria-label="Correct poster dimensions">
     <div id="poster-preview"><span id="poster-size"></span></div>
     <form id="dimension-form">

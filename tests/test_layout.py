@@ -572,9 +572,17 @@ class LayoutRouteTests(unittest.TestCase):
         })
         self.assertIn("36 x 48 in", document.get_element_by_id("current-dimensions").text_content())
         self.assertEqual(document.get_element_by_id("return-to-poster").text_content(), "Return to Poster")
+        self.assertEqual(
+            document.get_element_by_id("dimension-selection-continue").text_content().strip(),
+            "Return to poster layout",
+        )
         self.assertIs(wikkit.WORKFLOWS["layout-dimensions-edit"], routes.dimensions_edit_workflow)
         ordinary = html.fromstring(self.client.get("/layout/dimensions").text)
         self.assertFalse(ordinary.xpath('//*[@id="return-to-poster" or @id="current-dimensions"]'))
+        self.assertEqual(
+            ordinary.get_element_by_id("dimension-selection-continue").text_content().strip(),
+            "Continue to template selection",
+        )
 
     def test_template_page_shows_only_matching_orientations_and_marks_current(self) -> None:
         self.store.get.return_value = replace(DRAFT, template="central")
