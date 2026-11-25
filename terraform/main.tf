@@ -21,12 +21,13 @@ resource "google_sql_database_instance" "presto_postgres" {
     tier = var.tier
     ip_configuration {
       ipv4_enabled    = true
-      authorized_networks = [
-        for net in var.authorized_networks : {
-          name  = net.name
-          value = net.cidr
+      dynamic "authorized_networks" {
+        for_each = var.authorized_networks
+        content {
+          name  = authorized_networks.value.name
+          value = authorized_networks.value.cidr
         }
-      ]
+      }
     }
     activation_policy = "ALWAYS"
     backup_configuration {
