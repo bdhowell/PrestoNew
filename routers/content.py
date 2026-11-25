@@ -184,6 +184,7 @@ async def extract_page(request: Request) -> Response:
         "<p>I&rsquo;m reading through it now, extracting the text, tables, and images "
         "I can use for your poster. Please keep this page open while I work.</p>"
         + conversion_notice(),
+        user_name=identity.display_name(request),
         pending=[{"sid": item.sid, "filename": item.filename}
                  for item in items if item.parent is None and not item.extracted],
     )
@@ -550,6 +551,7 @@ async def review_page(request: Request) -> Response:
         ),
         pid=pid,
         next_page="/layout/edit",
+        from_template=request.query_params.get("from") == "template",
         graphics=graphics,
         graphics_data=[asdict(graphic) for graphic in graphics],
         sections=[

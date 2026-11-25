@@ -3,12 +3,14 @@ import unittest
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from urllib.parse import urlsplit
 
 import psycopg
 from playwright.async_api import async_playwright
 
 import content
 import elucidation
+import layout
 import posters
 from routers import content as routes
 from tests import test_content
@@ -109,6 +111,25 @@ class ReviewRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('data-next-page="/layout/edit"', response.text)
 
+    def test_review_button_reflects_template_flow(self) -> None:
+        for query, label in (
+            ("?from=template", "Continue"),
+            ("?from=template&xyzzy=arpa", "Continue"),
+            ("", "Return"),
+            ("?from=editor", "Return"),
+        ):
+            with self.subTest(query=query):
+                response = self.client.get(f"/content/review{query}")
+                self.assertIn(f'id="review-continue">{label} to poster layout</button>', response.text)
+
+    def test_return_to_upload_preserves_template_flow(self) -> None:
+        for path in ("/content/extract", "/content/elucidate"):
+            for query, href in (("?from=template", "/content/upload?from=template"),
+                                ("", "/content/upload")):
+                with self.subTest(path=path, query=query):
+                    response = self.client.get(path + query)
+                    self.assertIn(f'href="{href}">Back to source uploads</a>', response.text)
+
     def test_review_requires_signed_in_owner_and_draft(self) -> None:
         self.uid = None
         self.assertEqual(self.client.get("/content/review", follow_redirects=False).status_code, 303)
@@ -139,6 +160,78 @@ class ReviewRenderedBrowserTests(unittest.IsolatedAsyncioTestCase):
         test_content.ContentRouteTests.setUp(self)
         self.posters.content.return_value = ([("results", "<p>Results</p>")], [])
         self.sources.graphic_sources.return_value = []
+
+    async def test_template_flow_preserves_review_button_through_resumption(self) -> None:
+        self.client.app.include_router(layout.router)
+        self.posters.set_dimensions.return_value = True
+        self.sources.list_sources.return_value = [test_content.ITEM]
+        requests = []
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            self.addAsyncCleanup(browser.close)
+            page = await browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+
+            async def serve(route):
+                url = urlsplit(route.request.url)
+                if url.netloc != "testserver":
+                    await route.abort()
+                    return
+                requests.append(url.path + ("?" + url.query if url.query else ""))
+                if url.path == "/static/javascript/wikkit.js":
+                    await route.fulfill(content_type="text/javascript", body="""
+                        window.registerWikkitCommands = () => {};
+                        window.connect = () => ({
+                            say: async () => {},
+                            execute: async command => {
+                                if (command.does === 'redirect') location.assign(command.payload);
+                            },
+                            requestResponse: () => new Promise(() => {}),
+                        });
+                    """)
+                elif route.request.method == "POST" and url.path == "/layout/template":
+                    response = self.client.post(url.path, json=route.request.post_data_json)
+                    await route.fulfill(status=response.status_code, json=response.json())
+                elif route.request.method == "POST" and url.path in (
+                    "/content/finished", "/content/extracted", "/content/elucidate",
+                ):
+                    target = {
+                        "/content/finished": "/content/extract",
+                        "/content/extracted": "/content/elucidate",
+                        "/content/elucidate": "/content/evaluate",
+                    }[url.path]
+                    await route.fulfill(json={"ok": True, "redirect": target})
+                elif route.request.method == "POST" and url.path == "/content/evaluate/11":
+                    await route.fulfill(
+                        content_type="application/x-ndjson",
+                        body='{"type":"already-evaluated"}\n',
+                    )
+                else:
+                    response = self.client.get(route.request.url)
+                    await route.fulfill(
+                        status=response.status_code, body=response.content,
+                        content_type=response.headers.get("content-type", "text/plain"),
+                    )
+
+            await page.route("**/*", serve)
+            await page.goto("http://testserver/layout/template?from=dimensions")
+            await page.locator('[data-template="central"]').click()
+            await page.locator("#template-selection-continue").click()
+            await page.wait_for_url("**/content/upload?from=template")
+            await page.locator("#finish-upload").click()
+            await page.wait_for_url("**/content/evaluate?from=template")
+            self.assertIn("/content/extract?from=template", requests)
+            self.assertIn("/content/elucidate?from=template", requests)
+            await page.locator("#continue-review").click()
+            await page.wait_for_url("**/content/review?from=template")
+            button = page.locator("#review-continue")
+            self.assertEqual(await button.inner_text(), "Continue to poster layout")
+            await page.reload()
+            self.assertEqual(await button.inner_text(), "Continue to poster layout")
+            await page.goto("http://testserver/content/review")
+            self.assertEqual(await button.inner_text(), "Return to poster layout")
+            self.assertEqual(errors, [])
 
     async def test_math_graphics_are_typeset_when_panel_is_shown(self) -> None:
         self.posters.content.return_value = ([("introduction", "Introduction")], [])

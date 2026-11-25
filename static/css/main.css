@@ -74,9 +74,9 @@
   padding: 5px 0;
   border-bottom: 1px dotted yellow;
   color: #ddd;
-  font-family: "Aladin", system-ui;
-  font-weight: 400;
-  font-size: 1.5rem;
+  font-family: "DM Sans", system-ui;
+  font-weight: 300;
+  font-size: 1rem;
   font-style: normal;
 }
 
@@ -86,7 +86,8 @@
   min-height: 100vh;
   background: linear-gradient(160deg, #f6f0ff, #e4e5fb 60%, #d4edf0);
   color: #292343;
-  font-family: system-ui, sans-serif;
+  font-family: "DM Sans", system-ui, sans-serif;
+  font-optical-sizing: auto;
   line-height: 1.5;
 }
 
