@@ -39,5 +39,5 @@ variable "db_password" {
 variable "database_name" {
   description = "Initial database name created in the instance"
   type        = string
-  default     = "postgres"
+  default     = "presto"
 }
