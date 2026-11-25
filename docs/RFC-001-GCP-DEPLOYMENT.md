@@ -124,7 +124,10 @@ M6: Observability & Prod ◄── M5: Domain & Security ◄── M4: Cloud Run
   - Verify flag `cloudsql.enable_pgvector = "on"`.
   - Provision database `presto` and run initial `schema/schema.sql` migration.
 - [ ] **Issue 2.4:** **Secret Manager Configuration**
-  - Store `DATABASE_URL`, `SECRET_KEY`, and AI API keys (`OPENAI_API_KEY`) in Google Secret Manager.
+  - Store `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY` (at least 32 bytes), and AI API keys (`OPENAI_API_KEY`) in Google Secret Manager.
+- [ ] **Issue 2.5:** **Shared Redis Session Backend**
+  - Provision a private, access-controlled Redis service shared by all Cloud Run instances.
+  - Configure Cloud Run network access and inject `REDIS_URL` and `SECRET_KEY` before Milestone 4 smoke testing.
 
 ---
 
