@@ -28,10 +28,6 @@ resource "google_sql_database_instance" "presto_postgres" {
         }
       ]
     }
-    database_flags {
-      name  = "cloudsql.enable_pgvector"
-      value = "on"
-    }
     activation_policy = "ALWAYS"
     backup_configuration {
       enabled = true
