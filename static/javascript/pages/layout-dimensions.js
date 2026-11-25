@@ -20,6 +20,7 @@
         : current.height > current.width ? "portrait" : "square") : "landscape";
     let orientation = currentOrientation === "square" && !fromEditor ? "landscape" : currentOrientation;
     let selected = null;
+    let customInputPending = false;
     let active;
     let timer;
 
@@ -83,6 +84,7 @@
             button.append(rectangle, label);
             button.addEventListener("click", () => {
                 clearTimeout(timer);
+                customInputPending = false;
                 selected = { width, height, units };
                 for (const option of sizeList.querySelectorAll("button")) {
                     option.setAttribute("aria-pressed", String(option === button));
@@ -114,7 +116,9 @@
 
     next.addEventListener("click", () => {
         if (active) return;
-        if (selected) {
+        if (customInputPending) {
+            saveDimensions(input.value, true);
+        } else if (selected) {
             saveDimensions(`${selected.height} ${selected.units} x ${selected.width} ${selected.units}`, true);
         } else {
             window.location.assign(fromEditor ? "/layout/edit" : "/layout/template?from=dimensions");
@@ -182,6 +186,7 @@
         saveDimensions(input.value);
     });
     input.addEventListener("input", () => {
+        customInputPending = true;
         if (active) active.abort();
         clearTimeout(timer);
         timer = setTimeout(() => saveDimensions(input.value), 400);

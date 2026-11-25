@@ -570,6 +570,40 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(posted, [{"dimensions": "24 in x 36 in"}] * 2)
         self.assertEqual(self.errors, [])
 
+    async def test_continue_submits_correction_edited_before_debounce(self) -> None:
+        posted = []
+
+        async def dimensions(route) -> None:
+            if route.request.method != "POST":
+                await route.fallback()
+                return
+            posted.append(route.request.post_data_json)
+            if len(posted) == 1:
+                await route.fulfill(status=422, json={
+                    "errors": ["Poster width is too big."],
+                    "preview": {"width": 36, "height": 24, "units": "in"},
+                })
+            else:
+                await route.fulfill(json={"ok": True, "redirect": "/layout/template?from=dimensions"})
+
+        await self.page.route("**/layout/dimensions", dimensions)
+        await self.page.route("**/layout/template*", lambda route: route.fulfill(body="Templates"))
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        await self.page.get_by_role("button", name="36 by 24 in, width by height").click()
+        await self.page.locator("#dimension-selection-continue").click()
+        await expect(self.page.locator("#dimension-picker-status")).to_have_text("Poster width is too big.")
+        await self.page.locator("#poster-dimensions").evaluate("""input => {
+            input.value = "20 in x 30 in";
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            document.querySelector("#dimension-selection-continue").click();
+        }""")
+        await self.page.wait_for_url("**/layout/template?from=dimensions")
+        self.assertEqual(posted, [
+            {"dimensions": "24 in x 36 in"},
+            {"dimensions": "20 in x 30 in"},
+        ])
+        self.assertEqual(self.errors, [])
+
     async def test_every_dimension_size_can_be_selected(self) -> None:
         posted = []
 
