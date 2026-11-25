@@ -8,7 +8,11 @@ WORKDIR /app
 
 # Copy requirements and install them first for caching
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends poppler-utils && \
+    python -m playwright install --with-deps chromium && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy the rest of the application code
 COPY . .
