@@ -47,7 +47,7 @@
             const reply = await post("/content/extracted");
             if (reply.ok && reply.redirect) {
                 status.textContent = "Your content has been read.";
-                location.assign(reply.redirect);
+                location.assign(preserveTemplateOrigin(reply.redirect));
             } else {
                 status.textContent = "More source content is needed. Return to uploads to add files.";
             }

@@ -10,6 +10,6 @@
 <p id="elucidation-status" role="status" aria-live="polite">Wikkit is preparing your poster content.</p>
 <p>Please keep this page open while the review is running.</p>
 <button id="retry-elucidation" type="button" hidden>Try again</button>
-<p><a href="/content/upload">Back to source uploads</a></p>
+<p><a href="/content/upload{% if request.query_params.get('from') == 'template' %}?from=template{% endif %}">Back to source uploads</a></p>
 <script id="elucidation-messages" type="application/json">{{ progress_messages | tojson }}</script>
 {% endblock %}

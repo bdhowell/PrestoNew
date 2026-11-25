@@ -89,7 +89,8 @@ Dimensions are checked against the poster and conference rules.
 From the editor's Dimensions button, the page outlines the current size, units,
 and orientation, including square sizes, and offers Return to Poster on the page
 and in Wikkit. A successful change returns to the editor; the setup flow continues
-to content upload.
+to content upload. On the template page, select a design and use Continue or
+Return to save it and proceed.
 
 ### Poster auto-fit
 
@@ -170,6 +171,8 @@ estimated time. Only pending graphics that pass both thresholds are sent for
 evaluation; rejected graphics are shown
 as unsuitable without an assessment. When finished, it offers Continue to Poster
 on the page and in Wikkit; either proceeds to section review.
+Section review offers "Continue to poster layout" in the initial template flow
+and "Return to poster layout" when revisiting it from the editor.
 `/content/evaluate` is its own resumption page: returning after
 an interruption reuses current assessments and finishes the remaining graphics.
 Each image evaluation is recorded in `assessment` for its Materials and Methods

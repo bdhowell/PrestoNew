@@ -4,7 +4,7 @@
 {% block scripts %}<script src="/static/javascript/pages/layout-template-select.js" defer></script>{% endblock %}
 {% block content %}
 <h1>Choose a poster template</h1>
-<p>Preview layouts in {{ orientation }} orientation for {{ display_dimensions }}.</p>
+<p>Choose a layout in {{ orientation }} orientation for {{ display_dimensions }}, then continue.</p>
 <section id="template-selection" data-pid="{{ poster.pid }}"
          data-from-dimensions="{{ 'true' if from_dimensions else 'false' }}">
     {% if display_templates %}
@@ -17,6 +17,7 @@
                     data-template="{{ option }}"
                     data-available="{{ 'true' if option in available_templates else 'false' }}"
                     aria-label="Use the {{ option | capitalize }} template"
+                    aria-pressed="{{ 'true' if poster.template == option and option in available_templates else 'false' }}"
                     {% if poster.template == option %}aria-current="true"{% endif %}
                     {% if option not in available_templates %}disabled{% endif %}>
                 <span class="template-card-title">{{ option | capitalize }}</span>
@@ -85,6 +86,10 @@
     <p id="template-selection-status" role="status" aria-live="polite"></p>
     <div class="template-selection-actions">
         <a class="button" href="{{ cancel_url }}">Cancel</a>
+        <button type="button" id="template-selection-continue"
+                {% if poster.template not in available_templates %}disabled{% endif %}>
+            {{ 'Continue to content upload' if from_dimensions else 'Return to poster layout' }}
+        </button>
     </div>
 </section>
 {% endblock %}

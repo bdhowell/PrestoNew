@@ -27,7 +27,7 @@
     gap: 0.75rem;
     width: min(100%, 34rem);
     padding: 1rem;
-    border: 2px solid currentColor;
+    border: 0;
     border-radius: 0.5rem;
     background: white;
     color: #17283a;
@@ -37,11 +37,16 @@
 }
 
 .wikkit-page .template-card:focus-visible {
+    outline: none;
+}
+
+.wikkit-page .template-card:focus-visible .template-preview {
     outline: 3px solid #211a4d;
     outline-offset: 3px;
 }
 
-.wikkit-page .template-card.current-template {
+.wikkit-page .template-card[aria-pressed="true"] .sample-poster,
+.wikkit-page .template-card.current-template[data-available="false"] .sample-poster {
     border-width: 4px;
 }
 

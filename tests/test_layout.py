@@ -634,6 +634,24 @@ class LayoutRouteTests(unittest.TestCase):
             ["/layout/edit"],
         )
 
+    def test_template_continue_button_reflects_origin_and_valid_selection(self) -> None:
+        for path, template, label, disabled in (
+            ("/layout/template?from=dimensions", None, "Continue to content upload", True),
+            ("/layout/template?from=dimensions", "central", "Continue to content upload", False),
+            ("/layout/template", "central", "Return to poster layout", False),
+            ("/layout/template", "arena", "Return to poster layout", True),
+        ):
+            with self.subTest(path=path, template=template):
+                self.store.get.return_value = replace(DRAFT, template=template)
+                document = html.fromstring(self.client.get(path).text)
+                button = document.get_element_by_id("template-selection-continue")
+                self.assertEqual(button.text_content().strip(), label)
+                self.assertEqual(button.get("disabled") is not None, disabled)
+                pressed = document.xpath(
+                    '//*[@id="template-selection"]//button[@aria-pressed="true"]/@data-template',
+                )
+                self.assertEqual(pressed, [] if disabled else [template])
+
     def test_template_selection_from_dimensions_continues_to_upload(self) -> None:
         for path, headers in (
             ("/layout/template?from=dimensions", {}),
@@ -652,7 +670,7 @@ class LayoutRouteTests(unittest.TestCase):
             json={"pid": 11, "template": "central", "from_dimensions": True},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["redirect"], "/content/upload")
+        self.assertEqual(response.json()["redirect"], "/content/upload?from=template")
         self.assertEqual(
             self.client.post(
                 "/layout/template",

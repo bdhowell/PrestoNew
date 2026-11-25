@@ -381,6 +381,17 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
             {"does": "redirect", "payload": "/content/review"},
         ])
 
+    async def test_wikkit_continues_to_review_with_template_origin(self) -> None:
+        await self.page.route("https://evaluate.test/**", lambda route: route.fulfill(body=""))
+        await self.page.goto("https://evaluate.test/content/evaluate?from=template")
+        await self.load_page([{"type": "already-evaluated"}])
+        await self.page.locator("#continue-review").wait_for(state="visible")
+        await self.page.evaluate("window.answerWikkit('ok')")
+        await self.page.wait_for_function("commands.length === 1")
+        self.assertEqual(await self.page.evaluate("commands"), [
+            {"does": "redirect", "payload": "/content/review?from=template"},
+        ])
+
     async def test_page_button_continues_to_review(self) -> None:
         await self.page.route("https://evaluate.test/**", lambda route: route.fulfill(body="Review"))
         await self.page.goto("https://evaluate.test/")
