@@ -629,6 +629,7 @@ class LayoutRouteTests(unittest.TestCase):
             "/layout/template", headers={"referer": "https://attacker.test/layout/dimensions"},
         ).text)
         self.assertEqual(document.get_element_by_id("template-selection").get("data-from-dimensions"), "false")
+        self.assertTrue(document.xpath('//*[@id="template-selection"]//a[@hidden]'))
         self.assertEqual(
             document.get_element_by_id("template-selection").xpath('.//a[@href]/@href'),
             ["/layout/edit"],

@@ -107,6 +107,55 @@ class TemplateDialogTests(unittest.TestCase):
             self.assertLessEqual(bounds[child]["right"], bounds["button"]["right"])
             self.assertLessEqual(bounds[child]["bottom"], bounds["button"]["bottom"])
 
+    def test_template_actions_align_with_visible_content(self) -> None:
+        self.page.set_content("""<body class="wikkit-page" style="--chat-window-transition: 0ms">
+            <main>
+                <section id="template-selection">
+                    <p id="template-selection-status"></p>
+                    <div class="template-selection-actions">
+                        <a class="button" href="/layout/edit" hidden>Cancel</a>
+                        <button id="template-selection-continue">Continue to content upload</button>
+                    </div>
+                </section>
+            </main>
+            <div id="chatbot" class="chat-hidden"></div>
+        </body>""")
+        for path in ("main.css", "router.css", "pages/layout-template-select.css"):
+            self.page.add_style_tag(path=str(ROOT / "static/css" / path))
+
+        cancel = self.page.locator(".template-selection-actions a")
+        for width in (1280, 800, 390):
+            self.page.set_viewport_size({"width": width, "height": 900})
+            for panel_open in (False, True):
+                with self.subTest(width=width, panel_open=panel_open):
+                    self.page.locator("#chatbot").evaluate(
+                        "(element, open) => element.classList.toggle('chat-hidden', !open)", panel_open,
+                    )
+                    self.assertTrue(cancel.is_hidden())
+                    self.assertFalse(cancel.evaluate("element => { element.focus(); return document.activeElement === element; }"))
+                    bounds = self.page.evaluate("""() => {
+                        const main = document.querySelector("main").getBoundingClientRect();
+                        const actions = document.querySelector(".template-selection-actions").getBoundingClientRect();
+                        const button = document.querySelector("#template-selection-continue");
+                        const next = button.getBoundingClientRect();
+                        const clickable = document.elementFromPoint(
+                            (next.left + next.right) / 2, (next.top + next.bottom) / 2,
+                        ) === button;
+                        const cancel = document.querySelector(".template-selection-actions a");
+                        cancel.hidden = false;
+                        const cancelLeft = cancel.getBoundingClientRect().left;
+                        cancel.hidden = true;
+                        return {
+                            leftInset: cancelLeft - main.left,
+                            rightInset: main.right - next.right,
+                            topOffset: next.top - actions.top,
+                            clickable,
+                        };
+                    }""")
+                    self.assertAlmostEqual(bounds["leftInset"], bounds["rightInset"], places=1)
+                    self.assertAlmostEqual(bounds["topOffset"], -8, places=1)
+                    self.assertTrue(bounds["clickable"])
+
     def test_template_selection_can_change_and_retry_after_failed_save(self) -> None:
         posted = []
 

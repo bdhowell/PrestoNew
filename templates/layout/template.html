@@ -85,7 +85,7 @@
     {% endif %}
     <p id="template-selection-status" role="status" aria-live="polite"></p>
     <div class="template-selection-actions">
-        <a class="button" href="{{ cancel_url }}">Cancel</a>
+        <a class="button" href="{{ cancel_url }}" hidden>Cancel</a>
         <button type="button" id="template-selection-continue"
                 {% if poster.template not in available_templates %}disabled{% endif %}>
             {{ 'Continue to content upload' if from_dimensions else 'Return to poster layout' }}
