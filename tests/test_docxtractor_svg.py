@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 import pypdfium2 as pdfium
 from PIL import Image
 from docling_core.types.doc import (
-    BoundingBox, CoordOrigin, DoclingDocument, ImageRef, ProvenanceItem, Size,
+    BoundingBox, CoordOrigin, DoclingDocument, ImageRef, ProvenanceItem, Size, TableCell, TableData,
 )
 
 import docxtractor
@@ -85,6 +85,20 @@ def document_with_picture(rotation=0, origin=CoordOrigin.TOPLEFT):
         image=ImageRef.from_pil(Image.new("RGB", (120, 80), "red"), dpi=144),
         prov=ProvenanceItem(page_no=1, bbox=bbox, charspan=(0, 0)),
     )
+    return document
+
+
+def document_with_element(kind):
+    """A formula or table covering the same region as document_with_picture."""
+    document = DoclingDocument(name="sample")
+    document.add_page(page_no=1, size=Size(width=200, height=100))
+    prov = ProvenanceItem(page_no=1, bbox=BoundingBox(l=20, t=30, r=80, b=70), charspan=(0, 0))
+    if kind == "formula":
+        document.add_formula(text="x", prov=prov)
+    else:
+        cell = TableCell(text="x", start_row_offset_idx=0, end_row_offset_idx=1,
+                         start_col_offset_idx=0, end_col_offset_idx=1)
+        document.add_table(data=TableData(num_rows=1, num_cols=1, table_cells=[cell]), prov=prov)
     return document
 
 
@@ -191,12 +205,29 @@ class PdfPictureExtractionTests(unittest.TestCase):
 
     def test_render_failure_warns_and_falls_back_to_docling_crop(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(
-                docxtractor, "_render_picture", side_effect=docxtractor.ExtractionError("boom")):
+                docxtractor, "_render_region", side_effect=docxtractor.ExtractionError("boom")):
             manifest = self.extract(sample_pdf(raster=True), document_with_picture(), directory)
             with Image.open(self.asset(manifest)) as image:
                 self.assertEqual(image.size, (120, 80))
                 self.assertEqual(image.getpixel((115, 40)), (255, 0, 0))
             self.assertIn("Full-resolution rendering unavailable", manifest["warnings"][0])
+
+    def test_formulas_and_tables_render_at_vector_resolution(self):
+        # The 60x40 pt region is vector content, so it renders at VECTOR_RENDER_DPI
+        # rather than Docling's DOCLING_IMAGES_SCALE crop.
+        scale = docxtractor.VECTOR_RENDER_DPI / 72
+        for kind in ("formula", "table"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                manifest = self.extract(sample_pdf(), document_with_element(kind), directory)
+                element = manifest["elements"][0]
+                self.assertEqual(element["kind"], kind)
+                self.assertTrue(element["asset"].endswith("-full.png"))
+                self.assertEqual(element["raster_assets"], [element["asset"]])
+                with Image.open(self.asset(manifest)) as image:
+                    self.assertAlmostEqual(image.size[0], 60 * scale, delta=2)
+                    self.assertAlmostEqual(image.size[1], 40 * scale, delta=2)
+                    self.assertEqual(image.getpixel((10, image.size[1] - 10)), (255, 0, 0))
+                self.assertEqual(manifest["warnings"], [])
 
     def test_conversion_failure_warns_and_falls_back_to_png(self):
         with tempfile.TemporaryDirectory() as directory, \

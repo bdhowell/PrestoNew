@@ -15,7 +15,8 @@ Inputs: local paths, bytes, or binary streams. Bytes/streams require filename.
 Outputs: JSON-compatible dict, extraction.json, full Docling document JSON,
 text with inline element markers, and picture/table/formula crops where
 available. PDF pictures are stored as SVG when their cropped page content is
-pure vector, otherwise as PNG. All output asset paths are relative to output_dir. Each call creates
+pure vector, otherwise as PNG rendered from the PDF at native resolution
+(VECTOR_RENDER_DPI for formulas, tables and other vector content). All output asset paths are relative to output_dir. Each call creates
 a separate run directory. Element IDs are Docling JSON pointers scoped to that
 run. The full document retains original text, hierarchy, provenance, annotations,
 chart data and native references.
@@ -205,11 +206,13 @@ def _image_density(page: Any, region: tuple[float, float, float, float]) -> floa
     return densest
 
 
-def _render_picture(pdf: Any, document: Any, prov: Any, output: Path) -> float:
+def _render_region(pdf: Any, document: Any, prov: Any, output: Path) -> float:
     """Render a Docling region from the PDF at its native resolution; return the DPI used.
 
-    The page is drawn as a viewer shows it, so transparent images are composited
-    over the white page and anything drawn over them is included.
+    Regions containing images render at the densest image's resolution; pure
+    vector or text regions (formulas, most tables) at VECTOR_RENDER_DPI. The page
+    is drawn as a viewer shows it, so transparent images are composited over the
+    white page and anything drawn over them is included.
     """
     page, box, width, height, xs, ys = _picture_region(pdf, document, prov)
     try:
@@ -320,7 +323,8 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
                 except Exception as exc:
                     warnings.append(f'Image unavailable for {item.self_ref} '
                                     f'region {prov_index}: {type(exc).__name__}')
-                if kind == 'picture' and pdf is not None and prov_index < len(item.prov):
+                in_pdf = pdf is not None and prov_index < len(getattr(item, 'prov', []))
+                if kind == 'picture' and in_pdf:
                     svg_path = asset_dir / f'{kind}-{len(elements)+1:04d}-{prov_index+1}.svg'
                     try:
                         if _extract_picture_svg(pdf, document, item.prov[prov_index], svg_path):
@@ -330,11 +334,15 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
                     except (ExtractionError, OSError, subprocess.SubprocessError, pdfium.PdfiumError) as exc:
                         warnings.append(f'SVG extraction unavailable for {item.self_ref} '
                                         f'region {prov_index}: {exc}')
-                    # Not pure vector: render the region from the PDF at full resolution
-                    # instead of using Docling's lower-resolution page crop.
+                elif kind == 'picture' and pdf is not None:
+                    warnings.append(f'SVG extraction unavailable for {item.self_ref}: no provenance.')
+                if in_pdf:
+                    # Pictures that are not pure vector, formulas and tables: render the
+                    # region from the PDF at full resolution instead of using Docling's
+                    # DOCLING_IMAGES_SCALE page crop.
                     png_path = asset_dir / f'{kind}-{len(elements)+1:04d}-{prov_index+1}-full.png'
                     try:
-                        _render_picture(pdf, document, item.prov[prov_index], png_path)
+                        _render_region(pdf, document, item.prov[prov_index], png_path)
                         rendered = png_path.relative_to(directory).as_posix()
                         images.append(rendered)
                         raster_assets.append(rendered)
@@ -342,8 +350,6 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
                     except (ExtractionError, OSError, ValueError, pdfium.PdfiumError) as exc:
                         warnings.append(f'Full-resolution rendering unavailable for {item.self_ref} '
                                         f'region {prov_index}: {exc}')
-                elif kind == 'picture' and pdf is not None:
-                    warnings.append(f'SVG extraction unavailable for {item.self_ref}: no provenance.')
                 if raster_path is not None:
                     images.append(raster_path)
                     raster_assets.append(raster_path)

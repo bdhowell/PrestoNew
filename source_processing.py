@@ -265,7 +265,15 @@ def spreadsheet_html(data: bytes) -> str:
         workbook.close()
 
 
-def extract(filename: str, data: bytes) -> Processed:
+def extract(filename: str, data: bytes, *, enrich_formulas: bool | None = None,
+            formula_preset: str | None = None, timeout: float = 600) -> Processed:
+    """Convert a document into text and assets.
+
+    enrich_formulas overrides DOCLING_ENABLE_ENRICHMENT for formula LaTeX only;
+    picture descriptions and chart extraction still follow the setting.
+    formula_preset selects the Docling formula model (e.g. "codeformulav2" or
+    "granite_docling"); the service's default is used when it is omitted.
+    """
     suffix = Path(filename).suffix.lower()
     if suffix not in docxtractor.SUPPORTED:
         raise ValueError("This document type is not supported.")
@@ -277,12 +285,15 @@ def extract(filename: str, data: bytes) -> Processed:
     if not os.environ.get("DOCLING_SERVICE_URL"):
         raise ProcessingError("DOCLING_SERVICE_URL is required to extract documents.")
     enrich = enrichment_enabled()
+    formulas = enrich if enrich_formulas is None else enrich_formulas
     with tempfile.TemporaryDirectory(prefix="presto-extract-") as directory:
         try:
             manifest = docxtractor.extract_document(
                 data, filename=filename, output_dir=directory,
                 native_iwork=True,
-                describe_pictures=enrich, extract_chart_data=enrich, enrich_formulas=enrich,
+                describe_pictures=enrich, extract_chart_data=enrich, enrich_formulas=formulas,
+                timeout=timeout,
+                service_options={"code_formula_preset": formula_preset} if formulas and formula_preset else None,
             )
         except (docxtractor.ExtractionError, DoclingServiceClientError, ValueError) as error:
             status = getattr(error, "status_code", None)
