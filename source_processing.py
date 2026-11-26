@@ -60,6 +60,8 @@ class Asset:
     width: int | None = None
     height: int | None = None
     description_image: bytes | None = field(default=None, repr=False)
+    # Width the asset occupies in its source document (e.g. on the PDF page), when known.
+    physical_width_mm: float | None = None
 
 
 @dataclass
@@ -82,7 +84,18 @@ def image_dimensions(data: bytes) -> tuple[int, int]:
         raise ValueError("The image cannot be decoded safely.") from error
 
 
-def image_complexity_score(data: bytes) -> float:
+# Images of known physical size are resampled to this density before complexity
+# scoring, so the score does not depend on the resolution they were extracted at.
+COMPLEXITY_REFERENCE_DPI = 144.0
+
+
+def image_complexity_score(data: bytes, *, physical_width_mm: float | None = None) -> float:
+    """Edge density with a penalty for large areas.
+
+    With physical_width_mm, the image is first resampled to COMPLEXITY_REFERENCE_DPI
+    of that width (downsampling only), so a figure scores the same whether it was
+    extracted at 144 or 600 DPI. Without it, the image's own pixels are used.
+    """
     try:
         power = float(os.environ.get("IMAGE_COMPLEXITY_PENALTY_POWER", "0.15"))
     except ValueError as error:
@@ -94,6 +107,12 @@ def image_complexity_score(data: bytes) -> float:
         if image is None:
             raise ValueError("The image could not be decoded for complexity evaluation.")
         height, width = image.shape
+        if physical_width_mm is not None:
+            target = round(physical_width_mm / 25.4 * COMPLEXITY_REFERENCE_DPI)
+            if 0 < target < width:
+                height = max(1, round(height * target / width))
+                width = target
+                image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
         edges = cv2.Canny(cv2.GaussianBlur(image, (3, 3), 0), 50, 150)
         area = width * height
         return float(np.count_nonzero(edges) / area / max((area / 10000.0) ** power, 1.0))
@@ -103,13 +122,17 @@ def image_complexity_score(data: bytes) -> float:
 
 def image_legibility_score(
     data: bytes, mimetype: str, *, raster_data: bytes | None = None,
+    physical_width_mm: float | None = None,
 ) -> float:
     """Score image feature visibility using configured size and viewing conditions.
 
-    SVG assets are evaluated from the raster crop paired with the original
-    vector asset by document extraction, while their intrinsic vector width
-    determines the physical display size. DIAGRAM_LEGIBILITY_* environment
-    settings control the display DPI, viewing distance and visibility model.
+    The image is judged at a physical display width. With physical_width_mm (the
+    asset's width in its source document), that is the width times
+    DIAGRAM_LEGIBILITY_SOURCE_MAGNIFICATION, whatever the pixel resolution.
+    Otherwise it is the pixel width at DIAGRAM_LEGIBILITY_DISPLAY_DPI, or for SVG
+    the intrinsic vector width. SVG assets are evaluated from the raster crop
+    paired with the vector asset by document extraction. Other
+    DIAGRAM_LEGIBILITY_* settings control viewing distance and the visibility model.
     """
     is_svg = mimetype == "image/svg+xml"
     if is_svg:
@@ -124,7 +147,12 @@ def image_legibility_score(
     if image is None:
         raise ValueError("The image could not be decoded for legibility evaluation.")
     params, target_angle, display_dpi = _diagram_legibility_parameters()
-    display_width_mm = display_width_px * 25.4 / display_dpi
+    if physical_width_mm is not None:
+        if not math.isfinite(physical_width_mm) or physical_width_mm <= 0:
+            raise ValueError("The physical width must be finite and positive.")
+        display_width_mm = physical_width_mm * _positive_setting("DIAGRAM_LEGIBILITY_SOURCE_MAGNIFICATION", 1.5)
+    else:
+        display_width_mm = display_width_px * 25.4 / display_dpi
     categories = ("text", "line", "symbol", "detail")
     thresholds = Thresholds(
         stroke={category: target_angle for category in categories},
@@ -150,15 +178,18 @@ def image_legibility_score(
     return evaluation.score
 
 
+def _positive_setting(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except ValueError as error:
+        raise ProcessingError(f"{name} must be a number.") from error
+    if not math.isfinite(value) or value <= 0:
+        raise ProcessingError(f"{name} must be finite and positive.")
+    return value
+
+
 def _diagram_legibility_parameters() -> tuple[ViewingParameters, float, float]:
-    def number(name: str, default: float) -> float:
-        try:
-            value = float(os.environ.get(name, str(default)))
-        except ValueError as error:
-            raise ProcessingError(f"{name} must be a number.") from error
-        if not math.isfinite(value) or value <= 0:
-            raise ProcessingError(f"{name} must be finite and positive.")
-        return value
+    number = _positive_setting
 
     distance = number("DIAGRAM_LEGIBILITY_VIEWING_DISTANCE", 36.0)
     unit = os.environ.get("DIAGRAM_LEGIBILITY_VIEWING_DISTANCE_UNIT", "inches").lower()
@@ -265,7 +296,15 @@ def spreadsheet_html(data: bytes) -> str:
         workbook.close()
 
 
-def extract(filename: str, data: bytes) -> Processed:
+def extract(filename: str, data: bytes, *, enrich_formulas: bool | None = None,
+            formula_preset: str | None = None, timeout: float = 600) -> Processed:
+    """Convert a document into text and assets.
+
+    enrich_formulas overrides DOCLING_ENABLE_ENRICHMENT for formula LaTeX only;
+    picture descriptions and chart extraction still follow the setting.
+    formula_preset selects the Docling formula model (e.g. "codeformulav2" or
+    "granite_docling"); the service's default is used when it is omitted.
+    """
     suffix = Path(filename).suffix.lower()
     if suffix not in docxtractor.SUPPORTED:
         raise ValueError("This document type is not supported.")
@@ -277,12 +316,15 @@ def extract(filename: str, data: bytes) -> Processed:
     if not os.environ.get("DOCLING_SERVICE_URL"):
         raise ProcessingError("DOCLING_SERVICE_URL is required to extract documents.")
     enrich = enrichment_enabled()
+    formulas = enrich if enrich_formulas is None else enrich_formulas
     with tempfile.TemporaryDirectory(prefix="presto-extract-") as directory:
         try:
             manifest = docxtractor.extract_document(
                 data, filename=filename, output_dir=directory,
                 native_iwork=True,
-                describe_pictures=enrich, extract_chart_data=enrich, enrich_formulas=enrich,
+                describe_pictures=enrich, extract_chart_data=enrich, enrich_formulas=formulas,
+                timeout=timeout,
+                service_options={"code_formula_preset": formula_preset} if formulas and formula_preset else None,
             )
         except (docxtractor.ExtractionError, DoclingServiceClientError, ValueError) as error:
             status = getattr(error, "status_code", None)
@@ -345,6 +387,7 @@ def extract(filename: str, data: bytes) -> Processed:
                 table_html.append(text)
             assets = element.get("assets", [])
             raster_assets = element.get("raster_assets", [])
+            widths_pt = element.get("asset_widths_pt", [])
             for index, relative in enumerate(assets):
                 path = (root / relative).resolve()
                 if not path.is_relative_to(root):
@@ -360,10 +403,12 @@ def extract(filename: str, data: bytes) -> Processed:
                     if not raster_path.is_relative_to(root):
                         raise ProcessingError("The converter returned an invalid asset path.")
                     description_image = raster_path.read_bytes()
+                width_pt = widths_pt[index] if index < len(widths_pt) else None
                 result.assets.append(Asset(
                     f"{Path(filename).stem}-{element['kind']}-{number}-{index + 1}{extension}",
                     asset_data, mimetype, "svg" if is_svg and kind == "image" else kind,
                     text, description, width, height, description_image,
+                    width_pt * 25.4 / 72 if width_pt else None,
                 ))
             if not assets and text:
                 extension = ".tex" if kind == "math expression" else ".txt"

@@ -15,7 +15,8 @@ Inputs: local paths, bytes, or binary streams. Bytes/streams require filename.
 Outputs: JSON-compatible dict, extraction.json, full Docling document JSON,
 text with inline element markers, and picture/table/formula crops where
 available. PDF pictures are stored as SVG when their cropped page content is
-pure vector, otherwise as PNG. All output asset paths are relative to output_dir. Each call creates
+pure vector, otherwise as PNG rendered from the PDF at native resolution
+(VECTOR_RENDER_DPI for formulas, tables and other vector content). All output asset paths are relative to output_dir. Each call creates
 a separate run directory. Element IDs are Docling JSON pointers scoped to that
 run. The full document retains original text, hierarchy, provenance, annotations,
 chart data and native references.
@@ -53,7 +54,20 @@ from typing import Any, BinaryIO
 from collections.abc import Callable
 from uuid import uuid4
 
+import ctypes
+
 import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_c
+
+# Docling renders page images at this scale (2.0 = 144 DPI); its crops are the fallback.
+DOCLING_IMAGES_SCALE = 2.0
+# PDF pictures that are not pure vector are rendered from the PDF at the resolution
+# of their densest embedded image, within these limits. Regions without embedded
+# images (vector content that pdftocairo cannot express as pure SVG) use VECTOR_RENDER_DPI.
+MIN_RENDER_DPI = 72 * DOCLING_IMAGES_SCALE
+MAX_RENDER_DPI = 600
+VECTOR_RENDER_DPI = 300
+MAX_RENDER_PIXELS = 40_000_000
 
 SUPPORTED = {'.pdf', '.docx', '.pptx', '.xlsx', '.xlsm', '.md', '.pages', '.numbers', '.key'}
 IWORK = {'.pages': 'Pages', '.numbers': 'Numbers', '.key': 'Keynote'}
@@ -105,8 +119,13 @@ def _pure_vector_svg(path: Path) -> bool:
                    for elem in root.iter())
 
 
-def _extract_picture_svg(pdf: Any, document: Any, prov: Any, output: Path) -> bool:
-    """Convert a Docling picture region in displayed page coordinates to SVG."""
+def _picture_region(pdf: Any, document: Any, prov: Any) -> tuple[Any, Any, float, float, tuple[float, ...], tuple[float, ...]]:
+    """Open the page of a Docling region and locate the region on it.
+
+    Returns the page (the caller closes it), the region's box in displayed
+    top-left coordinates, the displayed page size, and the x and y coordinates
+    of the region's corners in PDF user space.
+    """
     page_index = prov.page_no - 1
     if page_index < 0 or page_index >= len(pdf) or prov.page_no not in document.pages:
         raise ExtractionError(f'Invalid page number {prov.page_no}')
@@ -134,6 +153,90 @@ def _extract_picture_svg(pdf: Any, document: Any, prov: Any, output: Path) -> bo
             raise ExtractionError(f'Unsupported PDF rotation {rotation}')
         points = [page_point(x, y) for x in (box.l, box.r) for y in (box.t, box.b)]
         xs, ys = zip(*points)
+    except BaseException:
+        page.close()
+        raise
+    return page, box, width, height, xs, ys
+
+
+def _image_density(page: Any, region: tuple[float, float, float, float]) -> float | None:
+    """Return the highest pixels-per-point of embedded images overlapping a user-space region.
+
+    Images inside form XObjects are placed by composing each form's matrix, since
+    pdfium reports a nested object's matrix in its form's coordinate space.
+    """
+    x0, y0, x1, y1 = region
+    densest = None
+
+    def compose(m, n):  # apply m, then n (PDF row-vector convention)
+        a1, b1, c1, d1, e1, f1 = m
+        a2, b2, c2, d2, e2, f2 = n
+        return (a1 * a2 + b1 * c2, a1 * b2 + b1 * d2, c1 * a2 + d1 * c2,
+                c1 * b2 + d1 * d2, e1 * a2 + f1 * c2 + e2, e1 * b2 + f1 * d2 + f2)
+
+    def walk(handles, parent, depth):
+        nonlocal densest
+        for handle in handles:
+            raw = pdfium_c.FS_MATRIX()
+            if not pdfium_c.FPDFPageObj_GetMatrix(handle, raw):
+                continue
+            matrix = compose((raw.a, raw.b, raw.c, raw.d, raw.e, raw.f), parent)
+            kind = pdfium_c.FPDFPageObj_GetType(handle)
+            if kind == pdfium_c.FPDF_PAGEOBJ_FORM and depth < 16:
+                count = pdfium_c.FPDFFormObj_CountObjects(handle)
+                walk((pdfium_c.FPDFFormObj_GetObject(handle, i) for i in range(count)),
+                     matrix, depth + 1)
+            elif kind == pdfium_c.FPDF_PAGEOBJ_IMAGE:
+                pw, ph = ctypes.c_uint(), ctypes.c_uint()
+                if not pdfium_c.FPDFImageObj_GetImagePixelSize(handle, ctypes.byref(pw), ctypes.byref(ph)):
+                    continue
+                a, b, c, d, e, f = matrix
+                corners = [(e + u * a + v * c, f + u * b + v * d) for u in (0, 1) for v in (0, 1)]
+                cx, cy = zip(*corners)
+                if min(cx) >= x1 or max(cx) <= x0 or min(cy) >= y1 or max(cy) <= y0:
+                    continue
+                # The image's unit square maps to vectors (a, b) and (c, d) in points.
+                x_extent, y_extent = math.hypot(a, b), math.hypot(c, d)
+                if x_extent and y_extent:
+                    density = max(pw.value / x_extent, ph.value / y_extent)
+                    densest = density if densest is None else max(densest, density)
+
+    count = pdfium_c.FPDFPage_CountObjects(page.raw)
+    walk((pdfium_c.FPDFPage_GetObject(page.raw, i) for i in range(count)), (1, 0, 0, 1, 0, 0), 0)
+    return densest
+
+
+def _render_region(pdf: Any, document: Any, prov: Any, output: Path) -> float:
+    """Render a Docling region from the PDF at its native resolution; return the DPI used.
+
+    Regions containing images render at the densest image's resolution; pure
+    vector or text regions (formulas, most tables) at VECTOR_RENDER_DPI. The page
+    is drawn as a viewer shows it, so transparent images are composited over the
+    white page and anything drawn over them is included.
+    """
+    page, box, width, height, xs, ys = _picture_region(pdf, document, prov)
+    try:
+        density = _image_density(page, (min(xs), min(ys), max(xs), max(ys)))
+        dpi = density * 72 if density else VECTOR_RENDER_DPI
+        dpi = min(max(dpi, MIN_RENDER_DPI), MAX_RENDER_DPI)
+        pixels = (box.r - box.l) * (box.b - box.t) * (dpi / 72) ** 2
+        if pixels > MAX_RENDER_PIXELS:
+            dpi *= math.sqrt(MAX_RENDER_PIXELS / pixels)
+        bitmap = page.render(scale=dpi / 72, crop=(box.l, height - box.b, width - box.r, box.t))
+        try:
+            bitmap.to_pil().convert('RGB').save(output, format='PNG')
+        finally:
+            bitmap.close()
+        return dpi
+    finally:
+        page.close()
+
+
+def _extract_picture_svg(pdf: Any, document: Any, prov: Any, output: Path) -> bool:
+    """Convert a Docling picture region in displayed page coordinates to SVG."""
+    page, _, _, _, xs, ys = _picture_region(pdf, document, prov)
+    page_index = prov.page_no - 1
+    try:
         with tempfile.TemporaryDirectory(prefix='docling-svg-') as temporary:
             cropped = pdfium.PdfDocument.new()
             try:
@@ -208,6 +311,7 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
                 record['data'] = _json(item.data)
             images = []
             raster_assets = []
+            widths = []  # Each asset's width on the PDF page in points, when known.
             # Preserve crops for each provenance region, e.g. multipage tables.
             for prov_index in range(max(1, len(getattr(item, 'prov', [])))):
                 raster_path = None
@@ -220,23 +324,44 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
                 except Exception as exc:
                     warnings.append(f'Image unavailable for {item.self_ref} '
                                     f'region {prov_index}: {type(exc).__name__}')
-                if kind == 'picture' and pdf is not None and prov_index < len(item.prov):
+                in_pdf = pdf is not None and prov_index < len(getattr(item, 'prov', []))
+                bbox = item.prov[prov_index].bbox if in_pdf else None
+                width_pt = abs(bbox.r - bbox.l) if bbox is not None else None
+                if kind == 'picture' and in_pdf:
                     svg_path = asset_dir / f'{kind}-{len(elements)+1:04d}-{prov_index+1}.svg'
                     try:
                         if _extract_picture_svg(pdf, document, item.prov[prov_index], svg_path):
                             images.append(svg_path.relative_to(directory).as_posix())
                             raster_assets.append(raster_path)
+                            widths.append(width_pt)
                             continue
                     except (ExtractionError, OSError, subprocess.SubprocessError, pdfium.PdfiumError) as exc:
                         warnings.append(f'SVG extraction unavailable for {item.self_ref} '
                                         f'region {prov_index}: {exc}')
                 elif kind == 'picture' and pdf is not None:
                     warnings.append(f'SVG extraction unavailable for {item.self_ref}: no provenance.')
+                if in_pdf:
+                    # Pictures that are not pure vector, formulas and tables: render the
+                    # region from the PDF at full resolution instead of using Docling's
+                    # DOCLING_IMAGES_SCALE page crop.
+                    png_path = asset_dir / f'{kind}-{len(elements)+1:04d}-{prov_index+1}-full.png'
+                    try:
+                        _render_region(pdf, document, item.prov[prov_index], png_path)
+                        rendered = png_path.relative_to(directory).as_posix()
+                        images.append(rendered)
+                        raster_assets.append(rendered)
+                        widths.append(width_pt)
+                        continue
+                    except (ExtractionError, OSError, ValueError, pdfium.PdfiumError) as exc:
+                        warnings.append(f'Full-resolution rendering unavailable for {item.self_ref} '
+                                        f'region {prov_index}: {exc}')
                 if raster_path is not None:
                     images.append(raster_path)
                     raster_assets.append(raster_path)
+                    widths.append(width_pt)
             record['assets'] = images
             record['raster_assets'] = raster_assets
+            record['asset_widths_pt'] = widths
             record['asset'] = images[0] if images else None
             if not images:
                 warnings.append(f'No image crop available for {item.self_ref}.')
@@ -355,7 +480,7 @@ def extract_document(
     run_dir = root / f'extraction-{uuid4().hex}'
     run_dir.mkdir(parents=True)
     opts = {'do_ocr': True, 'do_table_structure': True, 'include_images': True,
-            'include_page_images': True, 'images_scale': 2.0,
+            'include_page_images': True, 'images_scale': DOCLING_IMAGES_SCALE,
             'do_formula_enrichment': enrich_formulas,
             'do_picture_classification': True,
             'do_picture_description': describe_pictures,

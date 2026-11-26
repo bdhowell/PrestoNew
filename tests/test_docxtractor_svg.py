@@ -2,6 +2,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import zlib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,16 +11,37 @@ from unittest.mock import Mock, patch
 import pypdfium2 as pdfium
 from PIL import Image
 from docling_core.types.doc import (
-    BoundingBox, CoordOrigin, DoclingDocument, ImageRef, ProvenanceItem, Size,
+    BoundingBox, CoordOrigin, DoclingDocument, ImageRef, ProvenanceItem, Size, TableCell, TableData,
 )
 
 import docxtractor
 
 
-def sample_pdf(*, raster=False, rotation=0):
-    content = (b"q 50 0 0 50 30 40 cm /Im0 Do Q" if raster else
-               b"1 0 0 rg 30 40 50 50 re f")
-    resources = b"/Resources << /XObject << /Im0 5 0 R >> >>" if raster else b"/Resources << >>"
+def image_stream(width, height):
+    """A zlib-compressed RGB image: left half red, right half blue."""
+    row = b"\xff\x00\x00" * (width // 2) + b"\x00\x00\xff" * (width - width // 2)
+    data = zlib.compress(row * height)
+    return (f"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} "
+            f"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode "
+            f"/Length {len(data)} >>\nstream\n").encode() + data + b"\nendstream"
+
+
+def sample_pdf(*, raster=False, rotation=0, image_size=(1, 1), form=False,
+               placement=b"50 0 0 50 30 40"):
+    """A 250x150 pt page (crop box 200x100) with a red square or a 50 pt image at (30, 40).
+
+    placement is the image's cm matrix, for positioning it elsewhere. With form=True the image is drawn at the unit square inside a form XObject,
+    and the form is scaled into place, so the image's own matrix is form-relative.
+    """
+    if not raster:
+        content = b"1 0 0 rg 30 40 50 50 re f"
+        resources = b"/Resources << >>"
+    elif form:
+        content = b"q " + placement + b" cm /Fm0 Do Q"
+        resources = b"/Resources << /XObject << /Fm0 5 0 R >> >>"
+    else:
+        content = b"q " + placement + b" cm /Im0 Do Q"
+        resources = b"/Resources << /XObject << /Im0 5 0 R >> >>"
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
@@ -28,11 +50,15 @@ def sample_pdf(*, raster=False, rotation=0):
          + resources + b" /Contents 4 0 R >>"),
         b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
     ]
-    if raster:
+    if raster and form:
+        inner = b"q 1 0 0 1 0 0 cm /Im0 Do Q"
         objects.append(
-            b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB "
-            b"/BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 7 >>\nstream\nFF0000>\nendstream"
+            b"<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] "
+            b"/Resources << /XObject << /Im0 6 0 R >> >> /Length " + str(len(inner)).encode()
+            + b" >>\nstream\n" + inner + b"\nendstream"
         )
+    if raster:
+        objects.append(image_stream(*image_size))
     output = bytearray(b"%PDF-1.4\n")
     offsets = []
     for number, obj in enumerate(objects, 1):
@@ -59,6 +85,20 @@ def document_with_picture(rotation=0, origin=CoordOrigin.TOPLEFT):
         image=ImageRef.from_pil(Image.new("RGB", (120, 80), "red"), dpi=144),
         prov=ProvenanceItem(page_no=1, bbox=bbox, charspan=(0, 0)),
     )
+    return document
+
+
+def document_with_element(kind):
+    """A formula or table covering the same region as document_with_picture."""
+    document = DoclingDocument(name="sample")
+    document.add_page(page_no=1, size=Size(width=200, height=100))
+    prov = ProvenanceItem(page_no=1, bbox=BoundingBox(l=20, t=30, r=80, b=70), charspan=(0, 0))
+    if kind == "formula":
+        document.add_formula(text="x", prov=prov)
+    else:
+        cell = TableCell(text="x", start_row_offset_idx=0, end_row_offset_idx=1,
+                         start_col_offset_idx=0, end_col_offset_idx=1)
+        document.add_table(data=TableData(num_rows=1, num_cols=1, table_cells=[cell]), prov=prov)
     return document
 
 
@@ -98,18 +138,98 @@ class PdfPictureExtractionTests(unittest.TestCase):
                     self.assertEqual(manifest["warnings"], [])
                     path = Path(manifest["output_directory"]) / manifest["elements"][0]["asset"]
                     self.assertEqual(path.suffix, ".svg")
+                    self.assertEqual(manifest["elements"][0]["asset_widths_pt"], [60])
                     root = ET.fromstring(path.read_bytes())
                     self.assertEqual([float(n) for n in root.attrib["viewBox"].split()],
                                      [0, 0, 60, 40])
 
-    def test_bitmap_region_uses_original_png(self):
+    def asset(self, manifest):
+        return Path(manifest["output_directory"]) / manifest["elements"][0]["asset"]
+
+    def test_bitmap_region_is_rendered_from_the_pdf(self):
+        # A 1x1 image is far below Docling's 144 DPI, so the render uses that minimum.
+        # The region (user x 30-90) is wider than the (blue) image (x 30-80), so its
+        # right sixth is white page rather than Docling's all-red crop.
         with tempfile.TemporaryDirectory() as directory:
             manifest = self.extract(sample_pdf(raster=True), document_with_picture(), directory)
-            path = Path(manifest["output_directory"]) / manifest["elements"][0]["asset"]
+            path = self.asset(manifest)
             self.assertEqual(path.suffix, ".png")
+            self.assertEqual(manifest["elements"][0]["raster_assets"], [manifest["elements"][0]["asset"]])
             with Image.open(path) as image:
                 self.assertEqual(image.size, (120, 80))
+                self.assertEqual(image.mode, "RGB")
+                self.assertEqual(image.getpixel((115, 40)), (255, 255, 255))
+                self.assertEqual(image.getpixel((40, 40)), (0, 0, 255))
             self.assertEqual(manifest["warnings"], [])
+
+    def test_render_matches_embedded_image_resolution_at_every_rotation(self):
+        # The image covers the whole 200x100 pt crop box at 1000x500 px: 5 px/pt (360 DPI),
+        # so the 60x40 pt region becomes 300x200 px wherever rotation puts it.
+        for rotation in (0, 90, 180, 270):
+            for origin in (CoordOrigin.TOPLEFT, CoordOrigin.BOTTOMLEFT):
+                with self.subTest(rotation=rotation, origin=origin), \
+                        tempfile.TemporaryDirectory() as directory:
+                    pdf_data = sample_pdf(raster=True, rotation=rotation, image_size=(1000, 500),
+                                          placement=b"200 0 0 100 10 20")
+                    manifest = self.extract(pdf_data, document_with_picture(rotation, origin), directory)
+                    with Image.open(self.asset(manifest)) as image:
+                        self.assertEqual(image.size, (300, 200))
+                        rendered = image.convert("RGB")
+                    # Same pixels as rendering the whole displayed page at 5x and cropping the box.
+                    with pdfium.PdfDocument(pdf_data) as pdf:
+                        page = pdf[0]
+                        try:
+                            full = page.render(scale=5).to_pil().convert("RGB")
+                        finally:
+                            page.close()
+                    expected = full.crop((100, 150, 400, 350))
+                    difference = sum(abs(a - b) for p, q in zip(rendered.getdata(), expected.getdata())
+                                     for a, b in zip(p, q)) / (300 * 200 * 3)
+                    self.assertLess(difference, 2)
+
+    def test_render_composes_form_matrices_for_nested_images(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pdf_data = sample_pdf(raster=True, image_size=(250, 250), form=True)
+            manifest = self.extract(pdf_data, document_with_picture(), directory)
+            with Image.open(self.asset(manifest)) as image:
+                self.assertEqual(image.size, (300, 200))
+
+    def test_render_resolution_is_capped(self):
+        # 1000 px across 50 pt would be 1440 DPI; it is capped at MAX_RENDER_DPI.
+        with tempfile.TemporaryDirectory() as directory:
+            pdf_data = sample_pdf(raster=True, image_size=(1000, 1000))
+            manifest = self.extract(pdf_data, document_with_picture(), directory)
+            scale = docxtractor.MAX_RENDER_DPI / 72
+            with Image.open(self.asset(manifest)) as image:
+                self.assertAlmostEqual(image.size[0], 60 * scale, delta=2)
+                self.assertAlmostEqual(image.size[1], 40 * scale, delta=2)
+
+    def test_render_failure_warns_and_falls_back_to_docling_crop(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+                docxtractor, "_render_region", side_effect=docxtractor.ExtractionError("boom")):
+            manifest = self.extract(sample_pdf(raster=True), document_with_picture(), directory)
+            with Image.open(self.asset(manifest)) as image:
+                self.assertEqual(image.size, (120, 80))
+                self.assertEqual(image.getpixel((115, 40)), (255, 0, 0))
+            self.assertIn("Full-resolution rendering unavailable", manifest["warnings"][0])
+
+    def test_formulas_and_tables_render_at_vector_resolution(self):
+        # The 60x40 pt region is vector content, so it renders at VECTOR_RENDER_DPI
+        # rather than Docling's DOCLING_IMAGES_SCALE crop.
+        scale = docxtractor.VECTOR_RENDER_DPI / 72
+        for kind in ("formula", "table"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                manifest = self.extract(sample_pdf(), document_with_element(kind), directory)
+                element = manifest["elements"][0]
+                self.assertEqual(element["kind"], kind)
+                self.assertTrue(element["asset"].endswith("-full.png"))
+                self.assertEqual(element["raster_assets"], [element["asset"]])
+                self.assertEqual(element["asset_widths_pt"], [60])
+                with Image.open(self.asset(manifest)) as image:
+                    self.assertAlmostEqual(image.size[0], 60 * scale, delta=2)
+                    self.assertAlmostEqual(image.size[1], 40 * scale, delta=2)
+                    self.assertEqual(image.getpixel((10, image.size[1] - 10)), (255, 0, 0))
+                self.assertEqual(manifest["warnings"], [])
 
     def test_conversion_failure_warns_and_falls_back_to_png(self):
         with tempfile.TemporaryDirectory() as directory, \
