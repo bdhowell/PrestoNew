@@ -718,14 +718,17 @@ class SourceStore(PosterStore):
                 return Source(*row[:11], legibility=row[11] if len(row) > 11 else None)
         kind = await self._asset_kind(connection, pid, asset) if extracted else asset.kind
         complexity = (
-            await run_in_threadpool(processing.image_complexity_score, asset.data)
+            await run_in_threadpool(
+                processing.image_complexity_score, asset.data,
+                physical_width_mm=asset.physical_width_mm,
+            )
             if asset.mimetype.startswith("image/") and asset.mimetype != "image/svg+xml"
             else None
         )
         legibility = (
             await run_in_threadpool(
                 processing.image_legibility_score, asset.data, asset.mimetype,
-                raster_data=asset.description_image,
+                raster_data=asset.description_image, physical_width_mm=asset.physical_width_mm,
             )
             if asset.mimetype.startswith("image/")
             else None

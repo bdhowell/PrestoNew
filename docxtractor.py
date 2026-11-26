@@ -311,6 +311,7 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
                 record['data'] = _json(item.data)
             images = []
             raster_assets = []
+            widths = []  # Each asset's width on the PDF page in points, when known.
             # Preserve crops for each provenance region, e.g. multipage tables.
             for prov_index in range(max(1, len(getattr(item, 'prov', [])))):
                 raster_path = None
@@ -324,12 +325,15 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
                     warnings.append(f'Image unavailable for {item.self_ref} '
                                     f'region {prov_index}: {type(exc).__name__}')
                 in_pdf = pdf is not None and prov_index < len(getattr(item, 'prov', []))
+                bbox = item.prov[prov_index].bbox if in_pdf else None
+                width_pt = abs(bbox.r - bbox.l) if bbox is not None else None
                 if kind == 'picture' and in_pdf:
                     svg_path = asset_dir / f'{kind}-{len(elements)+1:04d}-{prov_index+1}.svg'
                     try:
                         if _extract_picture_svg(pdf, document, item.prov[prov_index], svg_path):
                             images.append(svg_path.relative_to(directory).as_posix())
                             raster_assets.append(raster_path)
+                            widths.append(width_pt)
                             continue
                     except (ExtractionError, OSError, subprocess.SubprocessError, pdfium.PdfiumError) as exc:
                         warnings.append(f'SVG extraction unavailable for {item.self_ref} '
@@ -346,6 +350,7 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
                         rendered = png_path.relative_to(directory).as_posix()
                         images.append(rendered)
                         raster_assets.append(rendered)
+                        widths.append(width_pt)
                         continue
                     except (ExtractionError, OSError, ValueError, pdfium.PdfiumError) as exc:
                         warnings.append(f'Full-resolution rendering unavailable for {item.self_ref} '
@@ -353,8 +358,10 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
                 if raster_path is not None:
                     images.append(raster_path)
                     raster_assets.append(raster_path)
+                    widths.append(width_pt)
             record['assets'] = images
             record['raster_assets'] = raster_assets
+            record['asset_widths_pt'] = widths
             record['asset'] = images[0] if images else None
             if not images:
                 warnings.append(f'No image crop available for {item.self_ref}.')

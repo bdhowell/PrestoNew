@@ -138,6 +138,7 @@ class PdfPictureExtractionTests(unittest.TestCase):
                     self.assertEqual(manifest["warnings"], [])
                     path = Path(manifest["output_directory"]) / manifest["elements"][0]["asset"]
                     self.assertEqual(path.suffix, ".svg")
+                    self.assertEqual(manifest["elements"][0]["asset_widths_pt"], [60])
                     root = ET.fromstring(path.read_bytes())
                     self.assertEqual([float(n) for n in root.attrib["viewBox"].split()],
                                      [0, 0, 60, 40])
@@ -223,6 +224,7 @@ class PdfPictureExtractionTests(unittest.TestCase):
                 self.assertEqual(element["kind"], kind)
                 self.assertTrue(element["asset"].endswith("-full.png"))
                 self.assertEqual(element["raster_assets"], [element["asset"]])
+                self.assertEqual(element["asset_widths_pt"], [60])
                 with Image.open(self.asset(manifest)) as image:
                     self.assertAlmostEqual(image.size[0], 60 * scale, delta=2)
                     self.assertAlmostEqual(image.size[1], 40 * scale, delta=2)
