@@ -59,7 +59,7 @@ input[name="height"] {
 #poster-canvas {
     --gutter: 6rem;
     font-size: calc(2rem * var(--poster-font-scale, 1));
-    line-height: 1.6;
+    line-height: 1.5;
     position: absolute;
     top: 0;
     left: 0;
