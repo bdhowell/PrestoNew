@@ -139,7 +139,11 @@ def clean_section(
         elif section not in MATH_SECTIONS | ASSESSED_SECTIONS:
             raise ValueError("Graphics are not available for this section.")
         else:
-            allowed = {item.sid: item for item in suitable_graphics(section, sources)}
+            types = ("math",) if section in MATH_SECTIONS else GRAPHIC_TYPES
+            allowed = {
+                item.sid: item for item in sources
+                if item.kind != "qrcode" and item.type in types
+            }
     replacements: dict[str, str] = {}
     for node in nodes:
         if node.getparent() is None or any(parent in nodes for parent in node.iterancestors()):

@@ -168,6 +168,10 @@ and its queue has not been cancelled. The queue-aware JSON endpoints are
 The original auto-fit endpoint without `run_id` still applies revisions directly.
 Application and rollback compare saved section contents under a database lock.
 Pending editor changes are saved before rollback or application.
+Content flushing waits for follow-up saves, and a failed cancellation is reported
+without blocking subsequent cancellation attempts. Gutter resizing saves on
+release rather than during a held drag, so intermediate positions do not trigger
+new profiling and auto-fit queues.
 
 The graphics evaluation page reuses current assessments for Materials and Methods
 and Results. It screens graphics before reporting the evaluation count and
@@ -196,6 +200,10 @@ recalculate their stored scores.
 threshold are omitted from the editor's suggested graphics. Threshold changes
 apply immediately to stored scores; penalty-power changes affect newly processed
 images. Existing placed graphics remain editable.
+Saving or resizing a placed graphic checks poster ownership and section/type
+restrictions, not its current assessment rating; text saves can make assessments
+stale. The Materials and Methods/Results insertion picker still requires a
+suitable current assessment.
 Known-density raster images are downsampled, never upsampled, to
 `IMAGE_COMPLEXITY_REFERENCE_DPI` (default `144`) before complexity scoring.
 Images without known density retain their original pixels.

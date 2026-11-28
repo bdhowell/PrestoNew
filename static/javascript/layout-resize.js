@@ -77,7 +77,7 @@ window.posterSizingReady = (async () => {
         apply();
         dirty = true;
         clearTimeout(timer);
-        timer = setTimeout(save, 300);
+        if (!dragging) timer = setTimeout(save, 300);
     }
 
     function setShares(row, shares) {
@@ -174,6 +174,7 @@ window.posterSizingReady = (async () => {
                     : firstBounds.height + secondBounds.height,
                 moved: false,
             };
+            clearTimeout(timer);
             event.currentTarget.setPointerCapture(event.pointerId);
             if (event.currentTarget === separator) separator.focus();
             else toggle.focus();
@@ -194,7 +195,7 @@ window.posterSizingReady = (async () => {
             if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
             if (document.activeElement === separator) toggle.focus();
             for (const item of handles) item.separator.hidden = true;
-            if (moved) {
+            if (moved || dirty) {
                 clearTimeout(timer);
                 save();
             }

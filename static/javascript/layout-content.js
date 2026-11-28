@@ -12,6 +12,7 @@
     let controller = null;
     let starting = null;
     let cancellation = Promise.resolve();
+    let cancellationTail = cancellation;
     const suggestions = new Map();
     const requested = new Set();
     const bulkRequested = new Set();
@@ -115,8 +116,9 @@
         for (const [element, state] of states) {
             clearTimeout(state.timer);
             state.ready = true;
-            if (state.saving) await state.pending;
+            while (state.saving) await state.pending;
             await save(element, state);
+            while (state.saving) await state.pending;
             if (state.dirty || state.saving) {
                 throw new Error("Save your text changes before using auto-fit. Please try again.");
             }
@@ -202,7 +204,7 @@
         const pending = starting;
         currentRun = null;
         starting = null;
-        cancellation = cancellation.then(async () => {
+        cancellation = cancellationTail.then(async () => {
             const id = run || (pending && await pending);
             if (!id) return;
             await post("/cancel", {run_id: id, cancel_only: true});
@@ -230,7 +232,7 @@
                 await applyRevisions(result.command.payload, false);
             }
         });
-        cancellation.catch(report);
+        cancellationTail = cancellation.catch(report);
         return cancellation;
     };
     window.waitFitCancellation = () => cancellation;

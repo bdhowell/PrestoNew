@@ -259,6 +259,35 @@ class GraphicsCatalogRouteTests(unittest.TestCase):
             "content": '<span class="graphic" data-sid="999" data-type="png"></span>',
         }).status_code, 422)
 
+    def test_resizing_a_saved_graphic_does_not_require_a_current_assessment(self) -> None:
+        self.store.save_section.return_value = True
+        source = replace(self.sources.graphic_sources.return_value[1], complexity=0.1)
+        self.sources.graphic_sources.return_value = [source]
+        value = (
+            '<p>Results text</p><span class="graphic" data-sid="22" data-type="png" '
+            'data-width="200" data-height="100"><img src="/layout/source?sid=22"></span>'
+        )
+        response = self.client.post("/layout/content", json={
+            "pid": 11, "section": "results", "content": value,
+        })
+        self.assertEqual(response.status_code, 200)
+        for assessments in ({}, {"results": {"rating": "weakly"}}):
+            with self.subTest(assessments=assessments):
+                self.sources.graphic_sources.return_value = [replace(source, assessments=assessments)]
+                catalog = self.client.get("/layout/graphics", params={"pid": 11, "section": "results"})
+                self.assertEqual(catalog.json()["graphics"], [])
+                response = self.client.post("/layout/content", json={
+                    "pid": 11, "section": "results",
+                    "content": value.replace('data-width="200"', 'data-width="300"')
+                        .replace('data-height="100"', 'data-height="150"'),
+                })
+                self.assertEqual(response.status_code, 200, response.text)
+                saved = response.json()["content"]
+                self.assertIn("<p>Results text</p>", saved)
+                self.assertIn('style="width:300px;height:150px"', saved)
+                self.assertIn('src="/layout/source?sid=22"', saved)
+                self.assertEqual(self.store.save_section.await_args.args[3], saved)
+
     def test_qr_status_and_generation_are_owner_scoped(self) -> None:
         self.sources.qr_exists.return_value = True
         self.sources.save_qr.return_value = '<p>QR saved</p>'
