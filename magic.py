@@ -1041,8 +1041,7 @@ async def auto_fit(
                     await _render_section(page, name, prior)
                     cribbed.append(name)
                     messages.append(
-                        f"I&rsquo;m sorry {{{{user.username}}}}, I can&rsquo;t find a longer version of "
-                        f"your {label} text that fits without losing clarity."
+                        f"{label} could benefit from some addiitional content. Consider adding a graphic."
                     )
                 elif revision != prior:
                     revisions[name] = revision

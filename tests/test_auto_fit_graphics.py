@@ -245,6 +245,24 @@ class GraphicAutoFitDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["command"]["payload"]["revisions"],
                          {"introduction": "<p>Full original introduction text</p>"})
 
+    async def test_sparse_text_without_a_fitting_revision_suggests_more_content(self):
+        self.saved["introduction"] = "<p>Short intro</p>"
+        self.connection.execute.return_value.fetchall.return_value = [
+            ("introduction", self.saved["introduction"], "<p>Full original introduction text</p>", "hash"),
+        ]
+        self.text_fit.return_value = None
+        with patch.object(magic, "_profile_page", AsyncMock(return_value=profile(
+            results=section(), introduction=section(height=30),
+        ))):
+            result = await magic.auto_fit(11, ["introduction"], uid=7)
+        self.assertEqual(result["cribbed"], ["introduction"])
+        self.assertIn(
+            "introduction could benefit from some addiitional content. Consider adding a graphic.",
+            result["say"],
+        )
+        self.assertEqual(result["command"]["payload"]["revisions"], {})
+        magic._render_section.assert_awaited_with(self.page, "introduction", self.saved["introduction"])
+
     async def test_sparse_text_at_original_length_is_not_rewritten(self):
         with patch.object(magic, "_profile_page", AsyncMock(return_value=profile(
             results=section(), introduction=section(height=30),
