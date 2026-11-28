@@ -42,6 +42,28 @@ class MathJaxSourceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
+    async def test_section_header_text_aligns_with_content_in_all_header_styles(self) -> None:
+        await self.page.set_content("""<body class="blue">
+            <div class="layout" style="width: 900px">
+                <div class="section">
+                    <div class="header"><span>Heading</span></div>
+                    <div class="content"><p>Body</p></div>
+                </div>
+            </div></body>""")
+        for stylesheet in ("layout", "themes"):
+            await self.page.add_style_tag(path=str(ROOT / f"static/css/{stylesheet}.css"))
+        for classes in ("blue", "blue colored-section-headers",
+                        "blue colored-poster-header colored-section-headers"):
+            await self.page.locator("body").evaluate("(el, value) => el.className = value", classes)
+            for font_size in (16, 32):
+                await self.page.locator(".layout").evaluate(
+                    "(el, size) => el.style.fontSize = `${size}px`", font_size,
+                )
+                heading = await self.page.locator(".header span").bounding_box()
+                content = await self.page.locator(".content p").bounding_box()
+                with self.subTest(classes=classes, font_size=font_size):
+                    self.assertAlmostEqual(heading["x"], content["x"], delta=0.1)
+
     async def test_flush_header_doubles_height_and_aligns_text_with_body(self) -> None:
         await self.page.set_content("""<body class="blue colored-section-headers">
             <div class="layout" style="width: 900px">

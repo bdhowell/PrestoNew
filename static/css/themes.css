@@ -177,7 +177,7 @@
 }
 
 .colored-section-headers .layout .section > .header {
-    padding: 0.4em 4rem 0.5em 4rem;
+    padding: 0.4em 0 0.5em;
     margin-bottom: 1rem;
     color: var(--heading-text-color);
     background: var(--heading-background-color);
@@ -190,7 +190,7 @@
     margin-bottom: 0;
     width: 100%;
     min-height: calc(2lh + 0.4em);
-    padding-inline: 3rem;
+    padding-inline: 4rem;
     border-radius: 0;
 }
 
