@@ -19,14 +19,12 @@ body:has(> #chatbot) > main {
     padding-inline: min(1.5rem, max(0px, (100vw - var(--wikkit-panel-space)) / 2));
 }
 
-body:has(> #chatbot) > #poster-container,
-body:has(> #chatbot) > #controls {
+body:has(> #chatbot) > #poster-container {
     width: calc(100% - var(--wikkit-panel-space));
 }
 
 body:has(> #chatbot) > #controls {
     min-width: 0;
-    padding-inline: min(0.5rem, max(0px, (100vw - var(--wikkit-panel-space)) / 2));
 }
 
 #chatbot {
@@ -34,7 +32,7 @@ body:has(> #chatbot) > #controls {
     position: fixed;
     top: min(var(--chat-menu-bottom, 0px), 100vh);
     right: 0;
-    bottom: 0;
+    bottom: var(--chat-controls-bottom, 0px);
     z-index: 9999;
     display: flex;
     flex-direction: column;

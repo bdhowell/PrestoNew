@@ -925,6 +925,36 @@ class WikkitBrowserTests(unittest.IsolatedAsyncioTestCase):
                     self.assertGreater(direction * (frames[0]["inputHeight"] - frames[-1]["inputHeight"]), 1)
         self.assertEqual(self.errors, [])
 
+    async def test_chatlog_ends_above_layout_controls(self) -> None:
+        self.prompt_on_connect = False
+        await self.page.goto("http://wikkit.test/layout/dimensions")
+        for height in ("4rem", "8rem"):
+            await self.page.evaluate("""height => {
+                document.querySelector('#controls').style.height = height;
+            }""", height)
+            await self.page.wait_for_function("""() => {
+                const bot = document.querySelector('#chatbot');
+                const controls = document.querySelector('#controls');
+                return Math.abs(bot.getBoundingClientRect().bottom
+                    - controls.getBoundingClientRect().top) < 1;
+            }""")
+            self.assertLessEqual(
+                await self.page.locator("#chatlog").evaluate(
+                    "element => element.getBoundingClientRect().bottom"
+                ),
+                await self.page.locator("#controls").evaluate(
+                    "element => element.getBoundingClientRect().top"
+                ),
+            )
+            self.assertAlmostEqual(
+                await self.page.locator("#controls").evaluate(
+                    "element => element.getBoundingClientRect().right"
+                ),
+                await self.page.evaluate("window.innerWidth"),
+                delta=1,
+            )
+        self.assertEqual(self.errors, [])
+
     async def test_signout_waits_for_login_button_without_a_socket(self) -> None:
         client = TestClient(app)
         self.addCleanup(client.close)
