@@ -253,6 +253,12 @@ input[name="height"] {
     background: #211a4d;
 }
 
+#editor-controls #appearance[aria-expanded="true"],
+#editor-controls #extended[aria-expanded="true"] {
+    background: #fff;
+    color: #443a80;
+}
+
 #editor-controls button[aria-pressed="true"] {
     background: #211a4d;
     border-color: #fff;

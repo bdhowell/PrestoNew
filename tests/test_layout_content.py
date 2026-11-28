@@ -319,6 +319,29 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.locator("#appearance").get_attribute("aria-expanded"), "false")
         self.assertEqual(await self.page.locator(":focus").get_attribute("id"), "appearance")
 
+    async def test_open_toolbar_group_inverts_only_its_button_colors(self) -> None:
+        await self.page.locator("#appearance").click()
+        await self.page.mouse.move(0, 0)
+
+        async def colors(group: str) -> list[str]:
+            return await self.page.locator(f"#{group}").evaluate("""button => {
+                const style = getComputedStyle(button);
+                return [style.color, style.backgroundColor];
+            }""")
+
+        defaults = {group: await colors(group) for group in ("appearance", "extended")}
+        for selected in ("extended", "appearance"):
+            await self.page.locator(f"#{selected}").click()
+            await self.page.mouse.move(0, 0)
+            for group in ("appearance", "extended"):
+                expected = defaults[group][::-1] if group == selected else defaults[group]
+                self.assertEqual(await colors(group), expected)
+            await self.page.locator(f"#{selected}").hover()
+            self.assertEqual(await colors(selected), defaults[selected][::-1])
+        await self.page.keyboard.press("Escape")
+        await self.page.mouse.move(0, 0)
+        self.assertEqual(await colors("appearance"), defaults["appearance"])
+
     async def test_sources_button_redirects_to_content_review(self) -> None:
         await self.page.locator("#sources").click()
         await self.page.wait_for_url("https://presto.test/content/review")
