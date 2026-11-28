@@ -97,7 +97,7 @@ body:has(> #chatbot) > #controls {
 
 .chatbot-launcher {
     position: fixed;
-    bottom: 1rem;
+    bottom: var(--chat-controls-bottom, 1rem);
     right: 0;
     z-index: 9999;
     padding: 0.5rem 0.75rem;

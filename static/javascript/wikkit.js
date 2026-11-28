@@ -116,7 +116,7 @@
         if (controls) {
             const alignWithControls = () => {
                 const bottom = window.innerHeight - controls.getBoundingClientRect().top;
-                chatbot.style.setProperty("--chat-controls-bottom", `${Math.max(0, bottom)}px`);
+                document.body.style.setProperty("--chat-controls-bottom", `${Math.max(0, bottom)}px`);
             };
             alignWithControls();
             new ResizeObserver(alignWithControls).observe(controls, {box: "border-box"});

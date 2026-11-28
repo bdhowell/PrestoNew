@@ -1058,6 +1058,40 @@ class ChatbotToggleTests(unittest.IsolatedAsyncioTestCase):
         })""")
         self.assertAlmostEqual(positions["chatbot"]["top"], positions["menuBottom"], delta=0.1)
         self.assertAlmostEqual(positions["chatbot"]["width"], 256, delta=0.1)
+        await self.page.evaluate("wikkit.execute({does: 'hide-chat'})")
+        launcher = await self.page.locator(".chatbot-launcher").bounding_box()
+        self.assertAlmostEqual(
+            self.page.viewport_size["height"] - launcher["y"] - launcher["height"], 16, delta=0.1,
+        )
+
+    async def test_chatbot_launcher_tracks_controls_height(self) -> None:
+        await self.page.goto("https://presto.test/layout")
+        await self.page.set_content(
+            '<body data-wikkit-offline="true"><div id="poster-container"></div>'
+            '<div id="controls">Controls</div></body>',
+        )
+        for stylesheet in ("main.css", "layout.css", "router.css"):
+            await self.page.add_style_tag(path=str(ROOT / "static/css" / stylesheet))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
+        await self.page.evaluate("""async () => {
+            window.wikkit = connect(() => {});
+            await wikkit.execute({does: 'hide-chat'});
+        }""")
+        launcher = self.page.locator(".chatbot-launcher")
+        for height in ("4rem", "8rem"):
+            await self.page.locator("#controls").evaluate(
+                "(el, height) => el.style.height = height", height,
+            )
+            await self.page.wait_for_function("""() =>
+                Math.abs(document.querySelector('.chatbot-launcher').getBoundingClientRect().bottom
+                    - document.querySelector('#controls').getBoundingClientRect().top) < 1
+            """)
+            self.assertTrue(await launcher.is_visible())
+        await self.page.set_viewport_size({"width": 900, "height": 500})
+        await self.page.wait_for_function("""() =>
+            Math.abs(document.querySelector('.chatbot-launcher').getBoundingClientRect().bottom
+                - document.querySelector('#controls').getBoundingClientRect().top) < 1
+        """)
 
     async def test_editor_viewport_and_controls_track_chatbot(self) -> None:
         await self.page.goto("https://presto.test/layout")
