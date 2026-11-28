@@ -182,7 +182,7 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-font-sizing.js"))
 
         async def assert_header_fits() -> float:
-            actual, natural, contained = await self.page.locator("#poster-header").evaluate("""header => {
+            actual, natural, contained, bottom_space, rem, padding = await self.page.locator("#poster-header").evaluate("""header => {
                 const bounds = header.getBoundingClientRect();
                 const oldHeight = header.style.height;
                 header.style.height = 'auto';
@@ -192,10 +192,16 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
                     const rect = child.getBoundingClientRect();
                     return rect.top >= bounds.top - 0.1 && rect.bottom <= bounds.bottom + 0.1;
                 });
-                return [bounds.height, natural, contained];
+                const authors = header.querySelector('#authors').getBoundingClientRect();
+                const scale = bounds.width / parseFloat(getComputedStyle(header).width);
+                return [bounds.height, natural, contained, (bounds.bottom - authors.bottom) / scale,
+                    parseFloat(getComputedStyle(document.documentElement).fontSize),
+                    parseFloat(getComputedStyle(header).paddingBottom)];
             }""")
             self.assertAlmostEqual(actual, natural, delta=0.1)
             self.assertTrue(contained)
+            self.assertAlmostEqual(bottom_space, rem, delta=0.1)
+            self.assertEqual(padding, 0)
             return actual
 
         heights = []
