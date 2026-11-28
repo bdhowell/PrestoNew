@@ -1,7 +1,7 @@
 
     function numberToWords(num, over20=true) {
         if (num === 0) return "zero";
-        if (num > 20 && over20) return num;
+        if (num > 20 && over20) return String(num);
 
         const ones = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
         const tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
@@ -49,7 +49,7 @@
     }
     function numberToWords(num, over20=true) {
         if (num === 0) return "zero";
-        if (num > 20 && over20) return num;
+        if (num > 20 && over20) return String(num);
 
         const ones = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
         const tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];

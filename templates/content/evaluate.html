@@ -6,11 +6,26 @@
 <h1>Evaluating your graphics</h1>
 <p class="centered-text">
     <img src="/static/graphics/wikkitmeasuring.png" alt="Wikkit measuring a graphic"
-         width="400" height="300" style="max-width: 100%; height: auto">
+         width="400" height="300">
 </p>
 <p id="evaluation-status" role="status" aria-live="polite">Preparing to evaluate your graphics.</p>
-<div id="graphic-evaluations" aria-live="polite"></div>
+<div id="evaluation-progress" hidden>
+    <label for="evaluation-progress-meter">Graphics evaluated: <span id="evaluation-progress-count">0 of 0</span></label>
+    <progress id="evaluation-progress-meter" value="0" max="1"></progress>
+    <span id="evaluation-remaining"></span>
+</div>
+<article id="graphic-evaluations" class="graphic-evaluation" tabindex="0" aria-label="Latest graphic evaluation" hidden>
+    <div id="evaluation-summary" class="evaluation-metrics" aria-label="Graphic evaluation summary"></div>
+    <div id="evaluation-panes">
+        <div id="evaluation-preview" aria-label="Most recently evaluated graphic"></div>
+        <div id="evaluation-divider" role="separator" tabindex="0" aria-orientation="horizontal"
+             aria-label="Resize graphic and details" aria-controls="evaluation-preview evaluation-details"
+             aria-valuemin="20" aria-valuemax="80" aria-valuenow="50"
+             title="Drag or use arrow keys to resize the graphic and details"></div>
+        <div id="evaluation-details" aria-label="Graphic evaluation details"></div>
+    </div>
+</article>
 <button id="retry-evaluation" type="button" hidden>Try again</button>
-<p><button id="continue-review" type="button" data-sends="ok" hidden>Continue to Poster</button></p>
+<p class="evaluation-actions"><button id="continue-review" type="button" data-sends="ok" hidden>Continue to Poster</button></p>
 <script id="evaluation-poster" type="application/json">{{ {"pid": pid} | tojson }}</script>
 {% endblock %}

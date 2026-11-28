@@ -4,6 +4,15 @@
     const poster = JSON.parse(document.querySelector("#evaluation-poster").textContent);
     const status = document.querySelector("#evaluation-status");
     const output = document.querySelector("#graphic-evaluations");
+    const progress = document.querySelector("#evaluation-progress");
+    const meter = document.querySelector("#evaluation-progress-meter");
+    const progressCount = document.querySelector("#evaluation-progress-count");
+    const remaining = document.querySelector("#evaluation-remaining");
+    const summary = document.querySelector("#evaluation-summary");
+    const panes = document.querySelector("#evaluation-panes");
+    const preview = document.querySelector("#evaluation-preview");
+    const divider = document.querySelector("#evaluation-divider");
+    const details = document.querySelector("#evaluation-details");
     const retry = document.querySelector("#retry-evaluation");
     const next = document.querySelector("#continue-review");
     const results = new Map();
@@ -12,6 +21,13 @@
     let terminalEventReceived = false;
     let completionMessage = null;
     let controller = null;
+    let timer = null;
+    let deadline = 0;
+    let total = 0;
+    let completed = 0;
+    let processing = null;
+    let processingTime = 0;
+    let resizePointer = null;
     class EvaluationInterruptedError extends Error {}
     function rethrowConnectionError(error) {
         if (error instanceof TypeError) {
@@ -19,8 +35,66 @@
         }
         throw error;
     }
-    const categoryOrder = {uploaded: 0, extracted: 1};
     const ratings = ["none", "weakly", "somewhat", "significantly", "highly", "definitively"];
+
+    function resizePanes(value) {
+        const share = Math.max(20, Math.min(80, value));
+        panes.style.setProperty("--preview-size", `${share}fr`);
+        panes.style.setProperty("--details-size", `${100 - share}fr`);
+        divider.setAttribute("aria-valuenow", String(Math.round(share)));
+        divider.setAttribute("aria-valuetext", `Graphic ${Math.round(share)}%, details ${100 - Math.round(share)}%`);
+    }
+
+    divider.addEventListener("pointerdown", event => {
+        if (event.button !== 0 || resizePointer !== null) return;
+        resizePointer = event.pointerId;
+        divider.setPointerCapture(event.pointerId);
+        divider.focus();
+        event.preventDefault();
+    });
+    divider.addEventListener("pointermove", event => {
+        if (resizePointer !== event.pointerId) return;
+        const height = panes.clientHeight - divider.offsetHeight;
+        const offset = event.clientY - panes.getBoundingClientRect().top - panes.clientTop
+            - divider.offsetHeight / 2;
+        resizePanes(offset / height * 100);
+    });
+    function finishResize(event) {
+        if (resizePointer !== event.pointerId) return;
+        resizePointer = null;
+        if (divider.hasPointerCapture(event.pointerId)) divider.releasePointerCapture(event.pointerId);
+    }
+    divider.addEventListener("pointerup", finishResize);
+    divider.addEventListener("pointercancel", finishResize);
+    divider.addEventListener("lostpointercapture", finishResize);
+    divider.addEventListener("keydown", event => {
+        if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+        const current = Number(divider.getAttribute("aria-valuenow"));
+        const step = event.shiftKey ? 10 : 1;
+        resizePanes(event.key === "Home" ? 20 : event.key === "End" ? 80
+            : current + (event.key === "ArrowUp" ? -step : step));
+        event.preventDefault();
+    });
+
+    function updateCountdown() {
+        const seconds = Math.max(0, Math.ceil((deadline - performance.now()) / 1000));
+        remaining.textContent = `(${seconds} second${seconds === 1 ? "" : "s"} estimated remaining)`;
+    }
+
+    function estimateRemaining(seconds) {
+        deadline = performance.now() + seconds * 1000;
+        updateCountdown();
+    }
+
+    function stopCountdown() {
+        if (timer !== null) clearInterval(timer);
+        timer = null;
+    }
+
+    function updateProgress() {
+        meter.value = completed;
+        progressCount.textContent = `${completed} of ${total}`;
+    }
 
 
     function element(tag, text, className = "") {
@@ -57,99 +131,87 @@
         ].some(rating => ratings.indexOf(rating) >= threshold);
     }
 
-    function render() {
-        output.replaceChildren();
-        const ordered = [...results.values()].sort((first, second) =>
-            categoryOrder[first.source.category] - categoryOrder[second.source.category]
-                || first.source.sid - second.source.sid);
-        for (const category of ["uploaded", "extracted"]) {
-            const items = ordered.filter(item => item.source.category === category);
-            if (!items.length) continue;
-            const group = element(
-                "section",
-                "",
-                "evaluation-category",
-            );
-            group.append(element("h2", category === "uploaded" ? "Uploaded graphics" : "Extracted graphics"));
-            for (const item of items) {
-                const isSuitable = suitable(item.evaluation, item.complexity, item.legibility);
-                const evaluation = item.evaluation;
-                const card = element("article", "", "graphic-evaluation");
-                card.append(element("h3", item.source.filename));
-                if (item.source.type === "tables" && item.source.table_html) {
-                    const table = element("div", "", "graphic-table");
-                    table.innerHTML = item.source.table_html;
-                    card.append(table);
-                } else {
-                    const image = document.createElement("img");
-                    image.src = `/content/${item.source.sid}/image`;
-                    image.alt = evaluation?.image_analysis.description || item.source.filename;
-                    image.loading = "lazy";
-                    card.append(image);
+    function render(item) {
+        const isSuitable = suitable(item.evaluation, item.complexity, item.legibility);
+        const evaluation = item.evaluation;
+        output.hidden = false;
+        summary.replaceChildren();
+        preview.replaceChildren();
+        details.replaceChildren();
+        output.scrollTop = 0;
+        output.scrollLeft = 0;
+        summary.append(element(
+            "p",
+            evaluation ? `Classification: ${evaluation.image_analysis.classification}` : "Classification: not evaluated",
+            "graphic-classification",
+        ));
+        for (const [label, metric] of [["Complexity", item.complexity], ["Legibility", item.legibility]]) {
+            const score = typeof metric?.score === "number" ? `${(metric.score * 100).toFixed(1)}%` : "not available";
+            summary.append(element("p", `${label}: ${score}`));
+        }
+        summary.append(element(
+            "p",
+            isSuitable ? "Suitable for the poster." : "Not suitable for the poster.",
+            `evaluation-verdict ${isSuitable ? "suitable" : "not-suitable"}`,
+        ));
+        if (item.source.type === "tables" && item.source.table_html) {
+            const table = element("div", "", "graphic-table");
+            table.innerHTML = item.source.table_html;
+            preview.append(table);
+        } else {
+            const image = document.createElement("img");
+            image.src = `/content/${item.source.sid}/image`;
+            image.alt = evaluation?.image_analysis.description || item.source.filename;
+            preview.append(image);
+        }
+        if (item.complexity?.too_complex) {
+            details.append(element(
+                "p",
+                `Complexity score (${(item.complexity.score * 100).toFixed(1)}%) exceeds the poster threshold (${(item.complexity.threshold * 100).toFixed(1)}%); this image is not suitable for the poster.`,
+            ));
+        }
+        if (item.legibility?.below_threshold) {
+            details.append(element(
+                "p",
+                `Legibility score (${(item.legibility.score * 100).toFixed(1)}%) is below the poster threshold (${(item.legibility.threshold * 100).toFixed(1)}%); this image is not suitable for the poster.`,
+            ));
+        }
+        if (!evaluation) {
+            details.append(element(
+                "p",
+                "Not evaluated because this image did not meet the complexity or legibility threshold.",
+                "evaluation-skipped",
+            ));
+        } else {
+            details.append(element("p", evaluation.image_analysis.description));
+            const expressions = evaluation.image_analysis.math_expressions || [];
+            if (expressions.length) {
+                details.append(element("h4", "Math expressions"));
+                for (const expression of expressions) {
+                    const formula = element("p", `\\[${expression}\\]`, "graphic-math");
+                    details.append(formula);
+                    window.mathJaxSource.typeset(formula);
                 }
-                const metrics = element("div", "", "evaluation-metrics");
-                for (const [label, metric] of [
-                    ["Complexity", item.complexity],
-                    ["Legibility", item.legibility],
-                ]) {
-                    if (typeof metric?.score === "number") {
-                        metrics.append(element("p", `${label}: ${(metric.score * 100).toFixed(1)}%`));
-                    }
-                }
-                if (metrics.childElementCount) card.append(metrics);
-                card.append(element(
-                    "p",
-                    evaluation
-                        ? `Classification: ${evaluation.image_analysis.classification}`
-                        : "Classification: not evaluated",
-                    "graphic-classification",
-                ));
-                if (item.complexity?.too_complex) {
-                    card.append(element(
-                        "p",
-                        `Complexity score (${(item.complexity.score * 100).toFixed(1)}%) exceeds the poster threshold (${(item.complexity.threshold * 100).toFixed(1)}%); this image is not suitable for the poster.`,
-                    ));
-                }
-                if (item.legibility?.below_threshold) {
-                    card.append(element(
-                        "p",
-                        `Legibility score (${(item.legibility.score * 100).toFixed(1)}%) is below the poster threshold (${(item.legibility.threshold * 100).toFixed(1)}%); this image is not suitable for the poster.`,
-                    ));
-                }
-                if (!evaluation) {
-                    card.append(element(
-                        "p",
-                        "Not evaluated because this image did not meet the complexity or legibility threshold.",
-                        "evaluation-skipped",
-                    ));
-                }
-                card.append(element(
-                    "p",
-                    isSuitable ? "Suitable for the poster." : "Not suitable for the poster.",
-                    `evaluation-verdict ${isSuitable ? "suitable" : "not-suitable"}`,
-                ));
-                if (evaluation) {
-                    card.append(element("p", evaluation.image_analysis.description));
-                    const expressions = evaluation.image_analysis.math_expressions || [];
-                    if (expressions.length) {
-                        card.append(element("h4", "Math expressions"));
-                        for (const expression of expressions) {
-                            const formula = element("p", `\\[${expression}\\]`, "graphic-math");
-                            card.append(formula);
-                            window.mathJaxSource.typeset(formula);
-                        }
-                    }
-                    renderSection(card, "Materials and Methods", evaluation.evaluations.materials_and_methods);
-                    renderSection(card, "Results", evaluation.evaluations.results);
-                }
-                group.append(card);
             }
-            output.append(group);
+            renderSection(details, "Materials and Methods", evaluation.evaluations.materials_and_methods);
+            renderSection(details, "Results", evaluation.evaluations.results);
         }
     }
 
     async function consumeEvent(event) {
         if (event.type === "start") {
+            stopCountdown();
+            total = event.total;
+            completed = 0;
+            processing = null;
+            processingTime = 0;
+            progress.hidden = total === 0;
+            if (total > 0) {
+                meter.max = total;
+                updateProgress();
+                estimateRemaining(total * 20);
+                timer = setInterval(updateCountdown, 1000);
+            }
             if (event.total > 0) {
                 const count = numberToWords(event.total);
                 status.textContent = `Preparing to evaluate ${event.total} graphic${event.total === 1 ? "" : "s"}.`;
@@ -160,10 +222,12 @@
                 );
             }
         } else if (event.type === "already-evaluated") {
+            stopCountdown();
             terminalEventReceived = true;
             status.textContent = "Graphic review complete.";
             completionMessage = "<p>I&rsquo;ve finished reviewing your graphics.</p>";
         } else if (event.type === "empty") {
+            stopCountdown();
             terminalEventReceived = true;
             await window.wikkit.say(
                 "<p>Well, that was quick! I didn&rsquo;t find any graphics to evaluate. "
@@ -171,12 +235,8 @@
             );
             window.wikkit.execute({does: "redirect", payload: "/conferences/query"});
         } else if (event.type === "progress") {
+            processing = {index: event.current, started: performance.now()};
             status.textContent = `I am reviewing image ${event.current} of ${event.total}.`;
-            const minutesLeftReal = (event.total - event.current) * 1/3;
-            const minutesLeftWhole = Math.round(minutesLeftReal);
-            const timing = minutesLeftWhole ? 
-                `<p>I&rsquo;m estimating ${numberToWords(minutesLeftWhole)} minute${minutesLeftWhole === 1 ? "" : "s"} left.</p>` : 
-                "We&rsquo;re down to less than a minute left, now.";
             const response = [
                 'I&rsquo;m reviewing graphic',
                 'I&rsquo;m looking at graphic',
@@ -187,14 +247,22 @@
                 'It&rsquo;s worth the wait, I promise. I&rsquo;m on graphic',
             ][Math.floor(Math.random() * 7)];
             await window.wikkit.say(
-                `<p>${response} ${event.current_word} of ${event.total_word}.</p>` + timing
+                `<p>${response} ${event.current_word} of ${event.total_word}.</p>`
             );
         } else if (event.type === "result") {
             results.set(event.source.sid, event);
-            render();
+            render(event);
+            if (processing !== null) {
+                processingTime += performance.now() - processing.started;
+                completed = processing.index;
+                processing = null;
+                updateProgress();
+                estimateRemaining(processingTime / completed / 1000 * (total - completed));
+            }
         } else if (event.type === "error") {
             throw new Error(event.detail);
         } else if (event.type === "complete") {
+            stopCountdown();
             terminalEventReceived = true;
             const count = [...results.values()].filter(item =>
                 suitable(item.evaluation, item.complexity, item.legibility)).length;
@@ -268,6 +336,8 @@
                 void promptForReview(completionMessage);
             }
         } catch (error) {
+            stopCountdown();
+            if (!progress.hidden) remaining.textContent = "(estimate paused)";
             if (!leaving && error.name !== "AbortError") {
                 if (error instanceof EvaluationInterruptedError) {
                     if (attempt < 2) {
@@ -288,7 +358,6 @@
                 }
                 console.error("Graphic evaluation failed", error);
                 status.textContent = error.message;
-                render();
                 retry.hidden = false;
                 const escaped = document.createElement("span");
                 escaped.textContent = error.message;
@@ -303,6 +372,7 @@
     next.addEventListener("click", () => window.location.assign(preserveTemplateOrigin("/content/review")));
     window.addEventListener("pagehide", () => {
         leaving = true;
+        stopCountdown();
         controller?.abort();
     });
     evaluate();

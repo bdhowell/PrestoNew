@@ -6,6 +6,29 @@ from playwright.async_api import async_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 
+EVALUATION_MARKUP = """
+    <main>
+    <h1>Evaluating your graphics</h1>
+    <p class="centered-text"><img width="400" height="300" alt="Wikkit measuring a graphic"></p>
+    <script id="evaluation-poster" type="application/json">{"pid":11}</script>
+    <p id="evaluation-status"></p>
+    <div id="evaluation-progress" hidden>
+        <span id="evaluation-progress-count"></span><progress id="evaluation-progress-meter"></progress>
+        <span id="evaluation-remaining"></span>
+    </div>
+    <article id="graphic-evaluations" class="graphic-evaluation" tabindex="0" aria-label="Latest graphic evaluation" hidden>
+        <div id="evaluation-summary" class="evaluation-metrics" aria-label="Graphic evaluation summary"></div>
+        <div id="evaluation-panes">
+            <div id="evaluation-preview"></div>
+            <div id="evaluation-divider" role="separator" tabindex="0" aria-valuenow="50"></div>
+            <div id="evaluation-details"></div>
+        </div>
+    </article>
+    <button id="retry-evaluation" hidden>Try again</button>
+    <p class="evaluation-actions"><button id="continue-review" data-sends="ok" hidden>Continue to Poster</button></p>
+    </main>
+"""
+
 
 class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -16,15 +39,13 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         self.page = await browser.new_page()
 
     async def load_page(self, events: list[dict[str, object]]) -> None:
-        await self.page.set_content("""
-            <script id="evaluation-poster" type="application/json">{"pid":11}</script>
-            <p id="evaluation-status"></p>
-            <div id="graphic-evaluations"></div>
-            <button id="retry-evaluation" hidden>Try again</button>
-            <button id="continue-review" data-sends="ok" hidden>Continue to Poster</button>
-        """)
-        await self.page.evaluate("document.body.classList.add('wikkit-page')")
+        await self.page.set_content(EVALUATION_MARKUP)
+        await self.page.evaluate("""() => {
+            document.body.classList.add('wikkit-page');
+            document.body.dataset.page = 'content-evaluate';
+        }""")
         await self.page.add_style_tag(path=str(ROOT / "static/css/main.css"))
+        await self.page.add_style_tag(path=str(ROOT / "static/css/router.css"))
         await self.page.add_style_tag(path=str(ROOT / "static/css/pages/content-evaluate.css"))
         await self.page.evaluate("""events => {
             window.messages = [];
@@ -48,7 +69,7 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/common.js"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/pages/content-evaluate.js"))
 
-    async def test_results_are_grouped_and_suitability_uses_either_section(self) -> None:
+    async def test_latest_result_and_suitability_uses_either_section(self) -> None:
         def result(sid: int, category: str, filename: str, methods: str, findings: str):
             return {
                 "type": "result",
@@ -71,7 +92,7 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
                         },
                         "results": {
                             "rating": findings,
-                            "explanation": "Results explanation.",
+                            "explanation": "Results explanation. " * 120 + "END OF DETAILS",
                             "supported_elements": [],
                             "limitations": [],
                             "suggested_improvements": [],
@@ -94,38 +115,16 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.evaluate("request"), {
             "url": "/content/evaluate/11", "method": "POST", "body": "{}",
         })
-        self.assertEqual(await self.page.locator("#graphic-evaluations h2").all_text_contents(), [
-            "Uploaded graphics", "Extracted graphics",
-        ])
-        self.assertEqual(await self.page.locator(".graphic-evaluation h3").all_text_contents(), [
-            "uploaded.png", "extracted.png",
-        ])
-        self.assertEqual(await self.page.locator(".evaluation-metrics").all_text_contents(), [
-            "Complexity: 12.5%Legibility: 87.5%",
-            "Complexity: 12.5%Legibility: 87.5%",
-        ])
-        self.assertEqual(await self.page.locator(".graphic-evaluation").evaluate_all("""cards =>
-            cards.map(card => {
-                const children = [...card.children];
-                const imageIndex = children.findIndex(child => child.matches("img"));
-                const metricsIndex = children.findIndex(child => child.matches(".evaluation-metrics"));
-                const verdictIndex = children.findIndex(child => child.matches(".evaluation-verdict"));
-                const metrics = card.querySelector(".evaluation-metrics");
-                return {
-                    afterImage: metricsIndex === imageIndex + 1,
-                    beforeVerdict: metricsIndex < verdictIndex,
-                    columns: getComputedStyle(metrics).gridTemplateColumns.split(" ").length,
-                };
-            })
-        """), [
-            {"afterImage": True, "beforeVerdict": True, "columns": 2},
-            {"afterImage": True, "beforeVerdict": True, "columns": 2},
-        ])
+        self.assertEqual(await self.page.locator("#graphic-evaluations h2").count(), 0)
+        self.assertEqual(await self.page.locator("#evaluation-preview img").get_attribute("src"),
+                         "/content/11/image")
+        self.assertEqual(await self.page.locator(".evaluation-metrics").text_content(),
+                         "Classification: chartComplexity: 12.5%Legibility: 87.5%Suitable for the poster.")
         self.assertEqual(await self.page.locator(".evaluation-verdict").all_text_contents(), [
-            "Suitable for the poster.", "Not suitable for the poster.",
+            "Suitable for the poster.",
         ])
         self.assertEqual(await self.page.locator(".graphic-classification").all_text_contents(), [
-            "Classification: chart", "Classification: chart",
+            "Classification: chart",
         ])
         self.assertEqual(await self.page.locator("#evaluation-status").text_content(),
                          "Graphic review complete: one suitable and one not suitable.")
@@ -134,20 +133,159 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("graphic one of two.", await self.page.evaluate("messages.join(' ')"))
         self.assertIn("reviewing two graphics", await self.page.evaluate("messages.join(' ')"))
         self.assertIn("predicting zero point seven minutes", await self.page.evaluate("messages.join(' ')"))
-        for width in (1280, 375):
-            with self.subTest(width=width):
-                await self.page.set_viewport_size({"width": width, "height": 800})
-                cards = await self.page.locator(".graphic-evaluation").evaluate_all("""cards =>
-                    cards.map(card => [...card.children].map(child => {
-                        const {left, top, bottom, width} = child.getBoundingClientRect();
-                        return {left, top, bottom, width};
-                    }))
-                """)
-                for children in cards:
-                    for previous, current in zip(children, children[1:]):
-                        self.assertGreaterEqual(current["top"], previous["bottom"])
-                        self.assertAlmostEqual(current["left"], previous["left"], delta=1)
-                        self.assertAlmostEqual(current["width"], previous["width"], delta=1)
+        for width, height, chat_open in ((1280, 800, False), (375, 800, False), (375, 800, True),
+                                         (375, 667, True)):
+            with self.subTest(width=width, height=height, chat_open=chat_open):
+                await self.page.set_viewport_size({"width": width, "height": height})
+                await self.page.evaluate("""open => {
+                    document.body.style.setProperty('--chat-window-transition', '0ms');
+                    document.querySelector('#chatbot')?.remove();
+                    if (open) {
+                        const chatbot = document.createElement('div');
+                        chatbot.id = 'chatbot';
+                        document.body.append(chatbot);
+                    }
+                }""", chat_open)
+                metrics = await self.page.locator("#evaluation-summary").evaluate("""summary => {
+                    const items = [...summary.children];
+                    return {
+                        tops: items.map(item => item.getBoundingClientRect().top),
+                        widths: items.map(item => [item.clientWidth, item.scrollWidth]),
+                        background: getComputedStyle(summary).backgroundColor,
+                        overflow: getComputedStyle(summary).overflowX,
+                    };
+                }""")
+                self.assertEqual(len(metrics["tops"]), 4)
+                self.assertTrue(all(top == metrics["tops"][0] for top in metrics["tops"]))
+                self.assertTrue(all(client == scroll for client, scroll in metrics["widths"]))
+                self.assertEqual(metrics["background"], "rgb(228, 224, 246)")
+                self.assertEqual(metrics["overflow"], "visible")
+                if width == 375:
+                    self.assertGreater(await self.page.locator("#graphic-evaluations").evaluate("""panel => {
+                        panel.scrollLeft = panel.scrollWidth;
+                        return panel.scrollLeft;
+                    }"""), 0)
+                self.assertGreater(await self.page.locator("#graphic-evaluations").evaluate("""panel => {
+                    panel.scrollTop = panel.scrollHeight;
+                    return panel.scrollTop;
+                }"""), 0)
+                self.assertTrue(await self.page.locator("#graphic-evaluations").evaluate("""panel => {
+                    const last = panel.querySelector('#evaluation-details section:last-child p');
+                    return last.textContent.endsWith('END OF DETAILS')
+                        && last.getBoundingClientRect().bottom <= panel.getBoundingClientRect().bottom;
+                }"""))
+                self.assertEqual(await self.page.locator("#evaluation-preview").evaluate(
+                    "node => getComputedStyle(node).overflowY"), "visible")
+                self.assertEqual(await self.page.locator("#evaluation-details").evaluate(
+                    "node => getComputedStyle(node).overflowY"), "visible")
+                self.assertEqual(await self.page.evaluate("""() => {
+                    const root = document.scrollingElement;
+                    return [root.scrollWidth - root.clientWidth, root.scrollHeight - root.clientHeight];
+                }"""), [0, 0])
+                action = await self.page.locator("#continue-review").evaluate("""button => {
+                    const box = button.getBoundingClientRect();
+                    const main = button.closest('main').getBoundingClientRect();
+                    return {top: box.top, bottom: box.bottom, right: box.right,
+                        mainBottom: main.bottom, mainRight: main.right};
+                }""")
+                self.assertGreaterEqual(action["top"], 0, action)
+                self.assertLessEqual(action["bottom"], action["mainBottom"], action)
+                self.assertLessEqual(action["right"], action["mainRight"], action)
+                self.assertGreater(await self.page.locator("#graphic-evaluations").evaluate(
+                    "panel => panel.clientHeight"), 50)
+                self.assertEqual(await self.page.locator("main").evaluate(
+                    "main => [main.scrollWidth - main.clientWidth, main.scrollHeight - main.clientHeight]"), [0, 0])
+
+    async def test_live_progress_and_resizable_latest_result(self) -> None:
+        await self.page.set_content(EVALUATION_MARKUP)
+        await self.page.evaluate("""() => {
+            document.body.classList.add('wikkit-page');
+            document.body.dataset.page = 'content-evaluate';
+        }""")
+        await self.page.add_style_tag(path=str(ROOT / "static/css/main.css"))
+        await self.page.add_style_tag(path=str(ROOT / "static/css/router.css"))
+        await self.page.add_style_tag(path=str(ROOT / "static/css/pages/content-evaluate.css"))
+        await self.page.clock.install()
+        await self.page.evaluate("""() => {
+            window.wikkit = {say: () => Promise.resolve(), requestResponse: () => new Promise(() => {})};
+            const encoder = new TextEncoder();
+            const stream = new ReadableStream({start(controller) {
+                window.emit = event => controller.enqueue(encoder.encode(JSON.stringify(event) + "\\n"));
+                window.finish = () => controller.close();
+            }});
+            window.fetch = async () => new Response(stream);
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/common.js"))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/pages/content-evaluate.js"))
+
+        def result(sid: int) -> dict[str, object]:
+            section = {
+                "rating": "highly", "explanation": f"Details for {sid}.", "supported_elements": [],
+                "limitations": [], "suggested_improvements": [],
+            }
+            return {
+                "type": "result", "source": {"sid": sid, "category": "uploaded", "filename": f"{sid}.png"},
+                "complexity": {"score": 0.1, "threshold": 0.5, "too_complex": False},
+                "legibility": {"score": 0.9, "threshold": 0.5, "below_threshold": False},
+                "evaluation": {
+                    "image_analysis": {"classification": "chart", "description": f"Image {sid}"},
+                    "evaluations": {"materials_and_methods": section, "results": section},
+                },
+            }
+
+        async def emit(event: dict[str, object]) -> None:
+            await self.page.evaluate("event => window.emit(event)", event)
+
+        await emit({"type": "start", "total": 2, "estimate_word": "zero point seven"})
+        await emit(result(99))
+        await emit({"type": "progress", "current": 1, "total": 2, "current_word": "one", "total_word": "two"})
+        await self.page.wait_for_function("document.querySelector('#evaluation-preview img')?.getAttribute('src') === '/content/99/image'")
+        await self.page.wait_for_function("document.querySelector('#evaluation-status').textContent.includes('image 1')")
+        self.assertEqual(await self.page.locator("#evaluation-progress-count").text_content(), "0 of 2")
+        self.assertEqual(await self.page.locator("#evaluation-remaining").text_content(),
+                         "(40 seconds estimated remaining)")
+        await self.page.clock.run_for(3000)
+        self.assertEqual(await self.page.locator("#evaluation-remaining").text_content(),
+                         "(37 seconds estimated remaining)")
+        await emit(result(1))
+        await self.page.wait_for_function("document.querySelector('#evaluation-progress-count').textContent === '1 of 2'")
+        estimate = int((await self.page.locator("#evaluation-remaining").text_content()).split()[0][1:])
+        self.assertIn(estimate, (3, 4))
+        self.assertEqual(await self.page.locator("#evaluation-progress-meter").evaluate("meter => meter.value"), 1)
+        self.assertEqual(await self.page.locator("#evaluation-preview img").get_attribute("src"), "/content/1/image")
+        self.assertIn("Details for 1.", await self.page.locator("#evaluation-details").inner_text())
+
+        divider = self.page.locator("#evaluation-divider")
+        await divider.focus()
+        await self.page.keyboard.press("Shift+ArrowDown")
+        self.assertEqual(await divider.get_attribute("aria-valuenow"), "60")
+        await divider.scroll_into_view_if_needed()
+        box = await divider.bounding_box()
+        await self.page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        await self.page.mouse.down()
+        await self.page.mouse.move(box["x"] + box["width"] / 2, box["y"] - 50)
+        await self.page.mouse.up()
+        resized = await divider.get_attribute("aria-valuenow")
+        self.assertLess(int(resized), 60)
+
+        await self.page.clock.run_for(1000)
+        self.assertEqual(await self.page.locator("#evaluation-remaining").text_content(),
+                         f"({estimate - 1} seconds estimated remaining)")
+        await emit({"type": "progress", "current": 2, "total": 2, "current_word": "two", "total_word": "two"})
+        await self.page.wait_for_function("document.querySelector('#evaluation-status').textContent.includes('image 2')")
+        await self.page.clock.run_for(2000)
+        await emit(result(2))
+        await self.page.wait_for_function("document.querySelector('#evaluation-progress-count').textContent === '2 of 2'")
+        self.assertEqual(await self.page.locator("#evaluation-remaining").text_content(),
+                         "(0 seconds estimated remaining)")
+        self.assertEqual(await self.page.locator("#evaluation-preview img").get_attribute("src"), "/content/2/image")
+        self.assertEqual(await self.page.locator("#evaluation-preview img").count(), 1)
+        self.assertIn("Details for 2.", await self.page.locator("#evaluation-details").inner_text())
+        self.assertNotIn("Details for 1.", await self.page.locator("#evaluation-details").inner_text())
+        self.assertEqual(await divider.get_attribute("aria-valuenow"), resized)
+        await emit({"type": "complete"})
+        await self.page.evaluate("window.finish()")
+        await self.page.locator("#continue-review").wait_for(state="visible")
 
     async def test_complexity_overrides_relevance_and_explains_verdict(self) -> None:
         section = {
@@ -236,11 +374,7 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("predicting", await self.page.evaluate("messages.join(' ')"))
 
     async def test_math_expressions_are_rendered_as_latex(self) -> None:
-        await self.page.set_content("""
-            <script id="evaluation-poster" type="application/json">{"pid":11}</script>
-            <p id="evaluation-status"></p><div id="graphic-evaluations"></div>
-            <button id="retry-evaluation" hidden></button><a id="continue-review" hidden></a>
-        """)
+        await self.page.set_content(EVALUATION_MARKUP)
         await self.page.evaluate("""() => {
             window.mathJaxSource = {typeset() {}};
             window.wikkit = {say: () => Promise.resolve(), execute: () => {}};
@@ -356,6 +490,7 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         message = await self.page.locator("#evaluation-status").text_content()
         self.assertIn("Please try again; completed evaluations have been saved.", message)
         self.assertNotIn("stream", message)
+        self.assertEqual(await self.page.locator("#evaluation-remaining").text_content(), "(estimate paused)")
         self.assertTrue(await self.page.locator("#continue-review").is_hidden())
         self.assertEqual(await self.page.evaluate("commands"), [])
         await self.page.evaluate("""() => {
@@ -408,14 +543,12 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_wikkit_button_waits_for_success_and_opens_review(self) -> None:
         await self.page.route("https://evaluate.test/**", lambda route: route.fulfill(body="Review"))
         await self.page.goto("https://evaluate.test/")
-        await self.page.set_content("""
-            <body class="wikkit-page" data-wikkit-offline="true" data-page="content-evaluate">
-                <script id="evaluation-poster" type="application/json">{"pid":11}</script>
-                <p id="evaluation-status"></p><div id="graphic-evaluations"></div>
-                <button id="retry-evaluation" hidden>Try again</button>
-                <button id="continue-review" data-sends="ok" hidden>Continue to Poster</button>
-            </body>
-        """)
+        await self.page.set_content(EVALUATION_MARKUP)
+        await self.page.evaluate("""() => {
+            document.body.className = "wikkit-page";
+            document.body.dataset.wikkitOffline = "true";
+            document.body.dataset.page = "content-evaluate";
+        }""")
         for css in ("main.css", "router.css", "pages/content-evaluate.css"):
             await self.page.add_style_tag(path=str(ROOT / "static/css" / css))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/wikkit.js"))
