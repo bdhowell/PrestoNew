@@ -80,6 +80,23 @@ class SizingRouteTests(unittest.TestCase):
             "pid": 11, "template": "central", "sizing": {"bottom": 0.1},
         }).status_code, 422)
 
+    def test_accepts_template_specific_vertical_boundaries(self) -> None:
+        self.store.set_layout_sizing.return_value = True
+        for template, sizing in (("central", {"conclusions": 0.65}), ("vertical", {"bottom": 0.1})):
+            self.store.get.return_value = replace(DRAFT, template=template)
+            self.assertEqual(self.client.post("/layout/sizing", json={
+                "pid": 11, "template": template, "sizing": sizing,
+            }).status_code, 200)
+        self.store.get.return_value = replace(DRAFT, template="central")
+        for value in (0.24, 0.76, True):
+            self.assertEqual(self.client.post("/layout/sizing", json={
+                "pid": 11, "template": "central", "sizing": {"conclusions": value},
+            }).status_code, 422)
+        self.store.get.return_value = replace(DRAFT, template="arena")
+        self.assertEqual(self.client.post("/layout/sizing", json={
+            "pid": 11, "template": "arena", "sizing": {"conclusions": 0.5},
+        }).status_code, 422)
+
     def test_render_restores_only_the_selected_templates_positions(self) -> None:
         self.store.get.return_value = replace(DRAFT, layout_settings={
             "arena": {"left": 0.1, "introduction": 0.6},
@@ -180,7 +197,8 @@ class SizingBrowserTests(unittest.IsolatedAsyncioTestCase):
                     unscaledHeight: parseFloat(getComputedStyle(element).height)};
             };
             return Object.fromEntries(["layout", "pane0", "pane1", "pane2", "pane3",
-                "introduction", "methods", "citations", "acknowledgements", "information"]
+                "introduction", "methods", "conclusions", "citations-acknowledgements-information-parent",
+                "citations", "acknowledgements", "information"]
                 .filter(id => document.getElementById(id)).map(id => [id, rect(id)]));
         }""")
 
@@ -407,8 +425,59 @@ class SizingBrowserTests(unittest.IsolatedAsyncioTestCase):
                     0.75, delta=0.001,
                 )
                 self.assertEqual(
-                    await self.page.locator("#resize-bottom").count(), 1 if template == "arena" else 0,
+                    await self.page.locator("#resize-bottom").count(), 1 if template != "central" else 0,
                 )
+
+    async def test_central_conclusions_boundary_resizes_and_restores(self) -> None:
+        await self.load("central")
+        await self.page.locator("#poster-zoom").evaluate("""slider => {
+            slider.value = "70";
+            slider.dispatchEvent(new Event("input", {bubbles: true}));
+        }""")
+        before = await self.geometry()
+        await self.drag("conclusions", y=10000)
+        after = await self.geometry()
+        group = "citations-acknowledgements-information-parent"
+        pair = after["conclusions"]["height"] + after[group]["height"]
+        self.assertAlmostEqual(after["conclusions"]["height"] / pair, 0.75, delta=0.001)
+        self.assertAlmostEqual(after["conclusions"]["height"] + after[group]["height"],
+                               before["conclusions"]["height"] + before[group]["height"], delta=1)
+        self.assertAlmostEqual(after["pane0"]["height"], before["pane0"]["height"], delta=1)
+        await self.page.wait_for_function("sizingRequests.length > 0")
+        sizing = await self.page.evaluate("sizingRequests.at(-1).data.sizing")
+        self.assertAlmostEqual(sizing["conclusions"], 0.75)
+        await self.load("central", sizing=sizing)
+        restored = await self.geometry()
+        self.assertAlmostEqual(restored["conclusions"]["unscaledHeight"],
+                               after["conclusions"]["unscaledHeight"], delta=1)
+        await self.page.locator("[data-resize='conclusions'] .resize-toggle").click()
+        await self.page.locator("#resize-conclusions").focus()
+        await self.page.keyboard.press("Home")
+        after = await self.geometry()
+        self.assertAlmostEqual(after["conclusions"]["height"]
+                               / (after["conclusions"]["height"] + after[group]["height"]), 0.25, delta=0.001)
+
+    async def test_vertical_bottom_boundary_resizes_all_columns_and_restores(self) -> None:
+        await self.load("vertical")
+        before = await self.geometry()
+        await self.drag("bottom", y=-before["layout"]["height"] * 0.3)
+        after = await self.geometry()
+        change = after["pane3"]["unscaledHeight"] - before["pane3"]["unscaledHeight"]
+        self.assertAlmostEqual(change / after["layout"]["unscaledHeight"], 0.15, delta=0.001)
+        for pane in ("pane0", "pane1", "pane2"):
+            self.assertAlmostEqual(after[pane]["unscaledHeight"] + change,
+                                   before[pane]["unscaledHeight"], delta=0.1)
+        await self.page.wait_for_function("sizingRequests.length > 0")
+        sizing = await self.page.evaluate("sizingRequests.at(-1).data.sizing")
+        await self.load("vertical", sizing=sizing)
+        restored = await self.geometry()
+        self.assertAlmostEqual(restored["pane3"]["unscaledHeight"], after["pane3"]["unscaledHeight"], delta=0.1)
+        self.assertEqual(await self.page.locator("[data-resize^='pane3-']").count(), 0)
+        await self.page.locator("[data-resize='bottom'] .resize-toggle").click()
+        await self.page.locator("#resize-bottom").focus()
+        await self.page.keyboard.press("Home")
+        self.assertAlmostEqual((await self.geometry())["pane3"]["unscaledHeight"],
+                               before["pane3"]["unscaledHeight"], delta=0.1)
 
     async def test_changes_during_a_save_are_queued_without_losing_the_latest_positions(self) -> None:
         await self.load()

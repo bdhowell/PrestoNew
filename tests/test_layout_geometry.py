@@ -134,13 +134,14 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
 
     async def load(
         self, template: str = "arena", initial: dict | None = None,
-        sizing: dict | None = None, edited: bool = False,
+        sizing: dict | None = None, edited: bool = False, print_render: bool = False,
     ) -> None:
         await self.page.goto("about:blank")
         await self.editor(template)
         self.errors = []
         self.page.on("pageerror", lambda error: self.errors.append(str(error)))
-        await self.page.evaluate("""({initial, sizing, edited}) => {
+        await self.page.evaluate("""({initial, sizing, edited, printRender}) => {
+            if (printRender) document.body.dataset.printRender = "true";
             const layout = document.getElementById('layout');
             layout.dataset.initialGeometry = JSON.stringify(initial);
             if (sizing) layout.dataset.resizeSettings = JSON.stringify(sizing);
@@ -156,11 +157,13 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
                 geometryRequests.push({url, data});
                 return {ok: true, json: async () => ({ok: true, geometry: data.geometry})};
             };
-        }""", {"initial": initial, "sizing": sizing, "edited": edited})
+        }""", {"initial": initial, "sizing": sizing, "edited": edited, "printRender": print_render})
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-geometry.js"))
         await self.page.evaluate("window.posterGeometryReady")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-resize.js"))
-        await self.page.wait_for_function("document.querySelector('.resize-overlay')")
+        await self.page.evaluate("window.posterSizingReady")
+        if not print_render:
+            await self.page.wait_for_function("document.querySelector('.resize-overlay')")
         await self.page.wait_for_timeout(50)
         self.assertEqual(self.errors, [])
 
@@ -254,6 +257,27 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
                             self.assertGreater(gaps["top"], 0)
                             self.assertAlmostEqual(gaps["bottom"], gaps["top"], delta=0.1)
                             self.assertAlmostEqual(gaps["paneBottom"], 0, delta=0.1)
+
+    async def test_new_vertical_boundaries_restore_with_fixed_geometry_and_print(self) -> None:
+        for template, handle, target in (
+            ("central", "conclusions", "conclusions"),
+            ("vertical", "bottom", "pane3"),
+        ):
+            with self.subTest(template=template):
+                await self.load(template)
+                initial = await self.page.evaluate("geometryRequests[0].data.geometry")
+                before = await self.all_areas()
+                await self.drag(handle, y=10000 if template == "central" else -10000)
+                await self.page.wait_for_function("geometryRequests.some(request => request.data.sizing)")
+                sizing = await self.page.evaluate(
+                    "geometryRequests.find(request => request.data.sizing).data.sizing",
+                )
+                resized = await self.all_areas()
+                self.assertNotEqual(resized[target][1], before[target][1])
+                for print_render in (False, True):
+                    await self.load(template, initial=initial, sizing=sizing, print_render=print_render)
+                    restored = await self.all_areas()
+                    self.assertAlmostEqual(restored[target][1], resized[target][1], delta=0.1)
 
     async def test_initial_geometry_does_not_change_with_section_content_or_font_size(self) -> None:
         for template in posters.TEMPLATES:

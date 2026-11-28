@@ -9,7 +9,7 @@ window.posterSizingReady = (async () => {
 
     const sizing = JSON.parse(layout.dataset.resizeSettings);
     const status = document.getElementById("content-save-status");
-    const bottom = layout.querySelector(":scope > .pane.horizontal");
+    const bottom = layout.querySelector(":scope > #pane3");
     const initialColumns = getComputedStyle(layout).gridTemplateColumns.split(" ").map(Number.parseFloat);
     const columnTotal = initialColumns.reduce((sum, width) => sum + width, 0);
     const columnShares = initialColumns.map(width => width / columnTotal);
@@ -19,6 +19,7 @@ window.posterSizingReady = (async () => {
     overlay.className = "resize-overlay";
     layout.append(overlay);
     const handles = [];
+    const splitHandles = [];
     const rows = [];
     let dragging = null;
     let pending = false;
@@ -102,19 +103,20 @@ window.posterSizingReady = (async () => {
                 `calc((100% - ${rowGap}px) * ${topShare} - ${sizing.bottom * 100}%) `
                 + `calc((100% - ${rowGap}px) * ${1 - topShare} + ${sizing.bottom * 100}%)`;
         }
-        if (sizing.introduction !== null && introductionHandle) {
-            const parent = introductionHandle.first.parentElement;
+        for (const handle of splitHandles) {
+            if (sizing[handle.id] == null) continue;
+            const parent = handle.first.parentElement;
             const style = getComputedStyle(parent);
             const siblings = children(parent);
             const others = siblings.filter(section =>
-                section !== introductionHandle.first && section !== introductionHandle.second);
+                section !== handle.first && section !== handle.second);
             const total = parent.clientHeight - Number.parseFloat(style.paddingTop)
                 - Number.parseFloat(style.paddingBottom)
                 - (Number.parseFloat(style.rowGap) || 0) * (siblings.length - 1)
                 - others.reduce((sum, section) => sum + section.offsetHeight, 0);
-            introductionHandle.first.style.flex = `0 0 ${total * sizing.introduction}px`;
-            introductionHandle.second.style.flex = `0 0 ${total * (1 - sizing.introduction)}px`;
-            for (const section of [introductionHandle.first, introductionHandle.second]) {
+            handle.first.style.flex = `0 0 ${total * sizing[handle.id]}px`;
+            handle.second.style.flex = `0 0 ${total * (1 - sizing[handle.id])}px`;
+            for (const section of [handle.first, handle.second]) {
                 section.style.minHeight = "0";
             }
         }
@@ -243,7 +245,7 @@ window.posterSizingReady = (async () => {
 
     function current(handle) {
         if (handle.kind === "columns" || handle.kind === "bottom") return sizing[handle.id];
-        if (handle.kind === "introduction") {
+        if (handle.kind === "split") {
             return bounds(handle.first).height / (bounds(handle.first).height + bounds(handle.second).height);
         }
         return handle.row.items.map(item => bounds(item).width);
@@ -257,8 +259,8 @@ window.posterSizingReady = (async () => {
             sizing[handle.id] = offset;
         } else if (handle.kind === "bottom") {
             sizing.bottom = clamp(value - delta / size, 0, 0.15);
-        } else if (handle.kind === "introduction") {
-            sizing.introduction = clamp(value + delta / pair, 0.25, 0.75);
+        } else if (handle.kind === "split") {
+            sizing[handle.id] = clamp(value + delta / pair, 0.25, 0.75);
         } else {
             const widths = value.slice();
             const minimum = bounds(layout).width * 0.2;
@@ -276,6 +278,8 @@ window.posterSizingReady = (async () => {
     addHandle("right", "x", "Right column width", panes[1], panes[2], "columns");
     if (bottom) {
         addHandle("bottom", "y", "Bottom pane height", panes[0], bottom, "bottom");
+    }
+    if (bottom?.classList.contains("horizontal")) {
         const containers = [bottom, ...bottom.querySelectorAll(".section-parent")];
         for (const element of containers) {
             if (getComputedStyle(element).flexDirection !== "row") continue;
@@ -291,10 +295,18 @@ window.posterSizingReady = (async () => {
     }
     const introduction = layout.querySelector("#introduction");
     const methods = layout.querySelector("#methods");
-    const introductionHandle = introduction && methods && introduction.nextElementSibling === methods
-        && getComputedStyle(introduction.parentElement).flexDirection === "column"
-        ? addHandle("introduction", "y", "Introduction and Materials and Methods height",
-            introduction, methods, "introduction") : null;
+    if (introduction && methods && introduction.nextElementSibling === methods
+        && getComputedStyle(introduction.parentElement).flexDirection === "column") {
+        splitHandles.push(addHandle("introduction", "y", "Introduction and Materials and Methods height",
+            introduction, methods, "split"));
+    }
+    const conclusions = layout.querySelector("#conclusions");
+    const citations = layout.querySelector("#citations-acknowledgements-information-parent");
+    if (conclusions && citations && conclusions.nextElementSibling === citations
+        && getComputedStyle(conclusions.parentElement).flexDirection === "column") {
+        splitHandles.push(addHandle("conclusions", "y", "Conclusions and citations height",
+            conclusions, citations, "split"));
+    }
     for (const handle of handles) {
         handle.toggle.setAttribute("aria-controls", handles.map(item => item.separator.id).join(" "));
     }
@@ -331,12 +343,12 @@ window.posterSizingReady = (async () => {
             const value = current(handle);
             const column = handle.kind === "columns" || handle.kind === "bottom";
             handle.separator.setAttribute("aria-valuemin", String(column ? 0
-                : handle.kind === "introduction" ? 25 : 20));
+                : handle.kind === "split" ? 25 : 20));
             handle.separator.setAttribute("aria-valuemax", String(column ? 15
-                : handle.kind === "introduction" ? 75
+                : handle.kind === "split" ? 75
                     : (value[handle.index] + value[handle.index + 1]) / layoutBounds.width * 100 - 20));
             handle.separator.setAttribute("aria-valuenow", (column ? value * 100
-                : handle.kind === "introduction" ? value * 100
+                : handle.kind === "split" ? value * 100
                     : value[handle.index] / layoutBounds.width * 100).toFixed(2));
             if (column) {
                 handle.separator.setAttribute("aria-valuetext",

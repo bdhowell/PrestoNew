@@ -1230,6 +1230,10 @@ Implementation contract:
   previously saved geometry. Section edits do not redistribute their shares
   or rerun whole-poster auto-fit. Viewport zoom remains independent, and
   explicit gutter resizing still adjusts the saved proportions.
+  The central template exposes a conclusions/citations-group height split;
+  the vertical template exposes a shared boundary between its upper panes and
+  bottom pane. These controls use the same keyboard, persistence, and print
+  restoration behavior as the other layout resizers.
   `POST /layout/geometry` validates the measured areas against the template
   and atomically initializes `userposter.settings["layout-geometry"][template]`
   for the owner-only draft. Existing baselines win concurrent initialization;

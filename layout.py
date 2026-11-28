@@ -445,10 +445,10 @@ async def update_sizing(request: Request) -> JSONResponse:
         if any(group not in groups or len(shares) != groups[group]
                for group, shares in sizing.sections.items()):
             raise HTTPException(422, "Choose a valid row of poster sections.")
-        if sizing.bottom and not document.xpath(
-            '//*[@id="layout"]/*[contains(concat(" ", normalize-space(@class), " "), " horizontal ")]'
-        ):
-            raise HTTPException(422, "This layout has no horizontal bottom pane.")
+        if sizing.bottom and not document.xpath('//*[@id="layout"]/*[@id="pane3"]'):
+            raise HTTPException(422, "This layout has no bottom pane.")
+        if sizing.conclusions is not None and template != "central":
+            raise HTTPException(422, "This layout has no conclusions boundary.")
         saved = await posters.store().set_layout_sizing(uid_for(request), pid, template, sizing)
     except psycopg.Error:
         logger.exception("Could not save poster resizing for poster %s", pid)

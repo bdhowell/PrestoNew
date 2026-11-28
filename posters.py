@@ -149,6 +149,7 @@ class LayoutSizing(BaseModel):
     right: float = Field(default=0, ge=0, le=0.15)
     bottom: float = Field(default=0, ge=0, le=0.15)
     introduction: float | None = Field(default=None, ge=0.25, le=0.75)
+    conclusions: float | None = Field(default=None, ge=0.25, le=0.75)
     sections: dict[str, list[Annotated[float, Field(ge=0.2, le=1)]]] = Field(default_factory=dict)
 
     @field_validator("sections")
