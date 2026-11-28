@@ -1041,7 +1041,7 @@ async def auto_fit(
                     await _render_section(page, name, prior)
                     cribbed.append(name)
                     messages.append(
-                        f"{label} could benefit from some addiitional content. Consider adding a graphic."
+                        f"{label} is too short. Consider adjusting the poster&rqsuo;s font size or a smaller poster."
                     )
                 elif revision != prior:
                     revisions[name] = revision
