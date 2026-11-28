@@ -165,7 +165,7 @@
 }
 
 .colored-poster-header.colored-section-headers .layout .section > .content {
-    padding: 3rem 5rem 5rem;
+    padding: 1rem 2rem 2rem;
 }
 
 .colored-poster-header.colored-section-headers .layout .section-parent:not(.vertical):not(.column):not([data-direction="vertical"]):not([data-orientation="vertical"]):not([style*="column"]) {
