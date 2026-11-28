@@ -8,6 +8,7 @@
     const interval = Number(layout.dataset.profileValidationInterval);
     const status = document.getElementById("content-save-status");
     const attentionClass = "layout-profile-attention";
+    const overflowClass = "layout-profile-overflow";
     const contextTargetClass = "layout-profile-context-target";
     const labels = {
         abstract: "Abstract",
@@ -154,12 +155,16 @@
         if (saved) latestProfile = profile;
         const liveOverflow = new Set(profile.overflowing_sections);
         const liveUnderflow = new Set(profile.underflowing_sections);
+        for (const section of layout.querySelectorAll(".section")) {
+            if (section.clientHeight <= 0) continue;
+            const name = sectionName(section);
+            liveOverflow.delete(name);
+            if (section.scrollHeight > section.clientHeight) liveOverflow.add(name);
+        }
         for (const section of editedSections) {
             if (!layout.contains(section) || section.clientHeight <= 0) continue;
             const name = sectionName(section);
-            liveOverflow.delete(name);
             liveUnderflow.delete(name);
-            if (section.scrollHeight > section.clientHeight) liveOverflow.add(name);
         }
         const overflowing = liveOverflow;
         const underflowing = liveUnderflow;
@@ -173,11 +178,13 @@
 
         const attention = new Set([...overflowing, ...underflowing, ...oversized]);
         const outlined = new Set();
+        const overflowOutlined = new Set();
         const feedback = [];
         for (const name of attention) {
             const section = sectionElement(name);
             if (!section?.classList.contains("section") || !layout.contains(section)) continue;
             outlined.add(section);
+            if (overflowing.has(name) || oversized.has(name)) overflowOutlined.add(section);
             const shouldReport = loadOverflow === null ? saved
                 : !loadOverflow.has(name) && !previousOverflow.has(name);
             if (overflowing.has(name) && shouldReport) {
@@ -186,22 +193,41 @@
             }
         }
 
-        for (const graphic of profile.oversized_graphics) {
-            if (typeof graphic.id !== "string" || !graphic.id) continue;
-            const section = sectionElement(graphic.section);
-            const element = document.getElementById(graphic.id);
-            if (outlined.has(section) && element && section.contains(element)
-                && element.classList.contains("graphic")) {
-                outlined.add(element);
+        for (const section of layout.querySelectorAll(".section")) {
+            const name = sectionName(section);
+            const bounds = section.getBoundingClientRect();
+            const scaleX = bounds.width / section.offsetWidth || 1;
+            const scaleY = bounds.height / section.offsetHeight || 1;
+            const graphics = section.querySelectorAll(".graphic");
+            for (const [index, element] of graphics.entries()) {
+                const measured = profile.sections[name]?.graphics?.[index];
+                const oversizedGraphic = measured?.oversized || profile.oversized_graphics.some(
+                    graphic => graphic.section === name && graphic.id && graphic.id === element.id,
+                );
+                const rect = element.getBoundingClientRect();
+                const left = (rect.left - bounds.left) / scaleX - section.clientLeft + section.scrollLeft;
+                const top = (rect.top - bounds.top) / scaleY - section.clientTop + section.scrollTop;
+                const outside = section.clientHeight > 0 && section.clientWidth > 0
+                    && (left < -0.75 || top < -0.75
+                        || left + rect.width / scaleX > section.clientWidth + 0.75
+                        || top + rect.height / scaleY > section.clientHeight + 0.75);
+                if (oversizedGraphic || outside) {
+                    outlined.add(section);
+                    outlined.add(element);
+                    overflowOutlined.add(section);
+                    overflowOutlined.add(element);
+                }
             }
         }
 
         closeContextMenu();
-        for (const element of layout.querySelectorAll(`.${attentionClass}, .${contextTargetClass}`)) {
+        for (const element of layout.querySelectorAll(`.${attentionClass}, .${overflowClass}, .${contextTargetClass}`)) {
             element.classList.toggle(attentionClass, outlined.has(element));
+            element.classList.toggle(overflowClass, overflowOutlined.has(element));
             element.classList.remove(contextTargetClass);
         }
         for (const element of outlined) element.classList.add(attentionClass);
+        for (const element of overflowOutlined) element.classList.add(overflowClass);
         if (saved && loadOverflow === null) loadOverflow = overflowing;
         previousOverflow = overflowing;
         if (feedback.length) showMessage(feedback);

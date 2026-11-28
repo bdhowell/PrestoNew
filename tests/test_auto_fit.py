@@ -557,6 +557,7 @@ class AutoFitBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.locator("#content-save-status").text_content(), "Auto-fitted text saved.")
 
     async def test_context_menu_targets_only_selected_section(self):
+        await self.page.locator(".content").evaluate("element => element.style.height = '200px'")
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
         await self.page.wait_for_function("requests.some(request => request.url.endsWith('/profile'))")
         await self.page.locator("#results").dispatch_event("contextmenu", {
@@ -573,6 +574,7 @@ class AutoFitBrowserTests(unittest.IsolatedAsyncioTestCase):
             const section = document.getElementById("results");
             section.id = "methods";
             section.querySelector(".content").dataset.section = "materials and methods";
+            section.querySelector(".content").style.height = "200px";
             autoFitResult.command.payload.expected = {"materials and methods": original};
             autoFitResult.command.payload.revisions = {"materials and methods": "<p>Short methods</p>"};
             const originalFetch = window.fetch;

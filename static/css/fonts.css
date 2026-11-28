@@ -1,7 +1,9 @@
 .elegant {
-    --body-font-face: "Source Sans 3", serif;
-    --heading-font-face: "Playfair Display", serif;
+    /* --body-font-face: "Source Sans 3", serif; */
+    --body-font-face: "Playfair Display", serif;
+    --heading-font-face: "Source Sans 3", serif;
     --monospace-font-face: "Source Code Pro", monospace;
+    --poster-font-tweak: 0.85;
 }
 
 /* 1. Modern & Clean (Sans-Serif Focus) */

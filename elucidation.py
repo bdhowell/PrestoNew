@@ -169,7 +169,7 @@ def clean_html(value: str) -> str:
     return bleach.clean(
         value,
         tags={
-            "p", "br", "h2", "h3", "strong", "b", "em", "i", "u", "s", "strike", "code",
+            "div", "p", "br", "h2", "h3", "strong", "b", "em", "i", "u", "s", "strike", "code",
             "ul", "ol", "li", "sub", "sup", "a",
         },
         attributes={"a": ["href"], "ol": ["start"]},

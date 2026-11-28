@@ -62,7 +62,7 @@ def _setting(name: str, default: float, maximum: float) -> float:
 
 GRAPHICS_EXTREMELY_TALL = _setting("EXTREMELY_TALL", 0.50, 1)
 GRAPHICS_TOO_TALL = _setting("TOO_TALL", 0.33, 1)
-GRAPHICS_TOO_WIDE = _setting("TOO_WIDE", 0.33, 1)
+GRAPHICS_TOO_WIDE = _setting("TOO_WIDE", 0.67, 1)
 
 
 def _thresholds() -> dict[str, float]:

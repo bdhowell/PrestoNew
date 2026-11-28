@@ -30,6 +30,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
                 const section = document.createElement("div");
                 section.id = data.name;
                 section.className = "section";
+                section.style.cssText = "height:1px; overflow:hidden";
                 section.dataset.manualAdjustment = `I'm sorry, <Ada>, you have to adjust ${data.label} yourself.`;
                 const editor = document.createElement("div");
                 editor.className = "content";
@@ -69,6 +70,36 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
             await self.page.evaluate("name => window.autoFitPoster([name])", canonical)
             self.assertEqual(await self.page.locator(f"#{name} .content").text_content(), "Original")
         self.assertEqual(await self.page.evaluate("requests"), ["/magic/11/profile"])
+
+    async def test_profile_overflow_uses_current_section_geometry(self) -> None:
+        await self.page.set_content("""
+            <div id="layout" data-pid="11" data-profile-validation-interval="0">
+                <div id="results" class="section" style="height:100px; overflow:hidden">
+                    <div class="content" contenteditable="true" data-section="results"
+                         style="height:50px"></div>
+                </div>
+            </div>
+        """)
+        await self.page.evaluate("""() => {
+            window.profileRequests = 0;
+            window.fetch = async () => {
+                profileRequests++;
+                return {ok: true, json: async () => ({
+                    sections: {results: {}},
+                    overflowing_sections: ["results"],
+                    underflowing_sections: [],
+                    oversized_graphics: [],
+                })};
+            };
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
+        await self.page.wait_for_function("window.profileRequests === 1")
+        self.assertEqual(await self.page.locator("#results").evaluate(
+            "section => [section.scrollHeight, section.clientHeight]",
+        ), [100, 100])
+        self.assertFalse(await self.page.locator("#results").evaluate(
+            "section => section.classList.contains('layout-profile-attention')",
+        ))
 
     async def test_saved_content_is_profiled_after_a_quiet_period(self) -> None:
         await self.page.set_content("""
@@ -266,9 +297,10 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         await self.page.set_content("""
             <div id="poster-content">
                 <div id="layout" data-pid="11" data-profile-validation-interval="0">
-                    <div id="results" class="section">
+                    <div id="results" class="section" style="height:200px; overflow:hidden">
                         <div id="old-graphic" class="graphic"></div>
                         <div id="new-graphic" class="graphic"></div>
+                        <div class="content" style="height:400px; margin:0"></div>
                     </div>
                     <div id="conclusions" class="section"></div>
                 </div>
@@ -291,6 +323,15 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.locator(".layout-profile-attention").evaluate_all(
             "elements => elements.map(element => element.id)",
         ), ["results", "old-graphic", "conclusions"])
+        for target, color in (("results", "rgb(255, 0, 0)"),
+                              ("old-graphic", "rgb(255, 0, 0)"),
+                              ("conclusions", "rgb(255, 191, 0)")):
+            self.assertEqual(await self.page.locator(f"#{target}").evaluate(
+                "element => getComputedStyle(element).outlineColor",
+            ), color)
+        self.assertEqual(await self.page.locator("#old-graphic").evaluate(
+            "element => getComputedStyle(element, '::after').backgroundColor",
+        ), "rgba(255, 0, 0, 0.15)")
 
         await self.page.evaluate("""() => {
             profileResponse = {
@@ -311,8 +352,12 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
                     "element => getComputedStyle(element).outlineStyle",
                 )
                 self.assertEqual(outline, "solid" if target in ("results", "new-graphic") else "none")
+        self.assertEqual(await self.page.locator("#old-graphic").evaluate(
+            "element => getComputedStyle(element, '::after').content",
+        ), "none")
 
         await self.page.evaluate("""() => {
+            document.querySelector("#results .content").style.height = "1px";
             profileResponse.oversized_graphics = [];
             document.dispatchEvent(new Event("poster-layout-updated"));
         }""")
@@ -320,6 +365,56 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
             "document.querySelectorAll('.layout-profile-attention').length === 0",
         )
         self.assertEqual(await self.page.evaluate("feedback.length"), 1)
+        self.assertEqual(await self.page.locator(".layout-profile-overflow").count(), 0)
+
+    async def test_graphic_without_id_is_tinted_for_oversize_or_actual_overflow(self) -> None:
+        await self.page.set_content("""
+            <div id="poster-content">
+                <div id="layout" data-pid="11" data-profile-validation-interval="0">
+                    <div id="results" class="section"
+                         style="width:200px;height:200px;padding:0;overflow:hidden">
+                        <div class="graphic" style="width:100px;height:100px"></div>
+                    </div>
+                </div>
+            </div>
+        """)
+        await self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
+        await self.page.evaluate("""() => {
+            window.profileResponse = {
+                sections: {results: {graphics: [{id: "", oversized: true}]}},
+                overflowing_sections: [],
+                underflowing_sections: ["results"],
+                oversized_graphics: [{section: "results", id: ""}],
+            };
+            window.fetch = async () => ({ok: true, json: async () => profileResponse});
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-profile.js"))
+        await self.page.wait_for_function("document.querySelector('.graphic.layout-profile-overflow')")
+        self.assertEqual(await self.page.locator("#results").evaluate(
+            "element => getComputedStyle(element).outlineColor",
+        ), "rgb(255, 0, 0)")
+
+        await self.page.evaluate("""() => {
+            profileResponse.sections.results.graphics[0].oversized = false;
+            profileResponse.oversized_graphics = [];
+            document.dispatchEvent(new Event("poster-layout-updated"));
+        }""")
+        await self.page.wait_for_function("!document.querySelector('.layout-profile-overflow')")
+        self.assertEqual(await self.page.locator("#results").evaluate(
+            "element => getComputedStyle(element).outlineColor",
+        ), "rgb(255, 191, 0)")
+        self.assertEqual(await self.page.locator(".graphic").evaluate(
+            "element => getComputedStyle(element, '::after').content",
+        ), "none")
+
+        await self.page.evaluate("""() => {
+            document.querySelector(".graphic").style.height = "300px";
+            document.dispatchEvent(new Event("poster-layout-updated"));
+        }""")
+        await self.page.wait_for_function("document.querySelector('.graphic.layout-profile-overflow')")
+        self.assertEqual(await self.page.locator(".graphic").evaluate(
+            "element => getComputedStyle(element, '::after').pointerEvents",
+        ), "none")
 
     async def test_warning_and_editing_outlines_stay_visible_at_poster_zoom(self) -> None:
         await self.page.set_content("""
@@ -373,7 +468,7 @@ class LayoutProfileTests(unittest.IsolatedAsyncioTestCase):
         await self.page.locator("#editor").click()
         self.assertEqual(await self.page.locator("#results").evaluate(
             "element => getComputedStyle(element).outlineColor",
-        ), "rgb(255, 191, 0)")
+        ), "rgb(255, 0, 0)")
         self.assertEqual(await self.page.locator("#editor").evaluate(
             "element => getComputedStyle(element).outlineColor",
         ), "rgb(0, 102, 255)")

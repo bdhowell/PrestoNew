@@ -58,8 +58,8 @@ input[name="height"] {
 
 #poster-canvas {
     --gutter: 6rem;
-    font-size: calc(2rem * var(--poster-font-scale, 1));
-    line-height: 1.5;
+    font-size: calc(1.8rem * var(--poster-font-scale, 1) * var(--poster-font-tweak, 1));
+    line-height: 1.4;
     position: absolute;
     top: 0;
     left: 0;
@@ -81,6 +81,22 @@ input[name="height"] {
 #poster-content .layout-profile-attention {
     outline: var(--poster-outline-width, 3px) solid #ffbf00 !important;
     outline-offset: calc(-1 * var(--poster-outline-width, 3px));
+}
+
+#poster-content .layout-profile-overflow {
+    outline-color: #ff0000 !important;
+}
+
+#poster-content .graphic.layout-profile-overflow {
+    position: relative;
+}
+
+#poster-content .graphic.layout-profile-overflow::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgb(255 0 0 / 15%);
+    pointer-events: none;
 }
 
 #poster-content [contenteditable="true"],

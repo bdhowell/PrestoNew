@@ -109,6 +109,25 @@ class GraphicsSelectionTests(unittest.TestCase):
         self.assertNotIn("onerror", result)
         self.assertEqual(graphics.clean_section(result), result)
 
+    def test_editor_divs_around_graphic_remain_blocks_without_attributes(self) -> None:
+        source = content.GraphicSource(21, "chart.png")
+        value = (
+            '<div>Before</div><div onclick="alert(1)"><div>'
+            '<span class="graphic" data-sid="21" data-type="png"></span>'
+            '</div></div><div>After</div>'
+        )
+        result = graphics.clean_section(value, sources=[source], section="results")
+        self.assertTrue(result.startswith('<div>Before</div><div><div><span class="graphic"'))
+        self.assertTrue(result.endswith('</span></div></div><div>After</div>'))
+        self.assertNotIn("onclick", result)
+        self.assertEqual(graphics.clean_section(result), result)
+
+    def test_editor_divs_without_graphics_remain_blocks(self) -> None:
+        self.assertEqual(
+            graphics.clean_section('<div>First</div><div onclick="alert(1)">Second</div>'),
+            "<div>First</div><div>Second</div>",
+        )
+
     def test_rejects_graphics_from_another_poster_or_wrong_section(self) -> None:
         value = '<span class="graphic" data-sid="21" data-type="png"></span>'
         with self.assertRaises(ValueError):

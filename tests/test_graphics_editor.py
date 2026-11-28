@@ -255,6 +255,37 @@ class GraphicsEditorTests(unittest.IsolatedAsyncioTestCase):
                              await self.page.locator('[data-section="results"]').evaluate(
                                  "element => element.getBoundingClientRect().bottom"))
 
+    async def test_first_resize_grows_smoothly_with_centered_or_floated_graphics(self) -> None:
+        await self.page.add_style_tag(path=str(ROOT / "static/css/graphics.css"))
+        await self.page.add_style_tag(content="""
+            #poster-canvas { transform: scale(0.75); transform-origin: top left; }
+            [data-section="results"] { width: 500px; height: 600px; padding: 0; }
+        """)
+        for placement, maximum in (("free", 436), ("left-middle", 468)):
+            with self.subTest(placement=placement):
+                await self.page.locator('[data-section="results"]').evaluate("""(editor, placement) => {
+                    editor.innerHTML = `<span class="graphic" data-sid="22" data-type="png"
+                        data-placement="${placement}" data-width="100" data-height="100"
+                        style="width:100px;height:100px"><img alt="Chart"></span>`;
+                    const canvas = document.createElement('canvas');
+                    canvas.width = canvas.height = 10;
+                    editor.querySelector('img').src = canvas.toDataURL();
+                }""", placement)
+                graphic = self.page.locator('[data-section="results"] .graphic')
+                await graphic.locator("img").evaluate("image => image.decode()")
+                await graphic.click()
+                handle = await self.page.locator(".graphic-handle-e").bounding_box()
+                x = handle["x"] + handle["width"] / 2
+                y = handle["y"] + handle["height"] / 2
+                await self.page.mouse.move(x, y)
+                await self.page.mouse.down()
+                for delta in (40, 80):
+                    await self.page.mouse.move(x + delta * 0.75, y)
+                    self.assertEqual(int(await graphic.get_attribute("data-width")), 100 + delta)
+                await self.page.mouse.move(x + 600 * 0.75, y)
+                self.assertEqual(int(await graphic.get_attribute("data-width")), maximum)
+                await self.page.mouse.up()
+
     async def test_graphic_clipboard_respects_destination_section(self) -> None:
         await self.page.add_style_tag(path=str(ROOT / "static/css/graphics.css"))
         await self.select_section("results")

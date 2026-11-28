@@ -268,10 +268,16 @@
         const containerScaleX = containerRect.width / container.offsetWidth;
         const containerScaleY = containerRect.height / container.offsetHeight;
         const containerStyle = getComputedStyle(container);
+        const originalWidth = graphic.style.width;
+        // Measure the CSS width limit and auto margins at the largest permitted width.
+        graphic.style.width = "10000px";
         const graphicStyle = getComputedStyle(graphic);
-        const maxWidth = Math.max(0, container.clientWidth
+        const widestWidth = graphic.offsetWidth;
+        const horizontalMargins = parseFloat(graphicStyle.marginLeft) + parseFloat(graphicStyle.marginRight);
+        graphic.style.width = originalWidth;
+        const maxWidth = Math.max(0, Math.min(widestWidth, container.clientWidth
             - parseFloat(containerStyle.paddingLeft) - parseFloat(containerStyle.paddingRight)
-            - parseFloat(graphicStyle.marginLeft) - parseFloat(graphicStyle.marginRight));
+            - horizontalMargins));
         const contentBottom = containerRect.top + container.clientTop * containerScaleY
             + (container.clientHeight - parseFloat(containerStyle.paddingBottom)) * containerScaleY;
         const maxHeight = Math.max(0, (contentBottom - rect.top) / containerScaleY

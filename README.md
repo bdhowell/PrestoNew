@@ -109,6 +109,10 @@ and Adjust text content actions ask the author to adjust the section manually.
 After a suggestion is applied, that chosen revision is kept while remaining
 suggestions are canceled and the updated poster is profiled again.
 
+Overflow and oversized-graphic warnings use bright red outlines; underflow
+warnings use yellow outlines. Flagged graphics also receive a pale red tint.
+These editor-only indicators disappear when the next profile clears the warning.
+
 An edit cancels the active queue and clears pending work. Applications from that
 queue are undone newest-first before profiling and building a new queue. The
 editor asks separately before undoing an application whose section has since
