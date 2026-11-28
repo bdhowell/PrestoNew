@@ -400,9 +400,17 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                 source = await content.store().graphic_source(uid, pid, graphic.sid)
                 if source is None:
                     raise ValueError(f"Graphic source {graphic.sid} is no longer available.")
-                complexity = await run_in_threadpool(poster_graphics.image_complexity, source[0])
+                physical_width_mm = None
+                if graphic.parent is not None and graphic.dpi is not None:
+                    width, _ = await run_in_threadpool(source_processing.image_dimensions, source[0])
+                    physical_width_mm = width * 25.4 / graphic.dpi
+                complexity = await run_in_threadpool(
+                    poster_graphics.image_complexity, source[0], dpi=graphic.dpi,
+                    physical_width_mm=physical_width_mm,
+                )
                 legibility = await run_in_threadpool(
                     poster_graphics.image_legibility, source[0], source[1],
+                    dpi=graphic.dpi, physical_width_mm=physical_width_mm,
                 )
                 screened[graphic.sid] = (complexity, legibility)
                 if (
@@ -482,9 +490,17 @@ async def evaluate_graphics(request: Request, pid: int) -> StreamingResponse:
                     normalized = await content.store().graphic_source(uid, pid, graphic.sid)
                     if normalized is None:
                         raise ValueError(f"Graphic source {graphic.sid} is no longer available.")
-                    complexity = await run_in_threadpool(poster_graphics.image_complexity, normalized[0])
+                    physical_width_mm = None
+                    if graphic.parent is not None and graphic.dpi is not None:
+                        width, _ = await run_in_threadpool(source_processing.image_dimensions, normalized[0])
+                        physical_width_mm = width * 25.4 / graphic.dpi
+                    complexity = await run_in_threadpool(
+                        poster_graphics.image_complexity, normalized[0], dpi=graphic.dpi,
+                        physical_width_mm=physical_width_mm,
+                    )
                     legibility = await run_in_threadpool(
                         poster_graphics.image_legibility, normalized[0], normalized[1],
+                        dpi=graphic.dpi, physical_width_mm=physical_width_mm,
                     )
                 yield json.dumps({
                     "type": "result",
