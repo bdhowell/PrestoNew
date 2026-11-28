@@ -1,0 +1,9 @@
+FROM postgres:18
+
+# Install pgvector extension (compatible with PostgreSQL 18)
+RUN apt-get update && \
+    apt-get install -y postgresql-18-pgvector && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create an init script that enables the extension when the DB is created
+COPY init_vector.sql /docker-entrypoint-initdb.d/
