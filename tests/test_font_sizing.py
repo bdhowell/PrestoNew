@@ -158,6 +158,53 @@ class FontSizingBrowserTests(unittest.IsolatedAsyncioTestCase):
             slider.dispatchEvent(new Event('change', {bubbles: true}));
         }""", percentage)
 
+    async def test_author_slider_balances_within_existing_header_height(self) -> None:
+        authors = ", ".join('<span class="poster-author">Person</span>' for _ in range(6))
+        await self.page.set_content(f"""
+            <style>
+                * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+                #poster-canvas {{ width: 360px; transform: scale(0.7); transform-origin: top left; }}
+                .poster-header {{ display: flex; flex-direction: column; }}
+                #title {{ font: 20px/1.4 monospace; }}
+                #authors {{ width: 100%; align-self: center; text-align: center;
+                    font: calc(20px * var(--authors-font-scale, 1))/1.4 monospace;
+                    overflow-wrap: anywhere; }}
+            </style>
+            <div id="poster-canvas"><div id="poster-header" class="poster-header">
+                <div id="title">Title</div><div id="authors">{authors}</div>
+            </div></div>
+            <div id="font-size-controls" data-pid="11"
+                data-sizing='{{"sections":1,"title":1,"authors":1}}'>
+                <select id="font-sizing"><option value="authors">Authors</option></select>
+                <input id="font-size" type="range" min="50" max="150" value="100">
+                <output id="font-size-value"></output><button id="font-size-retry" hidden></button>
+            </div>
+            <div id="content-save-status"></div>
+        """)
+        await self.page.evaluate("""() => {
+            window.fetch = async () => ({ok: true, json: async () => ({ok: true})});
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-authors.js"))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-font-sizing.js"))
+
+        async def change(value: int) -> list[int]:
+            await self.page.locator("#font-size").evaluate("""(slider, value) => {
+                slider.value = value;
+                slider.dispatchEvent(new Event("input", {bubbles: true}));
+            }""", value)
+            return await self.page.locator("#authors").evaluate("""element => {
+                const lines = new Map();
+                for (const author of element.querySelectorAll(".poster-author")) {
+                    const top = Math.round(author.getBoundingClientRect().top);
+                    lines.set(top, (lines.get(top) || 0) + 1);
+                }
+                return [...lines.values()];
+            }""")
+
+        self.assertEqual(await change(100), [3, 3])
+        self.assertEqual(await change(150), [2, 2, 2])
+        self.assertEqual(await change(50), [1, 1, 1, 1, 1, 1])
+
     async def test_independent_sizes_line_spacing_and_restored_slider_values(self) -> None:
         await self.load_controls(title=1.2)
         self.assertEqual(await self.page.locator("#font-size").input_value(), "100")

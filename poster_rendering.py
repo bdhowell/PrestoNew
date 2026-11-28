@@ -11,6 +11,7 @@ from playwright.async_api import Page, Route, async_playwright
 ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = ROOT / "static"
 BALANCE_SCRIPT = (ROOT / "static/javascript/layout-balance.js").read_text()
+AUTHOR_BALANCE_SCRIPT = (ROOT / "static/javascript/layout-authors.js").read_text()
 THUMBNAIL_WIDTH = 640
 THUMBNAIL_HEIGHT = 640
 
@@ -87,10 +88,12 @@ async def balance_header_widths(rendered: str, width: float) -> dict[str, float]
                 "() => Array.from(document.querySelectorAll('link[rel=stylesheet]')).every(link => link.sheet)"
             ):
                 raise ValueError("Poster font stylesheet could not be loaded")
-            return {
-                selector: await balance_text_width(page, selector)
-                for selector in ("#title", "#authors")
-            }
+            title_width = await balance_text_width(page, "#title")
+            await page.add_script_tag(content=AUTHOR_BALANCE_SCRIPT)
+            authors_width = await page.locator("#authors").evaluate(
+                "element => window.balancePosterAuthors(element)"
+            )
+            return {"#title": title_width, "#authors": authors_width}
         finally:
             await browser.close()
 

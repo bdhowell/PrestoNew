@@ -66,10 +66,14 @@
         window.cancelFitQueue?.();
         const name = target.value;
         const value = Number(slider.value) / 100;
+        const headerHeight = name === "authors"
+            ? document.getElementById("poster-header").getBoundingClientRect().height : null;
         sizing[name] = value;
         canvas.style.setProperty(`--${name}-font-scale`, value);
-        if (name !== "sections") {
-            document.getElementById(name === "title" ? "title" : "authors").style.width = "100%";
+        if (name === "title") {
+            document.getElementById("title").style.width = "100%";
+        } else if (name === "authors") {
+            window.balancePosterAuthors(document.getElementById("authors"), headerHeight);
         }
         canvas.dispatchEvent(new Event("poster-font-size"));
         dirty.set(name, value);

@@ -227,6 +227,30 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.page.emulate_media(media="print")
         await assert_header_fits()
 
+    async def test_geometry_rebalances_authors_after_canvas_resize(self) -> None:
+        await self.load()
+        await self.page.evaluate("""() => {
+            const header = document.getElementById("poster-header");
+            const authors = document.getElementById("authors");
+            header.style.width = "390px";
+            authors.style.cssText = "width:100%; font:20px/1.4 monospace";
+            authors.innerHTML = Array(6).fill('<span class="poster-author">Person</span>').join(", ");
+            const canvas = document.getElementById("poster-canvas");
+            canvas.style.width = `${canvas.clientWidth + 10}px`;
+        }""")
+        await self.page.wait_for_function(
+            "document.getElementById('authors').style.width !== '100%'",
+        )
+        counts = await self.page.locator("#authors").evaluate("""element => {
+            const lines = new Map();
+            for (const author of element.querySelectorAll(".poster-author")) {
+                const top = Math.round(author.getBoundingClientRect().top);
+                lines.set(top, (lines.get(top) || 0) + 1);
+            }
+            return [...lines.values()];
+        }""")
+        self.assertEqual(counts, [3, 3])
+
     async def test_bottom_gutter_matches_header_gap_with_saved_geometry_and_canvas_resize(self) -> None:
         for template in posters.TEMPLATES:
             with self.subTest(template=template):

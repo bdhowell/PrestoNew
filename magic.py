@@ -343,7 +343,7 @@ async def _poster_page(pid: int, *, uid: int) -> AsyncGenerator[Page]:
                     return {ok: true, json: async () => ({ok: true, geometry: JSON.parse(options.body).geometry})};
                 };
             }""")
-            for name in ("layout-zoom.js", "layout-geometry.js"):
+            for name in ("layout-zoom.js", "layout-authors.js", "layout-geometry.js"):
                 await page.add_script_tag(path=str(ROOT / "static/javascript" / name))
             await page.evaluate("() => window.posterGeometryReady")
             await page.add_script_tag(path=str(ROOT / "static/javascript/layout-resize.js"))

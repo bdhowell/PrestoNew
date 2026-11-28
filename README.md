@@ -93,6 +93,9 @@ and in Wikkit. A successful change returns to the editor; the setup flow continu
 to content upload. On the template page, select a design and use Continue or
 Return to save it and proceed.
 
+The editor balances authors across the available header lines when the layout or
+author font size changes.
+
 ### Poster auto-fit
 
 After profiling, the editor queues overflowing editable sections one at a time

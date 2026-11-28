@@ -49,6 +49,8 @@
         content.style.width = `${width / geometry.scale}px`;
         content.style.height = `${height / geometry.scale}px`;
         content.style.transform = `scale(${geometry.scale})`;
+        const authors = document.getElementById("authors");
+        if (authors.querySelector(".poster-author")) window.balancePosterAuthors(authors);
         canvas.dispatchEvent(new Event("poster-font-size"));
     }
 

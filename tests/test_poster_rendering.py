@@ -114,6 +114,41 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(PlaywrightError, "no available width"):
             await balance_text_width(self.page, "#text")
 
+    async def test_author_balancing_uses_available_lines_and_even_member_counts(self) -> None:
+        authors = ", ".join(
+            f'<span class="poster-author">{name}</span>'
+            for name in ("AAAAAA", "BBBBBB", "CCCCCC", "DD", "EE", "FF")
+        )
+        rendered = f"""
+            <html><head><style>
+                * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+                body {{ width: 340px; }}
+                .poster-header {{ display: flex; flex-direction: column; }}
+                #title {{ font: 20px/1.4 monospace; text-align: center; }}
+                #authors {{ width: 100%; align-self: center; text-align: center;
+                    font: 20px/1.4 monospace; overflow-wrap: anywhere; }}
+            </style></head><body>
+                <div class="poster-header">
+                    <div id="title">Title</div><div id="authors">{authors}</div>
+                </div>
+            </body></html>
+        """
+        widths = await balance_header_widths(rendered, 340)
+        await self.page.set_content(rendered)
+        await self.page.locator("#authors").evaluate(
+            "(element, width) => element.style.width = `${width}%`", widths["#authors"],
+        )
+        counts = await self.page.locator("#authors").evaluate("""element => {
+            const lines = new Map();
+            for (const author of element.querySelectorAll(".poster-author")) {
+                const top = Math.round(author.getBoundingClientRect().top);
+                lines.set(top, (lines.get(top) || 0) + 1);
+            }
+            return [...lines.values()];
+        }""")
+        self.assertEqual(counts, [3, 3])
+        self.assertLess(widths["#authors"], 100)
+
     async def test_header_renderer_loads_local_styles_and_measures_both_sections(self) -> None:
         rendered = """
             <html><head><link rel="stylesheet" href="/static/css/layout.css">
@@ -179,6 +214,7 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
                 link.getparent().remove(link)
         await self.page.set_content(html.tostring(document, encoding="unicode"))
         await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-zoom.js"))
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-authors.js"))
         await self.page.wait_for_function(
             "() => document.getElementById('poster-stage').style.height !== ''",
         )

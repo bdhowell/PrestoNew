@@ -125,7 +125,10 @@ async def layout(template: str, pid: int, *, uid: int, request: Request | None =
     sections, authors = await posters.store().content(uid, pid)
     values = {which: graphics.clean_section(value) for which, value in sections}
     values["authors"] = ", ".join(
-        html.escape(name).replace(" ", "&nbsp;") + (f"&nbsp;({html.escape(affiliation)})" if affiliation else "")
+        '<span class="poster-author">'
+        + html.escape(name).replace(" ", "&nbsp;")
+        + (f"&nbsp;({html.escape(affiliation)})" if affiliation else "")
+        + "</span>"
         for name, affiliation in authors
     )
     values["author"] = values["authors"]

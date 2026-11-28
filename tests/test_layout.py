@@ -447,6 +447,7 @@ class LayoutRouteTests(unittest.TestCase):
                 document = html.fromstring(self.client.get("/layout/edit").text)
                 authors = document.get_element_by_id("authors")
                 self.assertEqual(authors.text_content(), "<Ada>\u00a0(Institute), Grace, Lin\u00a0(University)")
+                self.assertEqual(len(authors.xpath('./span[@class="poster-author"]')), 3)
                 self.assertFalse(authors.xpath(".//br"))
                 self.assertIn("authors", authors.get("class").split())
                 title = document.get_element_by_id("title")
