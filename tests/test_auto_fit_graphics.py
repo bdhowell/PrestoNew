@@ -257,7 +257,7 @@ class GraphicAutoFitDispatchTests(unittest.IsolatedAsyncioTestCase):
             result = await magic.auto_fit(11, ["introduction"], uid=7)
         self.assertEqual(result["cribbed"], ["introduction"])
         self.assertIn(
-            "introduction is too short. Consider adjusting the poster&rsquo;s font size or a smaller poster.",
+            "Introduction is too short. Consider adjusting the poster&rsquo;s font size or a smaller poster.",
             result["say"],
         )
         self.assertEqual(result["command"]["payload"]["revisions"], {})
