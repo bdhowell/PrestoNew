@@ -136,25 +136,6 @@ window.posterSizingReady = (async () => {
         position();
     }
 
-    function setHandlesVisible(show) {
-        if (!show && dragging) {
-            const {handle, pointer, moved} = dragging;
-            dragging = null;
-            if (handle.separator.hasPointerCapture(pointer)) {
-                handle.separator.releasePointerCapture(pointer);
-            }
-            if (moved) {
-                clearTimeout(timer);
-                save();
-            }
-        }
-        for (const handle of handles) {
-            handle.separator.hidden = !show;
-            handle.toggle.setAttribute("aria-expanded", String(show));
-            if (!show && document.activeElement === handle.separator) handle.toggle.focus();
-        }
-    }
-
     function addHandle(id, axis, label, first, second, kind, row = null, index = null) {
         const gutter = document.createElement("div");
         gutter.className = `resize-gutter resize-${axis}`;
@@ -162,10 +143,8 @@ window.posterSizingReady = (async () => {
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = "resize-toggle";
-        toggle.setAttribute("aria-label", `Toggle all resize handles (${label.toLowerCase()})`);
-        toggle.setAttribute("aria-expanded", "false");
-        toggle.setAttribute("aria-controls", `resize-${id}`);
-        toggle.title = "Click to show or hide all resize handles.";
+        toggle.setAttribute("aria-label", `Resize ${label.toLowerCase()}`);
+        toggle.title = "Press and drag to resize. Use arrow keys to resize; Home/End set limits.";
         const separator = document.createElement("div");
         separator.id = `resize-${id}`;
         separator.className = "resize-handle";
@@ -181,11 +160,11 @@ window.posterSizingReady = (async () => {
         overlay.append(gutter);
         const handle = {id, axis, first, second, kind, row, index, gutter, toggle, separator};
         handles.push(handle);
-        toggle.addEventListener("click", () => setHandlesVisible(separator.hidden));
-        separator.addEventListener("pointerdown", event => {
+        function startDrag(event) {
             if (event.button !== 0 || dragging) return;
             const firstBounds = bounds(first);
             const secondBounds = bounds(second);
+            for (const item of handles) item.separator.hidden = item !== handle;
             dragging = {
                 handle, pointer: event.pointerId,
                 start: event[axis === "x" ? "clientX" : "clientY"],
@@ -195,34 +174,41 @@ window.posterSizingReady = (async () => {
                     : firstBounds.height + secondBounds.height,
                 moved: false,
             };
-            separator.setPointerCapture(event.pointerId);
-            separator.focus();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            if (event.currentTarget === separator) separator.focus();
+            else toggle.focus();
             event.preventDefault();
-        });
-        separator.addEventListener("pointermove", event => {
+        }
+        function moveDrag(event) {
             if (!dragging || dragging.handle !== handle || dragging.pointer !== event.pointerId) return;
             const delta = event[axis === "x" ? "clientX" : "clientY"] - dragging.start;
             if (!dragging.moved && Math.abs(delta) < 2) return;
             dragging.moved = true;
             move(handle, dragging.value, delta, dragging.layoutSize, dragging.pair);
-        });
+        }
         function finish(event) {
             if (!dragging || dragging.handle !== handle || dragging.pointer !== event.pointerId) return;
             const moved = dragging.moved;
+            const target = event.currentTarget;
             dragging = null;
-            if (separator.hasPointerCapture(event.pointerId)) separator.releasePointerCapture(event.pointerId);
-            if (!moved && event.type === "pointerup") setHandlesVisible(false);
+            if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
+            if (document.activeElement === separator) toggle.focus();
+            for (const item of handles) item.separator.hidden = true;
             if (moved) {
                 clearTimeout(timer);
                 save();
             }
         }
-        separator.addEventListener("pointerup", finish);
-        separator.addEventListener("pointercancel", finish);
-        separator.addEventListener("lostpointercapture", finish);
-        separator.addEventListener("keydown", event => {
+        for (const target of [toggle, separator]) {
+            target.addEventListener("pointerdown", startDrag);
+            target.addEventListener("pointermove", moveDrag);
+            target.addEventListener("pointerup", finish);
+            target.addEventListener("pointercancel", finish);
+            target.addEventListener("lostpointercapture", finish);
+        }
+        function resizeByKeyboard(event) {
             if (event.key === "Escape") {
-                setHandlesVisible(false);
+                for (const item of handles) item.separator.hidden = true;
                 event.preventDefault();
                 return;
             }
@@ -239,7 +225,9 @@ window.posterSizingReady = (async () => {
                 ["Home", "End"].includes(event.key) ? limit
                     : direction * (event.shiftKey ? 10 : 1), size, pair);
             event.preventDefault();
-        });
+        }
+        toggle.addEventListener("keydown", resizeByKeyboard);
+        separator.addEventListener("keydown", resizeByKeyboard);
         return handle;
     }
 
@@ -307,10 +295,6 @@ window.posterSizingReady = (async () => {
         splitHandles.push(addHandle("conclusions", "y", "Conclusions and citations height",
             conclusions, citations, "split"));
     }
-    for (const handle of handles) {
-        handle.toggle.setAttribute("aria-controls", handles.map(item => item.separator.id).join(" "));
-    }
-
     function position() {
         const layoutBounds = bounds(layout);
         const zoom = scale();

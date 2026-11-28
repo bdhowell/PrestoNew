@@ -397,6 +397,14 @@ input[name="height"] {
     cursor: pointer;
 }
 
+.resize-x .resize-toggle {
+    cursor: ew-resize;
+}
+
+.resize-y .resize-toggle {
+    cursor: ns-resize;
+}
+
 .resize-toggle:focus-visible {
     outline: 3px dashed #443a80;
     outline-offset: -3px;
