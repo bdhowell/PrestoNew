@@ -183,6 +183,50 @@ class TextBalancingTests(unittest.IsolatedAsyncioTestCase):
             "() => document.getElementById('poster-stage').style.height !== ''",
         )
 
+    async def test_touching_section_corners_are_square_and_guttered_sections_stay_rounded(self) -> None:
+        for template in ("central", "vertical", "arena"):
+            await self.editor(template)
+            for header_classes in ("", "colored-section-headers",
+                                   "colored-poster-header colored-section-headers"):
+                with self.subTest(template=template, headers=header_classes):
+                    await self.page.locator("body").evaluate(
+                        "(body, headers) => { body.className = `blue corners-rounded ${headers}`; }",
+                        header_classes,
+                    )
+                    corners = await self.page.locator("#citations, #acknowledgements, #information").evaluate_all(
+                        """sections => sections.map(section => {
+                            const style = getComputedStyle(section);
+                            return [style.borderTopLeftRadius, style.borderTopRightRadius,
+                                style.borderBottomRightRadius, style.borderBottomLeftRadius];
+                        })""",
+                    )
+                    direction = await self.page.locator("#citations").evaluate("""section =>
+                        section.parentElement.classList.contains('section-parent')
+                            ? getComputedStyle(section.parentElement).flexDirection : null
+                    """)
+                    if direction == "column":
+                        expected = [
+                            ["40px", "40px", "0px", "0px"],
+                            ["0px", "0px", "0px", "0px"],
+                            ["0px", "0px", "40px", "40px"],
+                        ]
+                    elif direction == "row":
+                        expected = [
+                            ["40px", "0px", "0px", "40px"],
+                            ["0px", "0px", "0px", "0px"],
+                            ["0px", "40px", "40px", "0px"],
+                        ]
+                        if header_classes.startswith("colored-poster-header"):
+                            expected = [["0px"] * 4] * 3
+                    else:
+                        expected = [["40px"] * 4] * 3
+                    self.assertEqual(corners, expected)
+                    self.assertEqual(await self.page.locator("#introduction").evaluate("""section => {
+                        const style = getComputedStyle(section);
+                        return [style.borderTopLeftRadius, style.borderTopRightRadius,
+                            style.borderBottomRightRadius, style.borderBottomLeftRadius];
+                    }"""), ["40px"] * 4)
+
     async def test_base_typography_scales_with_physical_area_not_zoom_or_content(self) -> None:
         for template in posters.TEMPLATES:
             for width, height in ((36, 36), (36, 48), (72, 72), (96, 96)):

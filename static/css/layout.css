@@ -583,10 +583,17 @@ input[name="height"] {
 }
 
 /* Horizontally adjacent sections in row layout */
-.section-parent:not(.vertical):not(.column):not([data-direction="vertical"]):not([data-orientation="vertical"]) > .section + .section {
+.section-parent:not(.vertical):not(.column):not([data-direction="vertical"]):not([data-orientation="vertical"]):not([style*="column"]) > .section + .section {
     border-left-color: var(--border-color);
     border-left-width: var(--border-width);
     border-left-style: solid;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+}
+
+.section-parent:not(.vertical):not(.column):not([data-direction="vertical"]):not([data-orientation="vertical"]):not([style*="column"]) > .section:has(+ .section) {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
 }
 
 /* Vertically adjacent sections in column layout */
@@ -616,6 +623,15 @@ input[name="height"] {
     border-top: 0;
     border-top-left-radius: 0;
     border-top-right-radius: 0;
+}
+
+.section-parent.vertical > .section:has(+ .section),
+.section-parent.column > .section:has(+ .section),
+.section-parent[data-direction="vertical"] > .section:has(+ .section),
+.section-parent[data-orientation="vertical"] > .section:has(+ .section),
+.section-parent:where([style*="column"]) > .section:has(+ .section) {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
 }
 
 .content {

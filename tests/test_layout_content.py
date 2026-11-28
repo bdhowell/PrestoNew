@@ -165,6 +165,7 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
             <div class="section">Information</div>
         </div>""")
         await self.page.add_style_tag(path=str(ROOT / "static/css/layout.css"))
+        await self.page.add_style_tag(path=str(ROOT / "static/css/themes.css"))
         children = await self.page.locator(".section-parent > .section").evaluate_all(
             """sections => sections.map(section => {
                 const bounds = section.getBoundingClientRect();
@@ -187,6 +188,36 @@ class AppearanceDialogTests(unittest.IsolatedAsyncioTestCase):
             self.assertAlmostEqual(previous["bottom"], current["top"], delta=0.1)
             self.assertEqual(current["borderTop"], "0px")
             self.assertNotEqual(previous["borderBottom"], "0px")
+
+    async def test_inline_column_groups_keep_side_borders_and_square_internal_corners(self) -> None:
+        await self.page.set_content("""<body class="corners-rounded">
+            <div id="column-group" class="section-parent" style="flex-direction: column">
+                <div class="section">First</div><div class="section">Second</div>
+            </div>
+            <div id="row-group" class="section-parent">
+                <div class="section">First</div><div class="section">Second</div><div class="section">Third</div>
+            </div>
+        </body>""")
+        for stylesheet in ("layout", "themes"):
+            await self.page.add_style_tag(path=str(ROOT / f"static/css/{stylesheet}.css"))
+        sections = await self.page.locator("#column-group > .section").evaluate_all("""sections =>
+            sections.map(section => {
+                const style = getComputedStyle(section);
+                return [style.borderLeftWidth, style.borderTopWidth,
+                    style.borderTopLeftRadius, style.borderBottomLeftRadius];
+            })
+        """)
+        self.assertEqual(sections, [["3px", "3px", "40px", "0px"], ["3px", "0px", "0px", "40px"]])
+        row = await self.page.locator("#row-group > .section").evaluate_all("""sections =>
+            sections.map(section => {
+                const style = getComputedStyle(section);
+                return [style.borderTopLeftRadius, style.borderTopRightRadius,
+                    style.borderBottomRightRadius, style.borderBottomLeftRadius];
+            })
+        """)
+        self.assertEqual(row, [
+            ["40px", "0px", "0px", "40px"], ["0px"] * 4, ["0px", "40px", "40px", "0px"],
+        ])
 
     async def asyncSetUp(self) -> None:
         playwright = await async_playwright().start()
