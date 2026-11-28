@@ -306,6 +306,10 @@ input[name="height"] {
     margin-left: auto;
 }
 
+#editor-controls #print {
+    color: rgb(255, 100, 100);
+}
+
 #editor-controls #wikkit,
 #editor-controls #auto-fit {
     color: rgb(244, 211, 94);
