@@ -49,17 +49,21 @@ def legibility_threshold() -> float:
     return threshold
 
 
-def image_complexity(data: bytes) -> dict[str, float | bool]:
+def image_complexity(
+    data: bytes, *, dpi: float | None = None, physical_width_mm: float | None = None,
+) -> dict[str, float | bool]:
     """Score a raster image with blurred Canny edge density and an area penalty."""
     threshold = complexity_threshold()
-    score = processing.image_complexity_score(data)
+    score = processing.image_complexity_score(data, dpi=dpi, physical_width_mm=physical_width_mm)
     return {"score": score, "threshold": threshold, "too_complex": score > threshold}
 
 
-def image_legibility(data: bytes, mimetype: str) -> dict[str, float | bool]:
+def image_legibility(
+    data: bytes, mimetype: str, *, dpi: float | None = None, physical_width_mm: float | None = None,
+) -> dict[str, float | bool]:
     """Score an image's legibility and compare it with the poster threshold."""
     threshold = legibility_threshold()
-    score = processing.image_legibility_score(data, mimetype)
+    score = processing.image_legibility_score(data, mimetype, dpi=dpi, physical_width_mm=physical_width_mm)
     return {"score": score, "threshold": threshold, "below_threshold": score < threshold}
 
 

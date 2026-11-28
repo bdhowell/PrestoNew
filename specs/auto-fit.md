@@ -42,7 +42,9 @@ Save these settings with the poster, preserve them across template/font/theme
 changes, and apply them to read-only previews. Report save errors with a retry
 action and warn before navigating away with unsaved adjustments.
 
-When a poster is created, fix its resizeable areas to the initial layout dimensions, so that subsequent adjustments to font sizing or content do not alter the original layout proportions.
+When a poster is created, fix its resizeable section areas to the initial layout
+proportions. The header instead grows or shrinks to fit the title, logo, and
+authors; the section layout fills the remaining space.
 Initialize and save these proportions on the first rendered editor visit once
 the poster has dimensions, separately for each template. Restore them on reopen.
 Clip content that outgrows its fixed area. Manual gutter resizing remains

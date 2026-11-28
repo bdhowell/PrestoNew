@@ -6,7 +6,6 @@
     const output = document.querySelector("#graphic-evaluations");
     const progress = document.querySelector("#evaluation-progress");
     const meter = document.querySelector("#evaluation-progress-meter");
-    const progressCount = document.querySelector("#evaluation-progress-count");
     const remaining = document.querySelector("#evaluation-remaining");
     const summary = document.querySelector("#evaluation-summary");
     const panes = document.querySelector("#evaluation-panes");
@@ -90,12 +89,6 @@
         if (timer !== null) clearInterval(timer);
         timer = null;
     }
-
-    function updateProgress() {
-        meter.value = completed;
-        progressCount.textContent = `${completed} of ${total}`;
-    }
-
 
     function element(tag, text, className = "") {
         const node = document.createElement(tag);
@@ -208,7 +201,7 @@
             progress.hidden = total === 0;
             if (total > 0) {
                 meter.max = total;
-                updateProgress();
+                meter.value = completed;
                 estimateRemaining(total * 20);
                 timer = setInterval(updateCountdown, 1000);
             }
@@ -256,7 +249,7 @@
                 processingTime += performance.now() - processing.started;
                 completed = processing.index;
                 processing = null;
-                updateProgress();
+                meter.value = completed;
                 estimateRemaining(processingTime / completed / 1000 * (total - completed));
             }
         } else if (event.type === "error") {

@@ -27,7 +27,6 @@ async function evaluate(suitableCount) {
         "#graphic-evaluations": node(),
         "#evaluation-progress": node(),
         "#evaluation-progress-meter": node(),
-        "#evaluation-progress-count": node(),
         "#evaluation-remaining": node(),
         "#evaluation-summary": node(),
         "#evaluation-panes": node(),

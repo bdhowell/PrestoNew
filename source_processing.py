@@ -62,6 +62,7 @@ class Asset:
     description_image: bytes | None = field(default=None, repr=False)
     # Width the asset occupies in its source document (e.g. on the PDF page), when known.
     physical_width_mm: float | None = None
+    dpi: float | None = None
 
 
 @dataclass
@@ -84,17 +85,34 @@ def image_dimensions(data: bytes) -> tuple[int, int]:
         raise ValueError("The image cannot be decoded safely.") from error
 
 
-# Images of known physical size are resampled to this density before complexity
-# scoring, so the score does not depend on the resolution they were extracted at.
+def image_dpi(data: bytes) -> float | None:
+    """Return horizontal DPI when the image contains a usable physical density."""
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            density = image.info.get("dpi")
+            if not isinstance(density, (tuple, list)) or not density:
+                return None
+            try:
+                dpi = float(density[0])
+            except (TypeError, ValueError, OverflowError):
+                return None
+            return dpi if math.isfinite(dpi) and dpi > 0 else None
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+        raise ValueError("The image cannot be decoded safely.") from error
+
+
+# Default normalization density for images of known physical size.
 COMPLEXITY_REFERENCE_DPI = 144.0
 
 
-def image_complexity_score(data: bytes, *, physical_width_mm: float | None = None) -> float:
+def image_complexity_score(
+    data: bytes, *, physical_width_mm: float | None = None, dpi: float | None = None,
+) -> float:
     """Edge density with a penalty for large areas.
 
-    With physical_width_mm, the image is first resampled to COMPLEXITY_REFERENCE_DPI
-    of that width (downsampling only), so a figure scores the same whether it was
-    extracted at 144 or 600 DPI. Without it, the image's own pixels are used.
+    With physical_width_mm, the image is resampled to IMAGE_COMPLEXITY_REFERENCE_DPI
+    of that width (downsampling only). Otherwise, use supplied or embedded DPI;
+    images without density retain their original pixels.
     """
     try:
         power = float(os.environ.get("IMAGE_COMPLEXITY_PENALTY_POWER", "0.15"))
@@ -107,8 +125,19 @@ def image_complexity_score(data: bytes, *, physical_width_mm: float | None = Non
         if image is None:
             raise ValueError("The image could not be decoded for complexity evaluation.")
         height, width = image.shape
+        reference_dpi = _positive_setting("IMAGE_COMPLEXITY_REFERENCE_DPI", COMPLEXITY_REFERENCE_DPI)
+        if dpi is not None and (not math.isfinite(dpi) or dpi <= 0):
+            raise ValueError("The image DPI must be finite and positive.")
+        if physical_width_mm is not None and (
+            not math.isfinite(physical_width_mm) or physical_width_mm <= 0
+        ):
+            raise ValueError("The physical width must be finite and positive.")
+        if physical_width_mm is None:
+            density = dpi if dpi is not None else image_dpi(data)
+            if density is not None:
+                physical_width_mm = width * 25.4 / density
         if physical_width_mm is not None:
-            target = round(physical_width_mm / 25.4 * COMPLEXITY_REFERENCE_DPI)
+            target = max(1, round(physical_width_mm / 25.4 * reference_dpi))
             if 0 < target < width:
                 height = max(1, round(height * target / width))
                 width = target
@@ -122,15 +151,16 @@ def image_complexity_score(data: bytes, *, physical_width_mm: float | None = Non
 
 def image_legibility_score(
     data: bytes, mimetype: str, *, raster_data: bytes | None = None,
-    physical_width_mm: float | None = None,
+    physical_width_mm: float | None = None, dpi: float | None = None,
 ) -> float:
     """Score image feature visibility using configured size and viewing conditions.
 
     The image is judged at a physical display width. With physical_width_mm (the
     asset's width in its source document), that is the width times
     DIAGRAM_LEGIBILITY_SOURCE_MAGNIFICATION, whatever the pixel resolution.
-    Otherwise it is the pixel width at DIAGRAM_LEGIBILITY_DISPLAY_DPI, or for SVG
-    the intrinsic vector width. SVG assets are evaluated from the raster crop
+    Otherwise it is the pixel width at the supplied or embedded DPI, falling
+    back to DIAGRAM_LEGIBILITY_DISPLAY_DPI. For SVG, the intrinsic vector width
+    is used. SVG assets are evaluated from the raster crop
     paired with the vector asset by document extraction. Other
     DIAGRAM_LEGIBILITY_* settings control viewing distance and the visibility model.
     """
@@ -147,12 +177,15 @@ def image_legibility_score(
     if image is None:
         raise ValueError("The image could not be decoded for legibility evaluation.")
     params, target_angle, display_dpi = _diagram_legibility_parameters()
+    if dpi is not None and (not math.isfinite(dpi) or dpi <= 0):
+        raise ValueError("The image DPI must be finite and positive.")
     if physical_width_mm is not None:
         if not math.isfinite(physical_width_mm) or physical_width_mm <= 0:
             raise ValueError("The physical width must be finite and positive.")
         display_width_mm = physical_width_mm * _positive_setting("DIAGRAM_LEGIBILITY_SOURCE_MAGNIFICATION", 1.5)
     else:
-        display_width_mm = display_width_px * 25.4 / display_dpi
+        density = dpi if dpi is not None else (image_dpi(data) if not is_svg else None)
+        display_width_mm = display_width_px * 25.4 / (density if density is not None else display_dpi)
     categories = ("text", "line", "symbol", "detail")
     thresholds = Thresholds(
         stroke={category: target_angle for category in categories},
@@ -260,7 +293,8 @@ def image_as_png(data: bytes) -> bytes:
             if image.mode == "CMYK":
                 image = image.convert("RGB")
             output = io.BytesIO()
-            image.save(output, format="PNG")
+            dpi = image_dpi(data)
+            image.save(output, format="PNG", **({"dpi": (dpi, dpi)} if dpi is not None else {}))
             return output.getvalue()
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
         raise ValueError("The image cannot be converted to PNG safely.") from error
@@ -388,6 +422,7 @@ def extract(filename: str, data: bytes, *, enrich_formulas: bool | None = None,
             assets = element.get("assets", [])
             raster_assets = element.get("raster_assets", [])
             widths_pt = element.get("asset_widths_pt", [])
+            densities = element.get("asset_dpis", [])
             for index, relative in enumerate(assets):
                 path = (root / relative).resolve()
                 if not path.is_relative_to(root):
@@ -404,11 +439,16 @@ def extract(filename: str, data: bytes, *, enrich_formulas: bool | None = None,
                         raise ProcessingError("The converter returned an invalid asset path.")
                     description_image = raster_path.read_bytes()
                 width_pt = widths_pt[index] if index < len(widths_pt) else None
+                dpi = densities[index] if index < len(densities) else None
+                if dpi is None and not is_svg:
+                    dpi = image_dpi(asset_data)
                 result.assets.append(Asset(
                     f"{Path(filename).stem}-{element['kind']}-{number}-{index + 1}{extension}",
                     asset_data, mimetype, "svg" if is_svg and kind == "image" else kind,
                     text, description, width, height, description_image,
-                    width_pt * 25.4 / 72 if width_pt else None,
+                    (width_pt * 25.4 / 72 if width_pt else
+                     width * 25.4 / dpi if dpi and not is_svg else None),
+                    dpi,
                 ))
             if not assets and text:
                 extension = ".tex" if kind == "math expression" else ".txt"

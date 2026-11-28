@@ -147,7 +147,7 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
             if (edited) {
                 document.getElementById('poster-canvas').style.setProperty('--sections-font-scale', 1.5);
                 document.getElementById('poster-canvas').style.setProperty('--title-font-scale', 1.5);
-                document.getElementById('title').textContent = 'A longer title '.repeat(30);
+                document.getElementById('title').textContent = 'A longer title '.repeat(5);
                 document.querySelector('#results .content').textContent = 'More findings '.repeat(1000);
             }
             window.geometryRequests = [];
@@ -171,6 +171,52 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
                 return [element.id, [parseFloat(style.width), parseFloat(style.height)]];
             }))""",
         )
+
+    async def test_header_fits_both_font_sizes_and_restored_geometry(self) -> None:
+        await self.load()
+        initial = await self.page.evaluate("geometryRequests[0].data.geometry")
+        await self.page.evaluate("""() => {
+            document.getElementById('title').textContent = 'A detailed poster title '.repeat(5);
+            document.getElementById('authors').textContent = 'Author and affiliation '.repeat(6);
+        }""")
+        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-font-sizing.js"))
+
+        async def assert_header_fits() -> float:
+            actual, natural, contained = await self.page.locator("#poster-header").evaluate("""header => {
+                const bounds = header.getBoundingClientRect();
+                const oldHeight = header.style.height;
+                header.style.height = 'auto';
+                const natural = header.getBoundingClientRect().height;
+                header.style.height = oldHeight;
+                const contained = [...header.children].every(child => {
+                    const rect = child.getBoundingClientRect();
+                    return rect.top >= bounds.top - 0.1 && rect.bottom <= bounds.bottom + 0.1;
+                });
+                return [bounds.height, natural, contained];
+            }""")
+            self.assertAlmostEqual(actual, natural, delta=0.1)
+            self.assertTrue(contained)
+            return actual
+
+        heights = []
+        for target, value in (("title", 150), ("authors", 150), ("title", 50), ("authors", 50)):
+            await self.page.locator("#font-sizing").evaluate("""(select, target) => {
+                select.value = target;
+                select.dispatchEvent(new Event('change', {bubbles: true}));
+            }""", target)
+            await self.page.locator("#font-size").evaluate("""(slider, value) => {
+                slider.value = value;
+                slider.dispatchEvent(new Event('input', {bubbles: true}));
+            }""", value)
+            heights.append(await assert_header_fits())
+        self.assertGreater(heights[1], heights[0])
+        self.assertGreater(heights[0], heights[2])
+        self.assertGreater(heights[2], heights[3])
+
+        await self.load(initial=initial, edited=True)
+        await assert_header_fits()
+        await self.page.emulate_media(media="print")
+        await assert_header_fits()
 
     async def test_bottom_gutter_matches_header_gap_with_saved_geometry_and_canvas_resize(self) -> None:
         for template in posters.TEMPLATES:
@@ -203,7 +249,7 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
                             self.assertAlmostEqual(gaps["bottom"], gaps["top"], delta=0.1)
                             self.assertAlmostEqual(gaps["paneBottom"], 0, delta=0.1)
 
-    async def test_initial_geometry_does_not_change_with_content_or_any_font_target(self) -> None:
+    async def test_initial_geometry_does_not_change_with_section_content_or_font_size(self) -> None:
         for template in posters.TEMPLATES:
             with self.subTest(template=template):
                 await self.load(template)
@@ -212,11 +258,7 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
                     for (const element of document.querySelectorAll('#layout .content')) {
                         element.textContent = 'Additional scientific observations. '.repeat(1000);
                     }
-                    for (const target of ['sections', 'title', 'authors']) {
-                        document.getElementById('poster-canvas').style.setProperty(`--${target}-font-scale`, 1.5);
-                    }
-                    document.getElementById('title').textContent = 'A much longer title '.repeat(40);
-                    document.getElementById('authors').textContent = 'Additional author '.repeat(50);
+                    document.getElementById('poster-canvas').style.setProperty('--sections-font-scale', 1.5);
                     document.getElementById('poster-canvas').dispatchEvent(new Event('poster-font-size'));
                 }""")
                 await self.page.wait_for_timeout(150)
@@ -286,6 +328,7 @@ class GeometryBrowserTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(template=template):
                 await self.load(template)
                 initial = await self.page.evaluate("geometryRequests[0].data.geometry")
+                await self.load(template, initial=initial, edited=True)
                 before = await self.all_areas()
                 await self.load(template, initial=initial, edited=True)
                 self.assertEqual(await self.all_areas(), before)

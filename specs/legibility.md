@@ -458,11 +458,13 @@ These `LEGIBILITY_` CLI settings are separate from the source-processing
 
 The source-processing pipeline stores `source.legibility` as the fraction of
 automatically detected image features that meet the configured visibility
-threshold. Raster and vector assets are scored at their intrinsic display size
-using `DIAGRAM_LEGIBILITY_DISPLAY_DPI`; vectors are measured from their paired
-raster rendering while their SVG viewBox determines physical size. Scores are
-screening heuristics, not probabilities of recognition or clinically validated
-measures.
+threshold. Raster assets use their horizontal DPI, when known, to infer
+physical size; otherwise `DIAGRAM_LEGIBILITY_DISPLAY_DPI` is used. Extracted
+assets with a known source width are evaluated at that width multiplied by
+`DIAGRAM_LEGIBILITY_SOURCE_MAGNIFICATION`. Vectors are measured from their
+paired raster rendering with their SVG viewBox or source width determining
+physical size. Scores are screening heuristics, not probabilities of recognition
+or clinically validated measures.
 
 Configure scoring in `ENV` or `.env`:
 
@@ -478,7 +480,8 @@ Configure scoring in `ENV` or `.env`:
 | `DIAGRAM_LEGIBILITY_CONTRAST_REFERENCE` | `0.45` | Reference contrast for the heuristic penalty |
 | `DIAGRAM_LEGIBILITY_CONTRAST_FLOOR` | `0.04` | Minimum contrast used by the penalty |
 | `DIAGRAM_LEGIBILITY_MAX_CONTRAST_PENALTY` | `4.0` | Cap on the contrast penalty |
-| `DIAGRAM_LEGIBILITY_DISPLAY_DPI` | `96.0` | CSS pixels per printed inch used to estimate physical size |
+| `DIAGRAM_LEGIBILITY_DISPLAY_DPI` | `96.0` | Fallback pixels per inch when no image density is known |
+| `DIAGRAM_LEGIBILITY_SOURCE_MAGNIFICATION` | `1.5` | Display scale for extracted assets with known source width |
 
 The target angle is applied uniformly to detected feature classes; the chosen
 legibility level further scales its required margin. Distance units and boolean

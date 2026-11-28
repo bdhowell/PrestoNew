@@ -438,7 +438,7 @@ class ContentRouteTests(unittest.TestCase):
         self.sources.evaluation_sources.return_value = [
             content.GraphicEvaluationSource(1, "saved.png", "image/png", None, saved, None),
             content.GraphicEvaluationSource(2, "complex.png", "image/png", None, None, None),
-            content.GraphicEvaluationSource(3, "illegible.png", "image/png", 1, None, None),
+            content.GraphicEvaluationSource(3, "illegible.png", "image/png", 1, None, None, dpi=300),
             content.GraphicEvaluationSource(4, "valid.png", "image/png", 1, None, None),
             content.GraphicEvaluationSource(5, "upload.png", "image/png", None, None, None),
         ]
@@ -447,21 +447,26 @@ class ContentRouteTests(unittest.TestCase):
         self.sources.graphic_source.side_effect = lambda uid, pid, sid: (bytes([sid]), "image/png")
         self.sources.save_graphic_evaluation.return_value = True
 
-        def complexity(data):
+        def complexity(data, **kwargs):
             return {"score": 0.6 if data == b"\x02" else 0.1, "threshold": 0.5,
                     "too_complex": data == b"\x02"}
 
-        def legibility(data, mimetype):
+        def legibility(data, mimetype, **kwargs):
             return {"score": 0.8 if data == b"\x03" else 1.0, "threshold": 0.95,
                     "below_threshold": data == b"\x03"}
 
-        with patch.object(routes.poster_graphics, "image_complexity", side_effect=complexity), \
-                patch.object(routes.poster_graphics, "image_legibility", side_effect=legibility), \
+        with patch.object(routes.poster_graphics, "image_complexity", side_effect=complexity) as complexity_mock, \
+                patch.object(routes.poster_graphics, "image_legibility", side_effect=legibility) as legibility_mock, \
+                patch.object(routes.source_processing, "image_dimensions", return_value=(300, 150)), \
                 patch.object(routes.openai, "OpenAI"), \
                 patch.object(routes.graphic_evaluation, "evaluate_image",
                              return_value=Mock(model_dump=Mock(return_value=saved))) as evaluate:
             response = self.client.post("/content/evaluate/11", json={})
         events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(complexity_mock.call_args_list[2].kwargs,
+                         {"dpi": 300, "physical_width_mm": 25.4})
+        self.assertEqual(legibility_mock.call_args_list[2].kwargs,
+                         {"dpi": 300, "physical_width_mm": 25.4})
         self.assertEqual(events[0], {
             "type": "start", "total": 2, "uploaded": 1, "extracted": 1,
             "estimate_word": "zero point seven",
@@ -1118,7 +1123,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                 "digest", [], section, rating, "Assessment explanation.",
                 criteria, ["Supported"], ["Limitation"], ["Improvement"],
                 updated, updated, updated, updated,
-                "<table><tr><td>Data</td></tr></table><script>alert(1)</script>",
+                "<table><tr><td>Data</td></tr></table><script>alert(1)</script>", 300.0,
             )
 
         rows = [
@@ -1126,7 +1131,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
             assessment_row("results", "highly"),
         ]
         stale_rows = [
-            (*row[:17], updated.replace(day=11), row[18], row[19])
+            (*row[:17], updated.replace(day=11), row[18], row[19], row[20])
             for row in rows
         ]
         cursor.fetchall.side_effect = [rows, stale_rows]
@@ -1136,6 +1141,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
             stale_graphic = (await store.evaluation_sources(7, 11))[0]
 
         self.assertEqual(graphic.type, "tables")
+        self.assertEqual(graphic.dpi, 300.0)
         self.assertEqual(
             graphic.table_html,
             "<table><tbody><tr><td>Data</td></tr></tbody></table>alert(1)",
@@ -1186,6 +1192,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(store, "_connect", AsyncMock(return_value=connection)), \
                 patch.object(content, "SourceFiles", return_value=files), \
                 patch.object(content.processing, "image_dimensions", return_value=(640, 480)), \
+                patch.object(content.processing, "image_dpi", return_value=None), \
                 patch.object(content.processing, "image_complexity_score", return_value=0.25), \
                 patch.object(content.processing, "image_legibility_score", return_value=0.8):
             self.assertTrue(await store.save_thumbnail(
@@ -1431,10 +1438,32 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result.kind, expected_kind)
                 self.assertEqual(connection.execute.await_args_list[-1].args[1][1], expected_kind)
                 statement, params = connection.execute.await_args_list[-1].args
-                self.assertIn("complexity, legibility)", statement)
+                self.assertIn("dpi, complexity, legibility)", statement)
                 self.assertEqual(params[-2:], (0.25, 0.8))
                 if expected_kind == "logo":
                     self.assertIn("UPDATE source SET kind = 'image'", connection.execute.await_args_list[2].args[0])
+
+    async def test_extracted_density_is_stored_and_used_for_scoring(self) -> None:
+        store = content.SourceStore()
+        connection = AsyncMock()
+        missing, inserted = AsyncMock(), AsyncMock()
+        missing.fetchone.return_value = None
+        inserted.fetchone.return_value = (
+            10, "figure.png", "image/png", 5, "now", 7, None, 300, 150, "image", True, 0.8,
+        )
+        connection.execute.side_effect = [missing, inserted]
+        files = Mock()
+        files.put.return_value = "/sources/figure"
+        asset = source_processing.Asset(
+            "figure.png", b"image", "image/png", "image", width=300, height=150,
+            physical_width_mm=25.4, dpi=300,
+        )
+        with patch.object(content.processing, "image_complexity_score", return_value=0.25) as complexity, \
+                patch.object(content.processing, "image_legibility_score", return_value=0.8) as legibility:
+            await store._insert_source(connection, files, [], 11, asset, 7)
+        self.assertEqual(complexity.call_args.kwargs, {"physical_width_mm": 25.4, "dpi": 300})
+        self.assertEqual(legibility.call_args.kwargs["dpi"], 300)
+        self.assertEqual(connection.execute.await_args_list[-1].args[1][-3:], (300, 0.25, 0.8))
 
     async def test_children_record_document_parent_and_all_files_rollback_on_failure(self) -> None:
         store = content.SourceStore()
@@ -1485,7 +1514,7 @@ class SourceStoreTests(unittest.IsolatedAsyncioTestCase):
                     content.processing.summarize.assert_not_awaited()
                     statement, params = connection.execute.await_args_list[-1].args
                     self.assertIn("extracted = TRUE", statement)
-                    self.assertEqual(params, ("text", None, None, None, "text", None, None, 1))
+                    self.assertEqual(params, ("text", None, None, None, "text", None, None, None, 1))
 
     async def test_failed_conversion_keeps_original_for_retry(self) -> None:
         store = content.SourceStore()
@@ -1572,7 +1601,7 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
         from PIL import Image
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "figure.png"
-            Image.new("RGB", (299, 600)).save(path)
+            Image.new("RGB", (299, 600)).save(path, dpi=(300, 300))
             manifest = {
                 "output_directory": directory, "warnings": [],
                 "source_texts": [{"id": "caption", "text": "Figure 1"}],
@@ -1592,6 +1621,8 @@ class ProcessingTests(unittest.IsolatedAsyncioTestCase):
                 result = source_processing.extract("research.pdf", b"%PDF-1.7")
             self.assertEqual(result.text, "Figure 1\n\n\\[E=mc^2\\]\n\n\\[x=\\frac{1}{2}\\]")
             self.assertEqual(result.assets[0].width, 299)
+            self.assertAlmostEqual(result.assets[0].dpi, 300, delta=0.1)
+            self.assertAlmostEqual(result.assets[0].physical_width_mm, 299 * 25.4 / 300, delta=0.01)
             self.assertEqual(result.assets[0].description, "Figure 1\nA graph")
             self.assertEqual(result.assets[1].text, "E=mc^2")
             self.assertEqual(result.assets[1].kind, "math expression")
@@ -2414,7 +2445,7 @@ class ContentDatabaseTests(unittest.TestCase):
     def test_image_description_and_logo_classification_are_deferred_until_extraction(self) -> None:
         from PIL import Image
         image = io.BytesIO()
-        Image.new("RGB", (300, 400)).save(image, format="PNG")
+        Image.new("RGB", (300, 400)).save(image, format="PNG", dpi=(300, 300))
         pid, _ = asyncio.run(self.store.new_or_existing(7))
         with tempfile.TemporaryDirectory() as directory, \
                 patch.dict(os.environ, {"SOURCES_DIR": directory, "GCS_BUCKET": ""}), \
@@ -2444,6 +2475,32 @@ class ContentDatabaseTests(unittest.TestCase):
             self.assertEqual(sources[0].description, "A research logo")
             self.assertEqual((sources[0].width, sources[0].height), (300, 400))
             self.assertTrue(sources[0].extracted)
+            dpi = self.connection.execute("SELECT dpi FROM source WHERE sid = %s", (item.sid,)).fetchone()[0]
+            self.assertAlmostEqual(dpi, 300, delta=0.1)
+
+    def test_extracted_density_persists_and_migration_is_repeatable(self) -> None:
+        pid, _ = asyncio.run(self.store.new_or_existing(7))
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(os.environ, {"SOURCES_DIR": directory, "GCS_BUCKET": ""}):
+            image = io.BytesIO()
+            Image.new("RGB", (300, 150)).save(image, format="PNG", dpi=(300, 300))
+            asset = source_processing.Asset(
+                "figure.png", image.getvalue(), "image/png", "image",
+                description="Figure", width=300, height=150, physical_width_mm=25.4, dpi=300,
+            )
+            parent = asyncio.run(self.store.add(7, pid, "paper.md", b"paper"))
+            with patch.object(content.processing, "extract", return_value=source_processing.Processed(
+                    text="paper", assets=[asset])):
+                asyncio.run(self.store.extract(7, pid, parent.sid))
+            self.assertEqual(self.connection.execute(
+                "SELECT dpi FROM source WHERE parent = %s", (parent.sid,),
+            ).fetchone()[0], 300)
+            migration = (ROOT / "schema/source-dpi.sql").read_text()
+            self.connection.execute(migration)
+            self.connection.execute(migration)
+            self.assertEqual(self.connection.execute(
+                "SELECT dpi FROM source WHERE parent = %s", (parent.sid,),
+            ).fetchone()[0], 300)
 
 
 if __name__ == "__main__":

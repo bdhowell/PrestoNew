@@ -147,6 +147,7 @@ CREATE TABLE source (
     size        INTEGER NOT NULL,
     height      INTEGER,
     width       INTEGER,
+    dpi         DOUBLE PRECISION CHECK (dpi > 0 AND dpi < 'Infinity'::double precision),
     complexity  REAL,
     legibility  REAL, -- fraction of detected features visible at default viewing conditions
     fileid      UUID,

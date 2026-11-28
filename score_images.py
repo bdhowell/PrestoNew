@@ -37,16 +37,16 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".ti
 
 
 def score(name: str, data: bytes, mimetype: str, raster: bytes | None = None,
-          physical_width_mm: float | None = None) -> dict:
+          physical_width_mm: float | None = None, dpi: float | None = None) -> dict:
     complexity = graphics.complexity_threshold()
     legibility = graphics.legibility_threshold()
     result: dict = {"file": name, "mimetype": mimetype, "complexity": None, "legibility": None}
     # As in content.py: complexity is skipped for SVG; SVG legibility uses its raster crop.
     if mimetype != "image/svg+xml":
-        result["complexity"] = processing.image_complexity_score(data, physical_width_mm=physical_width_mm)
+        result["complexity"] = processing.image_complexity_score(data, physical_width_mm=physical_width_mm, dpi=dpi)
     try:
         result["legibility"] = processing.image_legibility_score(data, mimetype, raster_data=raster,
-                                                             physical_width_mm=physical_width_mm)
+                                                             physical_width_mm=physical_width_mm, dpi=dpi)
     except ValueError as error:
         result["error"] = str(error)
     reasons = []
@@ -84,7 +84,7 @@ def from_document(path: Path, output: Path | None, latex: bool = False,
             if asset.description_image:
                 (output / (Path(asset.filename).stem + ".raster.png")).write_bytes(asset.description_image)
         result = score(asset.filename, asset.data, asset.mimetype, asset.description_image,
-                       asset.physical_width_mm)
+                       asset.physical_width_mm, asset.dpi)
         result["kind"] = asset.kind
         if formula:
             result["latex"] = asset.text

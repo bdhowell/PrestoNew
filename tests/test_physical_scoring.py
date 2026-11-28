@@ -1,11 +1,13 @@
 """Scores for extracted figures depend on their physical size, not their pixel resolution."""
 
 import os
+import io
 import unittest
 from unittest.mock import patch
 
 import cv2
 import numpy as np
+from PIL import Image
 
 import source_processing as processing
 
@@ -27,6 +29,53 @@ WIDTH_MM = 3 * 25.4
 
 
 class PhysicalScoringTests(unittest.TestCase):
+    def test_embedded_dpi_and_configured_fallbacks(self):
+        image = drawing(500)
+        with Image.open(io.BytesIO(image)) as picture:
+            buffer = io.BytesIO()
+            picture.save(buffer, format="PNG", dpi=(500, 500))
+        tagged = buffer.getvalue()
+        self.assertAlmostEqual(processing.image_dpi(tagged), 500, delta=0.1)
+        with patch.dict(os.environ, {
+            "IMAGE_COMPLEXITY_REFERENCE_DPI": "144",
+            "DIAGRAM_LEGIBILITY_DISPLAY_DPI": "96",
+            "DIAGRAM_LEGIBILITY_SOURCE_MAGNIFICATION": "1",
+        }):
+            self.assertAlmostEqual(
+                processing.image_complexity_score(tagged),
+                processing.image_complexity_score(image, physical_width_mm=WIDTH_MM),
+                delta=0.001,
+            )
+            self.assertEqual(
+                processing.image_legibility_score(tagged, "image/png"),
+                processing.image_legibility_score(image, "image/png", physical_width_mm=WIDTH_MM),
+            )
+            self.assertEqual(
+                processing.image_legibility_score(image, "image/png"),
+                processing.image_legibility_score(image, "image/png", dpi=96),
+            )
+            self.assertNotEqual(processing.image_complexity_score(image),
+                                processing.image_complexity_score(image, dpi=500))
+            self.assertEqual(processing.image_complexity_score(tagged, dpi=96),
+                             processing.image_complexity_score(image, dpi=96))
+        with patch.dict(os.environ, {"DIAGRAM_LEGIBILITY_DISPLAY_DPI": "500"}):
+            self.assertEqual(
+                processing.image_legibility_score(image, "image/png"),
+                processing.image_legibility_score(image, "image/png", dpi=500),
+            )
+        with patch.dict(os.environ, {"IMAGE_COMPLEXITY_REFERENCE_DPI": "250"}):
+            self.assertNotEqual(processing.image_complexity_score(image, dpi=500),
+                                processing.image_complexity_score(image))
+        with patch.dict(os.environ, {"IMAGE_COMPLEXITY_REFERENCE_DPI": "0"}):
+            with self.assertRaises(processing.ProcessingError):
+                processing.image_complexity_score(image)
+
+    def test_png_conversion_preserves_jpeg_density(self):
+        source = io.BytesIO()
+        Image.new("RGB", (20, 10)).save(source, format="JPEG", dpi=(300, 300))
+        png = processing.image_as_png(source.getvalue())
+        self.assertAlmostEqual(processing.image_dpi(png), 300, delta=0.1)
+
     def test_complexity_does_not_depend_on_extraction_resolution(self):
         low, high = drawing(144), drawing(500)
         reference = processing.image_complexity_score(low, physical_width_mm=WIDTH_MM)

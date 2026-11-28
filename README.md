@@ -78,6 +78,7 @@ psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/image-assessmen
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-image-classification.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/auto-fit.sql
 psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-complexity.sql
+psql -d presto -v ON_ERROR_STOP=1 --single-transaction -f schema/source-dpi.sql
 ```
 
 ### Poster dimensions
@@ -182,11 +183,23 @@ Interrupted connections are retried automatically twice before offering a manual
 retry; saved assessments are reused on each attempt.
 Raster source images and extracted raster assets are scored using blurred Canny
 edge density with an area penalty; the score is stored in `source.complexity`.
+Known horizontal image density is stored in `source.dpi` in dots per inch:
+uploads use embedded metadata, and extracted PDF regions use their effective
+render density. Density is nullable for images without a known physical size
+and for vector sources. The migration does not backfill existing sources or
+recalculate their stored scores.
 `IMAGE_COMPLEXITY_THRESHOLD` defaults to `0.5` and
 `IMAGE_COMPLEXITY_PENALTY_POWER` defaults to `0.15`; scores strictly above the
 threshold are omitted from the editor's suggested graphics. Threshold changes
 apply immediately to stored scores; penalty-power changes affect newly processed
 images. Existing placed graphics remain editable.
+Known-density raster images are downsampled, never upsampled, to
+`IMAGE_COMPLEXITY_REFERENCE_DPI` (default `144`) before complexity scoring.
+Images without known density retain their original pixels.
+Legibility uses the image density to infer physical width; absent density falls
+back to `DIAGRAM_LEGIBILITY_DISPLAY_DPI` (default `96`). Extracted images with
+known physical size are evaluated at their source width multiplied by
+`DIAGRAM_LEGIBILITY_SOURCE_MAGNIFICATION` (default `1.5`).
 During poster evaluation, images with legibility scores below
 `DIAGRAM_LEGIBILITY_THRESHOLD` (default `0.95`) are also marked unsuitable, with
 the score and threshold shown as the reason. Complexity remains a maximum-score

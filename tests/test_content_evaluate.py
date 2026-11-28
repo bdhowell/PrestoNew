@@ -13,7 +13,7 @@ EVALUATION_MARKUP = """
     <script id="evaluation-poster" type="application/json">{"pid":11}</script>
     <p id="evaluation-status"></p>
     <div id="evaluation-progress" hidden>
-        <span id="evaluation-progress-count"></span><progress id="evaluation-progress-meter"></progress>
+        <progress id="evaluation-progress-meter" aria-label="Graphics evaluated"></progress>
         <span id="evaluation-remaining"></span>
     </div>
     <article id="graphic-evaluations" class="graphic-evaluation" tabindex="0" aria-label="Latest graphic evaluation" hidden>
@@ -240,15 +240,15 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         await emit(result(99))
         await emit({"type": "progress", "current": 1, "total": 2, "current_word": "one", "total_word": "two"})
         await self.page.wait_for_function("document.querySelector('#evaluation-preview img')?.getAttribute('src') === '/content/99/image'")
-        await self.page.wait_for_function("document.querySelector('#evaluation-status').textContent.includes('image 1')")
-        self.assertEqual(await self.page.locator("#evaluation-progress-count").text_content(), "0 of 2")
+        self.assertEqual(await self.page.locator("#evaluation-status").text_content(), "I am reviewing image 1 of 2.")
+        self.assertEqual(await self.page.locator("#evaluation-progress-meter").evaluate("meter => meter.value"), 0)
         self.assertEqual(await self.page.locator("#evaluation-remaining").text_content(),
                          "(40 seconds estimated remaining)")
         await self.page.clock.run_for(3000)
         self.assertEqual(await self.page.locator("#evaluation-remaining").text_content(),
                          "(37 seconds estimated remaining)")
         await emit(result(1))
-        await self.page.wait_for_function("document.querySelector('#evaluation-progress-count').textContent === '1 of 2'")
+        await self.page.wait_for_function("document.querySelector('#evaluation-progress-meter').value === 1")
         estimate = int((await self.page.locator("#evaluation-remaining").text_content()).split()[0][1:])
         self.assertIn(estimate, (3, 4))
         self.assertEqual(await self.page.locator("#evaluation-progress-meter").evaluate("meter => meter.value"), 1)
@@ -272,10 +272,10 @@ class GraphicEvaluationPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.locator("#evaluation-remaining").text_content(),
                          f"({estimate - 1} seconds estimated remaining)")
         await emit({"type": "progress", "current": 2, "total": 2, "current_word": "two", "total_word": "two"})
-        await self.page.wait_for_function("document.querySelector('#evaluation-status').textContent.includes('image 2')")
+        self.assertEqual(await self.page.locator("#evaluation-status").text_content(), "I am reviewing image 2 of 2.")
         await self.page.clock.run_for(2000)
         await emit(result(2))
-        await self.page.wait_for_function("document.querySelector('#evaluation-progress-count').textContent === '2 of 2'")
+        await self.page.wait_for_function("document.querySelector('#evaluation-progress-meter').value === 2")
         self.assertEqual(await self.page.locator("#evaluation-remaining").text_content(),
                          "(0 seconds estimated remaining)")
         self.assertEqual(await self.page.locator("#evaluation-preview img").get_attribute("src"), "/content/2/image")

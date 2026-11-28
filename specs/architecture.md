@@ -1223,13 +1223,13 @@ Implementation contract:
   Font-sizing progress, success, and error messages use the shared
   `#content-save-status` output; the font controls retain their retry button.
   Once dimensions exist and a template first renders, `layout-geometry.js`
-  waits for fonts and the initial content fit, then freezes the header, grid
-  tracks, and nested section shares. The layout frame fills the space between
-  the header gap and the bottom gutter, including for previously saved geometry.
-  Font and content edits clip
-  within these areas instead of redistributing space or rerunning whole-poster
-  auto-fit. Viewport zoom remains independent, and explicit gutter resizing
-  still adjusts the saved proportions.
+  waits for fonts and the initial content fit, then freezes grid tracks and
+  nested section shares. The header fits its title, logo, and authors, growing
+  or shrinking with their content and font sizes. The layout frame fills the
+  remaining space between the header gap and the bottom gutter, including for
+  previously saved geometry. Section edits do not redistribute their shares
+  or rerun whole-poster auto-fit. Viewport zoom remains independent, and
+  explicit gutter resizing still adjusts the saved proportions.
   `POST /layout/geometry` validates the measured areas against the template
   and atomically initializes `userposter.settings["layout-geometry"][template]`
   for the owner-only draft. Existing baselines win concurrent initialization;

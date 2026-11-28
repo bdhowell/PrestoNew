@@ -139,6 +139,7 @@ class PdfPictureExtractionTests(unittest.TestCase):
                     path = Path(manifest["output_directory"]) / manifest["elements"][0]["asset"]
                     self.assertEqual(path.suffix, ".svg")
                     self.assertEqual(manifest["elements"][0]["asset_widths_pt"], [60])
+                    self.assertEqual(manifest["elements"][0]["asset_dpis"], [None])
                     root = ET.fromstring(path.read_bytes())
                     self.assertEqual([float(n) for n in root.attrib["viewBox"].split()],
                                      [0, 0, 60, 40])
@@ -155,6 +156,7 @@ class PdfPictureExtractionTests(unittest.TestCase):
             path = self.asset(manifest)
             self.assertEqual(path.suffix, ".png")
             self.assertEqual(manifest["elements"][0]["raster_assets"], [manifest["elements"][0]["asset"]])
+            self.assertEqual(manifest["elements"][0]["asset_dpis"], [144])
             with Image.open(path) as image:
                 self.assertEqual(image.size, (120, 80))
                 self.assertEqual(image.mode, "RGB")
@@ -172,6 +174,7 @@ class PdfPictureExtractionTests(unittest.TestCase):
                     pdf_data = sample_pdf(raster=True, rotation=rotation, image_size=(1000, 500),
                                           placement=b"200 0 0 100 10 20")
                     manifest = self.extract(pdf_data, document_with_picture(rotation, origin), directory)
+                    self.assertEqual(manifest["elements"][0]["asset_dpis"], [360])
                     with Image.open(self.asset(manifest)) as image:
                         self.assertEqual(image.size, (300, 200))
                         rendered = image.convert("RGB")
@@ -211,6 +214,7 @@ class PdfPictureExtractionTests(unittest.TestCase):
             with Image.open(self.asset(manifest)) as image:
                 self.assertEqual(image.size, (120, 80))
                 self.assertEqual(image.getpixel((115, 40)), (255, 0, 0))
+            self.assertEqual(manifest["elements"][0]["asset_dpis"], [144])
             self.assertIn("Full-resolution rendering unavailable", manifest["warnings"][0])
 
     def test_formulas_and_tables_render_at_vector_resolution(self):

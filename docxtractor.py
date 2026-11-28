@@ -58,6 +58,7 @@ import ctypes
 
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
+from PIL import Image
 
 # Docling renders page images at this scale (2.0 = 144 DPI); its crops are the fallback.
 DOCLING_IMAGES_SCALE = 2.0
@@ -224,7 +225,7 @@ def _render_region(pdf: Any, document: Any, prov: Any, output: Path) -> float:
             dpi *= math.sqrt(MAX_RENDER_PIXELS / pixels)
         bitmap = page.render(scale=dpi / 72, crop=(box.l, height - box.b, width - box.r, box.t))
         try:
-            bitmap.to_pil().convert('RGB').save(output, format='PNG')
+            bitmap.to_pil().convert('RGB').save(output, format='PNG', dpi=(dpi, dpi))
         finally:
             bitmap.close()
         return dpi
@@ -312,21 +313,32 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
             images = []
             raster_assets = []
             widths = []  # Each asset's width on the PDF page in points, when known.
+            densities = []
             # Preserve crops for each provenance region, e.g. multipage tables.
             for prov_index in range(max(1, len(getattr(item, 'prov', [])))):
                 raster_path = None
+                crop_dpi = None
+                in_pdf = pdf is not None and prov_index < len(getattr(item, 'prov', []))
+                bbox = item.prov[prov_index].bbox if in_pdf else None
+                width_pt = abs(bbox.r - bbox.l) if bbox is not None else None
                 try:
                     image = item.get_image(document, prov_index=prov_index)
                     if image is not None:
+                        reference = getattr(item, 'image', None)
+                        if reference is None and prov_index < len(getattr(item, 'prov', [])):
+                            page = document.pages.get(item.prov[prov_index].page_no)
+                            reference = getattr(page, 'image', None)
+                        if reference is not None:
+                            crop_dpi = reference.dpi
+                        if width_pt:
+                            crop_dpi = image.width * 72 / width_pt
                         path = asset_dir / f'{kind}-{len(elements)+1:04d}-{prov_index+1}.png'
-                        image.save(path, format='PNG')
+                        image.save(path, format='PNG',
+                                   **({'dpi': (crop_dpi, crop_dpi)} if crop_dpi else {}))
                         raster_path = path.relative_to(directory).as_posix()
                 except Exception as exc:
                     warnings.append(f'Image unavailable for {item.self_ref} '
                                     f'region {prov_index}: {type(exc).__name__}')
-                in_pdf = pdf is not None and prov_index < len(getattr(item, 'prov', []))
-                bbox = item.prov[prov_index].bbox if in_pdf else None
-                width_pt = abs(bbox.r - bbox.l) if bbox is not None else None
                 if kind == 'picture' and in_pdf:
                     svg_path = asset_dir / f'{kind}-{len(elements)+1:04d}-{prov_index+1}.svg'
                     try:
@@ -334,6 +346,7 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
                             images.append(svg_path.relative_to(directory).as_posix())
                             raster_assets.append(raster_path)
                             widths.append(width_pt)
+                            densities.append(None)
                             continue
                     except (ExtractionError, OSError, subprocess.SubprocessError, pdfium.PdfiumError) as exc:
                         warnings.append(f'SVG extraction unavailable for {item.self_ref} '
@@ -346,11 +359,15 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
                     # DOCLING_IMAGES_SCALE page crop.
                     png_path = asset_dir / f'{kind}-{len(elements)+1:04d}-{prov_index+1}-full.png'
                     try:
-                        _render_region(pdf, document, item.prov[prov_index], png_path)
+                        dpi = _render_region(pdf, document, item.prov[prov_index], png_path)
+                        if width_pt:
+                            with Image.open(png_path) as rendered_image:
+                                dpi = rendered_image.width * 72 / width_pt
                         rendered = png_path.relative_to(directory).as_posix()
                         images.append(rendered)
                         raster_assets.append(rendered)
                         widths.append(width_pt)
+                        densities.append(dpi)
                         continue
                     except (ExtractionError, OSError, ValueError, pdfium.PdfiumError) as exc:
                         warnings.append(f'Full-resolution rendering unavailable for {item.self_ref} '
@@ -359,9 +376,11 @@ def _build_manifest_for_pdf(document: Any, directory: Path, pdf: Any) -> dict[st
                     images.append(raster_path)
                     raster_assets.append(raster_path)
                     widths.append(width_pt)
+                    densities.append(crop_dpi)
             record['assets'] = images
             record['raster_assets'] = raster_assets
             record['asset_widths_pt'] = widths
+            record['asset_dpis'] = densities
             record['asset'] = images[0] if images else None
             if not images:
                 warnings.append(f'No image crop available for {item.self_ref}.')
