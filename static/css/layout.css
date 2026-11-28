@@ -334,7 +334,7 @@ input[name="height"] {
 }
 
 #layout {
-    font-size: calc(0.6em * var(--sections-font-scale, 1));
+    font-size: calc(1.22em * var(--sections-font-scale, 1));
     margin-right: var(--gutter);
     margin-left: var(--gutter);
     margin-bottom: var(--gutter);
