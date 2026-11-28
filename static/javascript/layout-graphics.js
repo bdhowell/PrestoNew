@@ -21,6 +21,13 @@
         else document.getElementById("content-save-status").textContent = message;
     }
 
+    window.posterGraphicSectionAvailable = editor => {
+        if (!editor.querySelector(".graphic")) return true;
+        const name = document.body.dataset.userName || "Friend";
+        say(`${name}, you must first cut or otherwise delete the existing graphic in the ${editor.dataset.section} section before you insert a new graphic.`);
+        return false;
+    };
+
     function graphicContents(graphic) {
         if (graphic.type === "math") {
             const contents = document.createDocumentFragment();
@@ -134,9 +141,15 @@
             return;
         }
         if (section === "additional information") {
+            const existing = editor.querySelector(".graphic");
+            if (existing && existing.dataset.type !== "qrcode") {
+                window.posterGraphicSectionAvailable(editor);
+                return;
+            }
             await createQr(editor);
             return;
         }
+        if (!window.posterGraphicSectionAvailable(editor)) return;
         target = {editor, range: selection.range, html: editor.innerHTML};
         selected = null;
         insert.disabled = true;
@@ -174,6 +187,7 @@
     insert.addEventListener("click", () => {
         if (!target || !selected) return;
         const {editor, range, html} = target;
+        if (!window.posterGraphicSectionAvailable(editor)) return;
         if (!editor.isConnected || editor.innerHTML !== html
             || !editor.contains(range.startContainer) || !editor.contains(range.endContainer)) {
             status.textContent = "The section changed. Close this dialog and select the insertion point again.";

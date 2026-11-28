@@ -81,6 +81,7 @@
         if (graphic.dataset.type === "qrcode" && editor.querySelector('.graphic[data-type="qrcode"]')) {
             throw new Error("This section already contains a QR code.");
         }
+        if (!window.posterGraphicSectionAvailable(editor)) return true;
         const copy = document.createElement("span");
         copy.className = "graphic";
         copy.contentEditable = "false";
@@ -226,6 +227,8 @@
             return;
         }
         const original = editorFor(selected);
+        if (destination !== original
+            && !window.posterGraphicSectionAvailable(destination)) return;
         const bounds = destination.getBoundingClientRect();
         const x = (event.clientX - bounds.left) / bounds.width;
         const y = (event.clientY - bounds.top) / bounds.height;
@@ -259,16 +262,39 @@
         const width = graphic.offsetWidth;
         const height = graphic.offsetHeight;
         if (!width || !height || !rect.width || !rect.height) return;
+        const container = graphic.closest(".section") || editorFor(graphic);
+        if (!container?.offsetWidth || !container.offsetHeight) return;
+        const containerRect = container.getBoundingClientRect();
+        const containerScaleX = containerRect.width / container.offsetWidth;
+        const containerScaleY = containerRect.height / container.offsetHeight;
+        const containerStyle = getComputedStyle(container);
+        const graphicStyle = getComputedStyle(graphic);
+        const maxWidth = Math.max(0, container.clientWidth
+            - parseFloat(containerStyle.paddingLeft) - parseFloat(containerStyle.paddingRight)
+            - parseFloat(graphicStyle.marginLeft) - parseFloat(graphicStyle.marginRight));
+        const contentBottom = containerRect.top + container.clientTop * containerScaleY
+            + (container.clientHeight - parseFloat(containerStyle.paddingBottom)) * containerScaleY;
+        const maxHeight = Math.max(0, (contentBottom - rect.top) / containerScaleY
+            - parseFloat(graphicStyle.marginBottom));
+        const maxScale = Math.max(0, Math.min(10000 / width, 10000 / height,
+            maxWidth / width, maxHeight / height));
+        const minScale = Math.min(Math.max(16 / width, 16 / height), maxScale);
         operation = {pointer: event.pointerId, direction, x: event.clientX, y: event.clientY,
-            width, height, scaleX: rect.width / width, scaleY: rect.height / height};
+            width, height, scaleX: rect.width / width, scaleY: rect.height / height,
+            minScale, maxScale};
         const move = moveEvent => {
             if (!operation || moveEvent.pointerId !== operation.pointer || direction === "move") return;
             const dx = (moveEvent.clientX - operation.x) / operation.scaleX;
             const dy = (moveEvent.clientY - operation.y) / operation.scaleY;
-            const newWidth = direction.includes("e") ? width + dx : direction.includes("w") ? width - dx : width;
-            const newHeight = direction.includes("s") ? height + dy : direction.includes("n") ? height - dy : height;
-            graphic.dataset.width = String(Math.round(Math.max(16, Math.min(10000, newWidth))));
-            graphic.dataset.height = String(Math.round(Math.max(16, Math.min(10000, newHeight))));
+            const widthScale = direction.includes("e") ? 1 + dx / width
+                : direction.includes("w") ? 1 - dx / width : null;
+            const heightScale = direction.includes("s") ? 1 + dy / height
+                : direction.includes("n") ? 1 - dy / height : null;
+            const requestedScale = widthScale == null ? heightScale
+                : heightScale == null ? widthScale : (widthScale + heightScale) / 2;
+            const factor = Math.max(operation.minScale, Math.min(operation.maxScale, requestedScale));
+            graphic.dataset.width = String(Math.round(width * factor));
+            graphic.dataset.height = String(Math.round(height * factor));
             graphic.style.width = `${graphic.dataset.width}px`;
             graphic.style.height = `${graphic.dataset.height}px`;
             updateOverlay();

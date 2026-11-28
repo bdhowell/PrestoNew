@@ -24,6 +24,7 @@ class GraphicsEditorTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         await self.page.set_content(f"""
+            <body data-user-name="Ada">
             <div id="poster-canvas"><div id="layout" data-pid="11" data-graphics-safe-dpi="150">
                 <div class="content" contenteditable="true" data-section="results">Hello</div>
                 <div class="content" contenteditable="true" data-section="materials and methods">Methods</div>
@@ -39,6 +40,7 @@ class GraphicsEditorTests(unittest.IsolatedAsyncioTestCase):
             <dialog id="graphics-preview"><h2 id="graphics-preview-title"></h2>
                 <div id="graphics-preview-content"></div>
                 <button id="graphics-preview-close">Close</button></dialog>
+            </body>
         """)
         await self.page.evaluate("""() => {
             window.messages = [];
@@ -96,6 +98,17 @@ class GraphicsEditorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await graphic.get_attribute("data-sid"), "22")
         self.assertEqual(await graphic.locator("img").get_attribute("src"), "/layout/source?sid=22")
         self.assertTrue((await self.page.locator('[data-section="results"]').inner_html()).startswith("Hello"))
+
+    async def test_second_graphic_requires_deleting_the_existing_one(self) -> None:
+        await self.page.locator('[data-section="results"]').evaluate("""editor => {
+            editor.innerHTML += '<span class="graphic" data-type="png"></span>';
+        }""")
+        await self.select_section("results")
+        await self.page.locator("#image").click()
+        self.assertIn("Ada, you must first cut or otherwise delete the existing graphic in the results section",
+                      await self.page.evaluate("messages.at(-1)"))
+        self.assertFalse(await self.page.locator("#graphics-dialog").evaluate("element => element.open"))
+        self.assertEqual(await self.page.evaluate("requests"), [])
 
     async def test_float_controls_change_selected_graphic_placement(self) -> None:
         await self.page.locator('[data-section="results"]').evaluate("""editor => {
@@ -175,9 +188,8 @@ class GraphicsEditorTests(unittest.IsolatedAsyncioTestCase):
     async def test_resize_warns_for_low_dpi_and_drag_snaps(self) -> None:
         await self.page.add_style_tag(path=str(ROOT / "static/css/graphics.css"))
         await self.page.add_style_tag(content="""
-            [data-section="results"] { width: 800px; height: 300px; }
+            [data-section="results"] { width: 800px; height: 500px; }
         """)
-        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-graphic-controls.js"))
         await self.select_section("results")
         await self.page.locator("#image").click()
         await self.page.locator(".graphics-choice").first.click()
@@ -192,13 +204,18 @@ class GraphicsEditorTests(unittest.IsolatedAsyncioTestCase):
             "document.querySelector('.graphic img').naturalWidth === 10"
         )
         await graphic.click()
+        initial = await graphic.bounding_box()
         self.assertEqual(await self.page.locator(".graphic-handle").count(), 8)
         handle = await self.page.locator(".graphic-handle-e").bounding_box()
         await self.page.mouse.move(handle["x"] + handle["width"] / 2, handle["y"] + handle["height"] / 2)
         await self.page.mouse.down()
         await self.page.mouse.move(handle["x"] + handle["width"] / 2 + 80, handle["y"] + handle["height"] / 2)
         await self.page.mouse.up()
-        self.assertEqual(await graphic.get_attribute("data-width"), "320")
+        self.assertAlmostEqual(
+            float(await graphic.get_attribute("data-width")) / float(await graphic.get_attribute("data-height")),
+            initial["width"] / initial["height"],
+            places=2,
+        )
         self.assertIn("likely to be blurry", await self.page.evaluate("messages.at(-1)"))
         move = await self.page.locator(".graphic-move").bounding_box()
         bounds = await self.page.locator('[data-section="results"]').bounding_box()
@@ -208,9 +225,38 @@ class GraphicsEditorTests(unittest.IsolatedAsyncioTestCase):
         await self.page.mouse.up()
         self.assertEqual(await graphic.get_attribute("data-placement"), "top-right")
 
+    async def test_resize_preserves_aspect_ratio_and_stops_at_container_space(self) -> None:
+        await self.page.add_style_tag(path=str(ROOT / "static/css/graphics.css"))
+        await self.page.add_style_tag(content="""
+            [data-section="results"] { width: 260px; height: 140px; padding: 0; }
+            [data-section="results"] .graphic { max-width: 100%; margin: 0; }
+        """)
+        await self.page.locator('[data-section="results"]').evaluate("""editor => {
+            editor.innerHTML = '<span class="graphic" data-sid="22" data-type="png" ' +
+                'data-placement="free" data-width="100" data-height="100" ' +
+                'style="width:100px;height:100px"><img alt="Chart"></span>';
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = 10;
+            editor.querySelector('img').src = canvas.toDataURL();
+        }""")
+        await self.page.locator(".graphic img").evaluate("image => image.decode()")
+        graphic = self.page.locator('[data-section="results"] .graphic')
+        await graphic.click()
+        handle = await self.page.locator(".graphic-handle-e").bounding_box()
+        await self.page.mouse.move(handle["x"] + handle["width"] / 2, handle["y"] + handle["height"] / 2)
+        await self.page.mouse.down()
+        await self.page.mouse.move(handle["x"] + handle["width"] / 2 + 200, handle["y"] + handle["height"] / 2)
+        await self.page.mouse.up()
+        width = int(await graphic.get_attribute("data-width"))
+        height = int(await graphic.get_attribute("data-height"))
+        self.assertEqual(width, height)
+        self.assertEqual(height, 140)
+        self.assertLessEqual(await graphic.evaluate("element => element.getBoundingClientRect().bottom"),
+                             await self.page.locator('[data-section="results"]').evaluate(
+                                 "element => element.getBoundingClientRect().bottom"))
+
     async def test_graphic_clipboard_respects_destination_section(self) -> None:
         await self.page.add_style_tag(path=str(ROOT / "static/css/graphics.css"))
-        await self.page.add_script_tag(path=str(ROOT / "static/javascript/layout-graphic-controls.js"))
         await self.select_section("results")
         await self.page.locator("#image").click()
         await self.page.locator(".graphics-choice").first.click()
@@ -244,3 +290,22 @@ class GraphicsEditorTests(unittest.IsolatedAsyncioTestCase):
         graphic = self.page.locator('[data-section="materials and methods"] .graphic')
         self.assertEqual(await graphic.count(), 1)
         self.assertEqual(await graphic.get_attribute("data-sid"), "22")
+        await self.page.evaluate("""html => {
+            const data = new DataTransfer();
+            data.setData('text/html', html);
+            document.querySelector('[data-section="materials and methods"]').dispatchEvent(
+                new ClipboardEvent('paste', {bubbles: true, cancelable: true, clipboardData: data})
+            );
+        }""", html)
+        self.assertEqual(await graphic.count(), 1)
+        self.assertIn("Ada, you must first cut or otherwise delete the existing graphic",
+                      await self.page.evaluate("messages.at(-1)"))
+        handled = await self.page.evaluate("""html => {
+            const editor = document.querySelector('[data-section="materials and methods"]');
+            const range = document.createRange();
+            range.selectNodeContents(editor);
+            range.collapse(false);
+            return window.pastePosterGraphic(editor, range, html);
+        }""", html)
+        self.assertTrue(handled)
+        self.assertEqual(await graphic.count(), 1)
